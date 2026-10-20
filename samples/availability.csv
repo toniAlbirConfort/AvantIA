@@ -1,0 +1,4 @@
+property_id,property_name,capacity,start_date,end_date,status
+APT-101,Apartamento Mar,4,2027-01-01,2027-12-31,available
+APT-101,Apartamento Mar,4,2027-08-10,2027-08-15,occupied
+APT-202,Apartamento Sol,6,2027-01-01,2027-12-31,available

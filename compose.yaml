@@ -1,0 +1,94 @@
+name: avantia
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: avantia
+      POSTGRES_USER: avantia
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U avantia -d avantia"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+  migrate:
+    build: ./backend
+    env_file: .env
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+  bootstrap:
+    build: ./backend
+    env_file: .env
+    command: ["python", "-m", "app.bootstrap"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: "no"
+  api:
+    build: ./backend
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    ports:
+      - "127.0.0.1:${AVANTIA_API_PORT:-18100}:8000"
+  worker:
+    build: ./backend
+    restart: unless-stopped
+    env_file: .env
+    command: ["python", "-m", "app.worker"]
+    depends_on:
+      api:
+        condition: service_healthy
+    volumes:
+      - csv_inbox:/data/imports
+  gowa:
+    image: ghcr.io/aldinokemal/go-whatsapp-web-multidevice:v9.0.0
+    command: ["rest"]
+    restart: unless-stopped
+    environment:
+      APP_PORT: "3000"
+      APP_HOST: "0.0.0.0"
+      APP_BASIC_AUTH: ${GOWA_BASIC_AUTH:?Set GOWA_BASIC_AUTH}
+      APP_UI_ENABLED: "true"
+      MCP_ENABLED: "false"
+      WHATSAPP_WEBHOOK: http://api:8000/webhooks/gowa
+      WHATSAPP_WEBHOOK_SECRET: ${GOWA_WEBHOOK_SECRET:?Set GOWA_WEBHOOK_SECRET}
+      WHATSAPP_WEBHOOK_EVENTS: message
+      WHATSAPP_AUTO_MARK_READ: "false"
+    ports:
+      - "127.0.0.1:${AVANTIA_GOWA_PORT:-3002}:3000"
+    volumes:
+      - gowa_session:/app/storages
+    depends_on:
+      api:
+        condition: service_healthy
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    restart: unless-stopped
+    environment:
+      VITE_API_BASE: http://localhost:${AVANTIA_API_PORT:-18100}
+    ports:
+      - "127.0.0.1:${AVANTIA_FRONTEND_PORT:-15173}:5173"
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  csv_inbox:
+  gowa_session:
