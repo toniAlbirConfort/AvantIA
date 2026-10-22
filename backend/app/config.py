@@ -4,6 +4,9 @@ from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Desarrollo: se mantiene bloqueado en código, sin variable de entorno para desactivarlo.
+READ_ONLY_MODE = True
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")

@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.avantio import availability_provider
+from app.config import READ_ONLY_MODE
 from app.ingest import enqueue
 from app.integrations import ollama_json
 from app.models import AuditEvent, BookingTask, Conversation, Draft, Message
@@ -158,6 +159,8 @@ async def alert_conversation(db: Session, conversation_id: int, reason: str) -> 
     from app.config import get_settings
     from app.integrations import gowa_send
 
+    if READ_ONLY_MODE:
+        return
     conv = db.get(Conversation, conversation_id)
     settings = get_settings()
     if not conv or not settings.gowa_internal_chat_id:
@@ -175,9 +178,11 @@ async def alert_conversation(db: Session, conversation_id: int, reason: str) -> 
 def schedule_overdue(db: Session) -> None:
     from datetime import timedelta
 
-    from app.config import get_settings
+    from app.config import READ_ONLY_MODE, get_settings
     from app.models import now
 
+    if READ_ONLY_MODE:
+        return
     cutoff = now() - timedelta(minutes=get_settings().overdue_minutes)
     conversations = db.scalars(
         select(Conversation).where(

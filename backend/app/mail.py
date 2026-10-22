@@ -138,10 +138,6 @@ def poll_mail(db: Session) -> int:
             db.commit()
     finally:
         try:
-            conn.close()
-        except Exception:
-            pass
-        try:
             conn.logout()
         except Exception:
             pass

@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from app.auth import admin_user, authenticate, current_user, hasher, issue_token
 from app.availability import aware, import_csv, latest_batch
 from app.avantio import availability_provider
-from app.config import get_settings
+from app.config import READ_ONLY_MODE, get_settings
 from app.db import get_db
 from app.ingest import enqueue, ingest
 from app.models import (
@@ -287,6 +287,8 @@ def edit_draft(id: int, body: DraftIn, db: Db, user: Operator) -> dict:
 
 @app.post("/api/conversations/{id}/approve")
 def approve(id: int, db: Db, user: Operator) -> dict:
+    if READ_ONLY_MODE:
+        raise HTTPException(423, "Modo de solo lectura: no se pueden aprobar ni enviar respuestas")
     conv = _get_conv(db, id)
     if conv.kind == "booking" or conv.status != "pending":
         raise HTTPException(409, "La consulta no admite aprobación")
@@ -464,7 +466,9 @@ def integrations(db: Db, user: Operator) -> dict:
     cursor = db.scalar(select(MailCursor).where(MailCursor.mailbox == settings.imap_mailbox))
     age = (datetime.now(UTC) - aware(batch.created_at)).total_seconds() / 3600 if batch else None
     return {
+        "mode": {"read_only": READ_ONLY_MODE, "outbound_enabled": not READ_ONLY_MODE},
         "whatsapp": {
+            "sending_enabled": not READ_ONLY_MODE,
             "configured": bool(
                 settings.gowa_basic_auth
                 and settings.gowa_webhook_secret
@@ -473,10 +477,15 @@ def integrations(db: Db, user: Operator) -> dict:
         },
         "imap": {
             "configured": bool(settings.imap_host),
+            "mailbox": settings.imap_mailbox,
+            "read_only": True,
             "last_success_at": cursor.last_success_at if cursor else None,
             "last_error": cursor.last_error if cursor else None,
         },
-        "smtp": {"configured": bool(settings.smtp_host and settings.smtp_from)},
+        "smtp": {
+            "configured": bool(settings.smtp_host and settings.smtp_from),
+            "sending_enabled": not READ_ONLY_MODE,
+        },
         "ollama": {"configured": bool(settings.ollama_url and settings.ollama_model)},
         "csv": {
             "last_import_at": batch.created_at if batch else None,

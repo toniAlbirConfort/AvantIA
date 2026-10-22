@@ -7,7 +7,7 @@ from email.message import EmailMessage
 
 import httpx
 
-from app.config import get_settings
+from app.config import READ_ONLY_MODE, get_settings
 
 
 async def ollama_json(system: str, user: str) -> dict:
@@ -37,6 +37,8 @@ async def ollama_json(system: str, user: str) -> dict:
 
 
 async def gowa_send(chat_id: str, text: str) -> str | None:
+    if READ_ONLY_MODE:
+        raise RuntimeError("Modo de solo lectura: envío de WhatsApp bloqueado")
     settings = get_settings()
     username, sep, password = settings.gowa_basic_auth.partition(":")
     if not sep or not username or not settings.gowa_device_id:
@@ -61,6 +63,8 @@ def smtp_send(
     in_reply_to: str | None,
     references: str | None,
 ) -> None:
+    if READ_ONLY_MODE:
+        raise RuntimeError("Modo de solo lectura: envío de correo bloqueado")
     settings = get_settings()
     if not settings.smtp_host or not settings.smtp_from:
         raise RuntimeError("SMTP no configurado")

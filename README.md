@@ -48,6 +48,14 @@ Se puede subir desde Importaciones o copiar a `/data/imports` del volumen `csv_i
 - El equipo edita y aprueba. El worker envía por el mismo canal. El correo conserva `In-Reply-To` y `References`. Una entrega incierta se detiene hasta que un administrador comprueba el canal y registra «enviado» o «no enviado»; así se evita un reenvío automático duplicado.
 - Una consulta que sigue pendiente tras 15 minutos genera **un** aviso adicional al chat interno. Los umbrales se configuran con `OVERDUE_MINUTES` y `AVAILABILITY_MAX_AGE_HOURS`.
 
+## Desarrollo de correo en solo lectura
+
+El modo actual está bloqueado en el código (`READ_ONLY_MODE = True`), sin opción para desactivarlo desde `.env`. IMAP abre el buzón con `EXAMINE` (`select(..., readonly=True)`) y descarga mensajes con `BODY.PEEK[]`; al cerrar la conexión solo hace `LOGOUT`. No marca correos como leídos, no los mueve, borra ni responde. La aplicación guarda copias de los mensajes en su propia base de datos para mostrarlos y clasificarlos.
+
+En este modo, el endpoint de aprobación devuelve `423`, los botones de envío quedan desactivados y los adaptadores SMTP/GOWA rechazan cualquier llamada. El worker puede importar y clasificar emails, pero las alertas WhatsApp y los envíos por correo no se ejecutan, aunque haya credenciales configuradas. GOWA puede mantenerse apagado.
+
+Para conectar el buzón, completar localmente `IMAP_HOST`, `IMAP_USER`, `IMAP_PASSWORD`, `IMAP_MAILBOX` y `IMAP_PORT` en `.env`; no compartir la contraseña por chat. `IMAP_INITIAL_BACKFILL=0` procesa mensajes nuevos desde el primer sondeo. Para importar mensajes recientes que ya existan, elegir un límite explícito, por ejemplo `50`; también se leerán en modo IMAP de solo lectura. Después, con API y base de datos activos, arrancar solo el lector: `docker compose up -d worker`. Ollama, si se configura, recibe el contenido para generar la clasificación y los borradores.
+
 ## API principal
 
 `POST /api/login` entrega un token Bearer; el resto del panel requiere autenticación. `GET /api/conversations` filtra por estado, canal, prioridad y tipo. `GET /api/conversations/{id}` devuelve mensajes, análisis, borrador y auditoría. `PUT /api/conversations/{id}/draft` edita; `POST /api/conversations/{id}/approve` encola un único envío. `POST /api/imports` requiere administrador y recibe `multipart/form-data` con `file` y `mapping` JSON. `GET /api/integrations` muestra configuración y últimos estados. `POST /webhooks/gowa` verifica `X-Hub-Signature-256` antes de registrar el evento.

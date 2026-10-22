@@ -6,6 +6,7 @@ import re
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.config import READ_ONLY_MODE
 from app.models import AuditEvent, Conversation, Job, Message, now
 
 
@@ -88,12 +89,13 @@ def ingest(
     db.add(message)
     db.flush()
     enqueue(db, key=f"analyze:{message.id}", kind="analyze", payload={"message_id": message.id})
-    enqueue(
-        db,
-        key=f"alert:new:{message.id}",
-        kind="alert",
-        payload={"conversation_id": conv.id, "reason": "new"},
-    )
+    if not READ_ONLY_MODE:
+        enqueue(
+            db,
+            key=f"alert:new:{message.id}",
+            kind="alert",
+            payload={"conversation_id": conv.id, "reason": "new"},
+        )
     db.add(
         AuditEvent(conversation_id=conv.id, action="message.received", detail={"channel": channel})
     )

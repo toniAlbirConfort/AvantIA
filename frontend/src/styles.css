@@ -11,3 +11,5 @@
 .facts span,.filters label,.import-row small,.integration-card small,.audit,
 .priority{font-size:.72rem}
 .message,.review-panel>p,.status-card p,.settings-grid p{font-size:.78rem}
+.readonly-banner{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;padding:12px 16px;margin:-4px 0 22px;border:1px solid #f0d6a7;border-left:4px solid #b77a22;border-radius:6px;background:#fff9ec;color:#604b2a;font-size:.72rem;line-height:1.5}
+.readonly-banner strong{font-size:.65rem;letter-spacing:.08em}
