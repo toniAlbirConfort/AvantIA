@@ -10,8 +10,8 @@ from app.models import User
 
 def main() -> None:
     settings = get_settings()
-    if not settings.admin_username or len(settings.admin_password) < 12:
-        raise RuntimeError("Set ADMIN_USERNAME and ADMIN_PASSWORD (12+ chars)")
+    if not settings.admin_username or not settings.admin_password:
+        raise RuntimeError("Set ADMIN_USERNAME and ADMIN_PASSWORD")
     with SessionLocal() as db:
         if db.scalar(select(User.id).where(User.username == settings.admin_username)):
             return
