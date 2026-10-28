@@ -18,7 +18,8 @@ from sqlalchemy.orm import Session
 from app.auth import admin_user, authenticate, current_user, hasher, issue_token
 from app.availability import aware, import_csv, latest_batch
 from app.avantio import availability_provider
-from app.config import READ_ONLY_MODE, get_settings
+from app.classification import CLASSIFIER_VERSION
+from app.config import READ_ONLY_MODE, SIMULATION_MODE, get_settings
 from app.db import get_db
 from app.ingest import enqueue, ingest
 from app.integrations import ollama_translate_email
@@ -28,6 +29,7 @@ from app.models import (
     Conversation,
     Draft,
     ImportBatch,
+    Job,
     MailCursor,
     Message,
     ReservationSyncState,
@@ -82,6 +84,11 @@ class UnknownResolution(BaseModel):
     note: str = Field(min_length=3, max_length=500)
 
 
+class ClassificationBackfillIn(BaseModel):
+    after_id: int = Field(default=0, ge=0)
+    limit: int = Field(default=250, ge=1, le=400)
+
+
 def _user(user: User) -> dict:
     return {"id": user.id, "username": user.username, "role": user.role, "active": user.active}
 
@@ -100,6 +107,9 @@ def _draft(draft: Draft) -> dict:
 
 def _live_analysis(db: Session, conv: Conversation) -> tuple[dict, bool]:
     analysis = dict(conv.analysis or {})
+    classification = analysis.get("classification") or {}
+    if SIMULATION_MODE or (classification and classification.get("category") != "new_booking"):
+        return analysis, False
     if conv.kind == "booking" or not analysis:
         return analysis, False
     current = (
@@ -154,6 +164,7 @@ def _conversation(conv: Conversation, db: Session, detail: bool = False) -> dict
                 "subject": item.subject,
                 "source_url": item.source_url,
                 "provider_id": item.provider_id,
+                "classification": item.classification,
                 "created_at": item.created_at,
             }
             for item in messages
@@ -233,7 +244,9 @@ def summary(db: Db, user: Operator) -> dict:
     batch = latest_batch(db)
     return {
         "pending": db.scalar(
-            select(func.count()).select_from(Conversation).where(Conversation.status == "pending")
+            select(func.count())
+            .select_from(Conversation)
+            .where(Conversation.status.in_(["pending", "simulated", "review"]))
         ),
         "delivery_unknown": db.scalar(
             select(func.count())
@@ -269,6 +282,46 @@ def conversations(
             query = query.where(column == value)
     items = db.scalars(query.order_by(desc(Conversation.last_inbound_at)).limit(limit)).all()
     return [_conversation(item, db) for item in items]
+
+
+@app.post("/api/classification/backfill")
+def classification_backfill(body: ClassificationBackfillIn, db: Db, admin: Admin) -> dict:
+    if not SIMULATION_MODE:
+        raise HTTPException(423, "La clasificación retrospectiva solo está disponible en simulación")
+    message_candidates = db.scalars(
+        select(Message)
+        .where(
+            Message.channel == "email",
+            Message.direction == "inbound",
+            Message.id > body.after_id,
+        )
+        .order_by(Message.id)
+        .limit(body.limit + 1)
+    ).all()
+    selected_messages = message_candidates[: body.limit]
+    keys = [
+        key
+        for message in selected_messages
+        for key in (f"classify-existing:{CLASSIFIER_VERSION}:{message.id}", f"analyze:{message.id}")
+    ]
+    existing_jobs = {
+        job.key: job.status for job in db.scalars(select(Job).where(Job.key.in_(keys))).all()
+    } if keys else {}
+    new_jobs = [
+        Job(key=f"classify-existing:{CLASSIFIER_VERSION}:{message.id}", kind="analyze", payload={"message_id": message.id})
+        for message in selected_messages
+        if (not message.classification or message.classification.get("classifier_version") != CLASSIFIER_VERSION)
+        and f"classify-existing:{CLASSIFIER_VERSION}:{message.id}" not in existing_jobs
+        and existing_jobs.get(f"analyze:{message.id}") not in {"pending", "running"}
+    ]
+    db.add_all(new_jobs)
+    db.commit()
+    return {
+        "scanned": len(selected_messages),
+        "queued": len(new_jobs),
+        "next_after_id": selected_messages[-1].id if selected_messages else body.after_id,
+        "has_more": len(message_candidates) > body.limit,
+    }
 
 
 def _sender_identity(value: str | None, customer_name: str | None = None) -> tuple[str, str, str]:
@@ -311,10 +364,27 @@ def _inbox_thread_items(conversations: list[Conversation], db: Session) -> list[
             )
         ).all()
     }
+    latest_inbound_ids = (
+        select(func.max(Message.id).label("id"))
+        .where(Message.conversation_id.in_(ids), Message.direction == "inbound")
+        .group_by(Message.conversation_id)
+        .subquery()
+    )
+    inbound_classifications = dict(
+        db.execute(
+            select(Message.conversation_id, Message.classification).join(
+                latest_inbound_ids, Message.id == latest_inbound_ids.c.id
+            )
+        ).all()
+    )
     result = []
     for item in conversations:
         latest = latest_messages.get(item.id)
         preview = re.sub(r"\s+", " ", latest.body or "").strip() if latest else ""
+        classification = inbound_classifications.get(item.id)
+        if classification is None and item.id not in inbound_classifications:
+            classification = (item.analysis or {}).get("classification")
+        classification = classification or {}
         result.append(
             {
                 "type": "thread",
@@ -331,6 +401,9 @@ def _inbox_thread_items(conversations: list[Conversation], db: Session) -> list[
                 "message_count": counts.get(item.id, 0),
                 "last_message_at": latest.created_at if latest else None,
                 "preview": preview[:240],
+                "classification": classification.get("category"),
+                "classification_confidence": classification.get("confidence"),
+                "valid_query": classification.get("valid_query"),
             }
         )
     return result
@@ -485,7 +558,10 @@ async def translate_email(
 @app.put("/api/conversations/{id}/draft")
 def edit_draft(id: int, body: DraftIn, db: Db, user: Operator) -> dict:
     conv = _get_conv(db, id)
-    if conv.kind == "booking" or conv.status not in {"pending", "error"}:
+    classification = (conv.analysis or {}).get("classification") or {}
+    simulated = SIMULATION_MODE and classification.get("valid_query") is True
+    allowed_statuses = {"simulated"} if simulated else {"pending", "error"}
+    if conv.kind == "booking" or conv.status not in allowed_statuses:
         raise HTTPException(409, "La consulta no admite edición")
     live, _ = _live_analysis(db, conv)
     live.pop("availability_changed", None)
@@ -495,20 +571,33 @@ def edit_draft(id: int, body: DraftIn, db: Db, user: Operator) -> dict:
         raise HTTPException(409, "Hay un borrador nuevo; revisa la conversación")
     if draft and draft.created_at and aware(draft.created_at) < aware(conv.last_inbound_at):
         raise HTTPException(409, "Ha llegado un mensaje nuevo; espera el borrador actualizado")
-    if not draft or draft.status != "pending":
-        draft = Draft(conversation_id=id, text=body.text.strip())
+    if not draft or draft.status not in ({"simulated"} if simulated else {"pending"}):
+        draft = Draft(
+            conversation_id=id,
+            text=body.text.strip(),
+            status="simulated" if simulated else "pending",
+        )
         db.add(draft)
     else:
         draft.text = body.text.strip()
-    db.add(AuditEvent(actor_user_id=user.id, conversation_id=id, action="draft.edited", detail={}))
+        if simulated:
+            draft.status = "simulated"
+    db.add(
+        AuditEvent(
+            actor_user_id=user.id,
+            conversation_id=id,
+            action="draft.simulation_edited" if simulated else "draft.edited",
+            detail={"delivery": "disabled"} if simulated else {},
+        )
+    )
     db.commit()
     return _draft(draft)
 
 
 @app.post("/api/conversations/{id}/approve")
 def approve(id: int, db: Db, user: Operator) -> dict:
-    if READ_ONLY_MODE:
-        raise HTTPException(423, "Modo de solo lectura: no se pueden aprobar ni enviar respuestas")
+    if READ_ONLY_MODE or SIMULATION_MODE:
+        raise HTTPException(423, "Modo de simulación: no se pueden aprobar ni enviar respuestas")
     conv = _get_conv(db, id)
     if conv.kind == "booking" or conv.status != "pending":
         raise HTTPException(409, "La consulta no admite aprobación")
@@ -752,9 +841,13 @@ def integrations(db: Db, user: Operator) -> dict:
     reservation_sync = db.get(ReservationSyncState, "avantio_reservations")
     age = (datetime.now(UTC) - aware(batch.created_at)).total_seconds() / 3600 if batch else None
     return {
-        "mode": {"read_only": READ_ONLY_MODE, "outbound_enabled": not READ_ONLY_MODE},
+        "mode": {
+            "read_only": READ_ONLY_MODE,
+            "simulation": SIMULATION_MODE,
+            "outbound_enabled": not READ_ONLY_MODE and not SIMULATION_MODE,
+        },
         "whatsapp": {
-            "sending_enabled": not READ_ONLY_MODE,
+            "sending_enabled": not READ_ONLY_MODE and not SIMULATION_MODE,
             "configured": bool(
                 settings.gowa_basic_auth
                 and settings.gowa_webhook_secret
@@ -773,7 +866,7 @@ def integrations(db: Db, user: Operator) -> dict:
         },
         "smtp": {
             "configured": bool(settings.smtp_host and settings.smtp_from),
-            "sending_enabled": not READ_ONLY_MODE,
+            "sending_enabled": not READ_ONLY_MODE and not SIMULATION_MODE,
         },
         "ollama": {"configured": bool(settings.ollama_url and settings.ollama_model)},
         "csv": {

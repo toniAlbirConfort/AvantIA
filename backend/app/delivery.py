@@ -7,14 +7,14 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.availability import aware
-from app.config import READ_ONLY_MODE, get_settings
+from app.config import READ_ONLY_MODE, SIMULATION_MODE, get_settings
 from app.integrations import gowa_send, smtp_send
 from app.models import AuditEvent, Conversation, Draft, Message
 
 
 async def send_approved(db: Session, draft_id: int) -> None:
-    if READ_ONLY_MODE:
-        raise RuntimeError("Modo de solo lectura: los envíos están desactivados")
+    if READ_ONLY_MODE or SIMULATION_MODE:
+        raise RuntimeError("Modo de simulación: los envíos están desactivados")
     draft = db.get(Draft, draft_id)
     if not draft or draft.status != "queued":
         return

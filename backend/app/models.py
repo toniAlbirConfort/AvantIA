@@ -74,6 +74,7 @@ class Message(Base):
     reply_to_id: Mapped[str | None] = mapped_column(String(500))
     references: Mapped[str | None] = mapped_column(Text)
     source_url: Mapped[str | None] = mapped_column(Text)
+    classification: Mapped[dict | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     conversation: Mapped[Conversation] = relationship(back_populates="messages")
 

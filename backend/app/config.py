@@ -5,8 +5,10 @@ from functools import lru_cache
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Desarrollo: se mantiene bloqueado en código, sin variable de entorno para desactivarlo.
+# El envío permanece bloqueado en código, sin variable de entorno para desactivarlo.
 READ_ONLY_MODE = True
+# Las respuestas de correo se guardan como simulaciones durante la fase de evaluación.
+SIMULATION_MODE = True
 
 
 class Settings(BaseSettings):
