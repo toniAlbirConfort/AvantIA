@@ -56,7 +56,7 @@ La sección Importaciones también acepta las exportaciones «Listado de propied
 
 ## Exportación automática de reservas desde Avantio
 
-El worker usa Playwright y Chromium sin interfaz para abrir Avantio, iniciar sesión y seguir **☰ → Reservas → Listado de reservas → Más acciones → Descargar CSV**. El listado debe usar el filtro de reservas creadas durante los últimos 14 días. La primera ejecución se intenta al iniciar el worker; las siguientes se programan con `AVANTIO_SYNC_INTERVAL_HOURS` (seis horas por defecto).
+El worker usa Playwright y Chromium en modo visible dentro de un display virtual Xvfb para abrir Avantio, iniciar sesión y seguir **☰ → Reservas → Listado de reservas → Más acciones → Descargar CSV**. El listado debe usar el filtro de reservas creadas durante los últimos 14 días. La primera ejecución se intenta al iniciar el worker; las siguientes se programan con `AVANTIO_SYNC_INTERVAL_HOURS` (seis horas por defecto).
 
 Configura estos valores directamente en `C:\PROYECTOS ANTIGRAVITY\AvantIA\.env` del servidor; no incluyas las credenciales ni el enlace con parámetros de vista en Git:
 
