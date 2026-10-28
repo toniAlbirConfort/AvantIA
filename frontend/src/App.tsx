@@ -351,7 +351,7 @@ export default function App() {
           </section>
           <section className="card detail-panel">{detail && selectedThreadLoaded ? <>
             <div className="detail-header"><div><Button variant="ghost" className="mobile-back-inbox" onClick={() => { setSelectedId(null); setDetail(null); window.history.pushState({}, '', '/inbox') }}><ArrowLeft size={16} /> Bandeja</Button><p className="eyebrow">CONVERSACIÓN #{detail.id} / {label(detail.channel).toUpperCase()}</p><h2>{detail.customer_name || detail.customer_address || 'Cliente'}</h2><p>{detail.subject || 'Consulta de alojamiento'}</p></div><Badge value={detail.status} /></div>
-            <div className="detail-toolbar"><label>Responsable<select value={detail.assigned_user_id ?? ''} onChange={e => void action(() => api(`/api/conversations/${detail.id}/assign`, { method: 'POST', body: JSON.stringify({ user_id: e.target.value ? Number(e.target.value) : null }) }))}><option value="">Sin asignar</option>{users.map(item => <option key={item.id} value={item.id}>{item.username}</option>)}</select></label><span>Recibido {date(detail.last_inbound_at)}</span></div>
+            <div className="detail-toolbar"><span>Recibido {date(detail.last_inbound_at)}</span></div>
             <div className={`message-feed ${detail.channel === 'email' ? 'email-feed' : ''}`}>{detail.messages?.map(message => <article key={message.id} className={`message ${message.direction} ${detail.channel === 'email' ? 'email-message' : ''}`}>
               <div className="message-meta">{message.direction === 'inbound' ? 'RECIBIDO' : 'AVANTIA'} · {date(message.created_at)}</div>
               {detail.channel === 'email' ? <>

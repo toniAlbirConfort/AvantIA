@@ -327,6 +327,7 @@ tbody tr:hover{background:var(--wash)}
 .planning-reservation-link:hover,.planning-reservation-link:focus-visible{text-decoration-color:currentColor}
 @media(max-width:760px){.planning-detail.card{width:100vw;border-radius:0}.planning-detail-header{padding:22px 18px 17px}.planning-detail-content{padding:18px 18px 26px}.planning-detail-content dl{gap:15px 14px}}
 .planning-detail-header h2,.planning-detail-content h3{font-family:var(--font-ui)}
+.detail-toolbar{justify-content:flex-start}
 .login-page{background:var(--ink)}
 .login-card{background:var(--paper)}
 .login-card .brand-mark{border-color:#9BB9C0;color:var(--ink)}
