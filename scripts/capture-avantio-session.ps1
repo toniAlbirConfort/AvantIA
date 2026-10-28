@@ -23,12 +23,12 @@ function Invoke-CdpCommand {
     } -Depth 20 -Compress
     $bytes = [System.Text.Encoding]::UTF8.GetBytes($payload)
     $segment = [System.ArraySegment[byte]]::new($bytes)
-    $Socket.SendAsync(
+    [void]($Socket.SendAsync(
         $segment,
         [System.Net.WebSockets.WebSocketMessageType]::Text,
         $true,
         [System.Threading.CancellationToken]::None
-    ).GetAwaiter().GetResult()
+    ).GetAwaiter().GetResult())
 
     while ($true) {
         $messageStream = [System.IO.MemoryStream]::new()
@@ -57,11 +57,16 @@ function Invoke-CdpCommand {
 function Connect-Cdp {
     param([Parameter(Mandatory)][string] $Url)
     $socket = [System.Net.WebSockets.ClientWebSocket]::new()
-    $socket.ConnectAsync(
-        [Uri]::new($Url),
-        [System.Threading.CancellationToken]::None
-    ).GetAwaiter().GetResult()
-    return $socket
+    try {
+        [void]($socket.ConnectAsync(
+            [Uri]::new($Url),
+            [System.Threading.CancellationToken]::None
+        ).GetAwaiter().GetResult())
+        return $socket
+    } catch {
+        $socket.Dispose()
+        throw
+    }
 }
 
 try {
@@ -191,6 +196,10 @@ try {
     Write-Host 'Se actualizó AVANTIO_STORAGE_STATE_DIR en el .env sin mostrar sus otros valores.'
     Write-Host 'No compartas el archivo de estado ni lo subas al repositorio.'
 } finally {
-    if ($pageSocket) { $pageSocket.Dispose() }
-    if ($browserSocket) { $browserSocket.Dispose() }
+    if ($pageSocket -is [System.Net.WebSockets.ClientWebSocket]) {
+        $pageSocket.Dispose()
+    }
+    if ($browserSocket -is [System.Net.WebSockets.ClientWebSocket]) {
+        $browserSocket.Dispose()
+    }
 }
