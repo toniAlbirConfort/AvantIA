@@ -2,10 +2,11 @@
 
 ## Servidor de producción e integración
 
-- El servidor local que hace de producción y punto manual de integración/despliegue es `DESKTOP-4597Q79`, accesible por SSH como `informatica2@192.168.0.158`.
+- El servidor local de producción es `DESKTOP-4597Q79`, accesible por SSH como `informatica2@192.168.0.158`.
 - La carpeta contenedora en el servidor es `C:\PROYECTOS ANTIGRAVITY`; la raíz del clon de este repositorio es `C:\PROYECTOS ANTIGRAVITY\AvantIA`.
 - El remoto canónico es `https://github.com/toniAlbirConfort/AvantIA.git` y la rama de despliegue es `main` (`origin/main`).
-- Este flujo es manual; no hay un pipeline automatizado configurado en el repositorio.
+- El despliegue se automatiza con la tarea programada `AvantIA Production Auto Deploy`. Esta consulta `origin/main` cada cinco minutos mientras la cuenta que ejecuta Docker Desktop está conectada.
+- La tarea debe ejecutarse en la sesión interactiva de esa cuenta, porque Docker Desktop y su almacén de credenciales están vinculados a ella. No se debe configurar como una tarea que se ejecute aunque el usuario no haya iniciado sesión.
 
 ## Flujo de cambios y despliegue
 
@@ -14,14 +15,23 @@
 3. Usa este formato común para los nombres de rama: `codex/<tipo>/<slug>`. `<tipo>` debe ser uno de `feat`, `fix`, `refactor`, `docs` o `chore`; `<slug>` debe describir brevemente la tarea en minúsculas y con palabras separadas por guiones. Por ejemplo: `codex/feat/resumen-reservas` o `codex/fix/fechas-estancia`.
 4. Crea la rama nueva desde `origin/main` (por ejemplo, `git switch --create codex/fix/fechas-estancia origin/main`) e implementa allí los cambios. Crea commits descriptivos y separados por cambio dentro de la rama de la tarea.
 5. Publica la rama de tarea en `origin` para revisión. Tras su aprobación, integra sus commits en `origin/main` mediante el mecanismo de integración aprobado; no publiques directamente los commits de trabajo sobre `main`.
-6. El despliegue siempre se actualiza desde `origin/main`. En el servidor, desde `C:\PROYECTOS ANTIGRAVITY\AvantIA`, incorpora los cambios ya integrados con `git pull origin main`.
-7. Para aplicar la versión actualizada, ejecuta desde esa misma carpeta:
+6. Para activar la automatización una sola vez, inicia sesión en el servidor con la cuenta que usa Docker Desktop, abre PowerShell y ejecuta:
 
    ```powershell
-   docker compose -f compose.yaml -f compose.prod.yaml up --build -d
+   Set-Location "C:\PROYECTOS ANTIGRAVITY\AvantIA"
+   .\scripts\install-prod-deploy-task.ps1
    ```
 
-8. Comprueba el estado de los servicios con `docker compose -f compose.yaml -f compose.prod.yaml ps`.
+   La tarea comprueba `origin/main`, actualiza únicamente si la rama local `main` está limpia y puede avanzar en fast-forward, y aplica el cambio con Docker Compose. Registra su actividad en `%LOCALAPPDATA%\AvantIA\deploy-watch.log`. Si falla una compilación o el despliegue, lo vuelve a intentar en la siguiente comprobación.
+7. Para desplegar manualmente o diagnosticar la tarea, desde `C:\PROYECTOS ANTIGRAVITY\AvantIA` ejecuta:
+
+   ```powershell
+   git pull --ff-only origin main
+   docker compose -f compose.yaml -f compose.prod.yaml up --build -d
+   docker compose -f compose.yaml -f compose.prod.yaml ps
+   ```
+
+8. Para desactivar la automatización, ejecuta `Unregister-ScheduledTask -TaskName 'AvantIA Production Auto Deploy'` desde la cuenta que la instaló.
 
 ## Secretos y datos de producción
 
