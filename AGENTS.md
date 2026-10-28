@@ -23,6 +23,7 @@
    ```
 
    La tarea comprueba `origin/main`, actualiza únicamente si la rama local `main` está limpia y puede avanzar en fast-forward, y aplica el cambio con Docker Compose. Registra su actividad en `%LOCALAPPDATA%\AvantIA\deploy-watch.log`. Si falla una compilación o el despliegue, lo vuelve a intentar en la siguiente comprobación.
+   Si se actualiza `scripts/deploy-prod-watch.ps1`, después de incorporar el cambio en el servidor hay que reiniciar la tarea una vez para que cargue el nuevo script: `Stop-ScheduledTask -TaskName 'AvantIA Production Auto Deploy'` y luego `Start-ScheduledTask -TaskName 'AvantIA Production Auto Deploy'`.
 7. Para desplegar manualmente o diagnosticar la tarea, desde `C:\PROYECTOS ANTIGRAVITY\AvantIA` ejecuta:
 
    ```powershell
