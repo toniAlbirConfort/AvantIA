@@ -34,6 +34,7 @@ def ingest(
     external_key: str,
     provider_id: str,
     body: str,
+    html_body: str | None = None,
     sender: str,
     recipient: str | None = None,
     customer_name: str | None = None,
@@ -46,6 +47,8 @@ def ingest(
         select(Message).where(Message.channel == channel, Message.provider_id == provider_id)
     )
     if duplicate:
+        if html_body and channel == "email":
+            duplicate.html_body = html_body
         return duplicate, True
     conv = db.scalar(
         select(Conversation).where(
@@ -80,6 +83,7 @@ def ingest(
         provider_id=provider_id,
         direction="inbound",
         body=body,
+        html_body=html_body,
         subject=subject,
         sender=sender,
         recipient=recipient,

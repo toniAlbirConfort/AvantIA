@@ -3,13 +3,15 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-from datetime import UTC, datetime
+import re
+from datetime import UTC, date, datetime
+from email.utils import parseaddr
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from sqlalchemy import desc, func, select, text
+from sqlalchemy import desc, func, or_, select, text
 from sqlalchemy.orm import Session
 
 from app.auth import admin_user, authenticate, current_user, hasher, issue_token
@@ -20,7 +22,6 @@ from app.db import get_db
 from app.ingest import enqueue, ingest
 from app.models import (
     AuditEvent,
-    AvailabilitySlot,
     BookingTask,
     Conversation,
     Draft,
@@ -29,6 +30,14 @@ from app.models import (
     Message,
     User,
     now,
+)
+from app.planning import (
+    DATASETS,
+    commit_import,
+    latest_source_batch,
+    planning_view,
+    preview_import,
+    properties_view,
 )
 
 app = FastAPI(title="AvantIA", version="0.1.0")
@@ -136,7 +145,9 @@ def _conversation(conv: Conversation, db: Session, detail: bool = False) -> dict
                 "id": item.id,
                 "direction": item.direction,
                 "body": item.body,
+                "html_body": item.html_body,
                 "sender": item.sender,
+                "recipient": item.recipient,
                 "subject": item.subject,
                 "source_url": item.source_url,
                 "provider_id": item.provider_id,
@@ -255,6 +266,184 @@ def conversations(
             query = query.where(column == value)
     items = db.scalars(query.order_by(desc(Conversation.last_inbound_at)).limit(limit)).all()
     return [_conversation(item, db) for item in items]
+
+
+def _sender_identity(value: str | None, customer_name: str | None = None) -> tuple[str, str, str]:
+    raw = (value or "").strip()
+    name, address = parseaddr(raw)
+    address = address.strip()
+    key = address.casefold() or raw.casefold() or "unknown"
+    display_name = (
+        name.strip()
+        or (customer_name or "").strip()
+        or address
+        or raw
+        or "Remitente desconocido"
+    )
+    return key, display_name, address or raw
+
+
+def _inbox_thread_items(conversations: list[Conversation], db: Session) -> list[dict]:
+    if not conversations:
+        return []
+    ids = [item.id for item in conversations]
+    counts = dict(
+        db.execute(
+            select(Message.conversation_id, func.count(Message.id))
+            .where(Message.conversation_id.in_(ids))
+            .group_by(Message.conversation_id)
+        ).all()
+    )
+    latest_ids = (
+        select(func.max(Message.id).label("id"))
+        .where(Message.conversation_id.in_(ids))
+        .group_by(Message.conversation_id)
+        .subquery()
+    )
+    latest_messages = {
+        row.conversation_id: row
+        for row in db.execute(
+            select(Message.conversation_id, Message.created_at, Message.body).join(
+                latest_ids, Message.id == latest_ids.c.id
+            )
+        ).all()
+    }
+    result = []
+    for item in conversations:
+        latest = latest_messages.get(item.id)
+        preview = re.sub(r"\s+", " ", latest.body or "").strip() if latest else ""
+        result.append(
+            {
+                "type": "thread",
+                "id": item.id,
+                "channel": item.channel,
+                "kind": item.kind,
+                "customer_name": item.customer_name,
+                "customer_address": item.customer_address,
+                "subject": item.subject,
+                "status": item.status,
+                "priority": item.priority,
+                "assigned_user_id": item.assigned_user_id,
+                "last_inbound_at": item.last_inbound_at,
+                "message_count": counts.get(item.id, 0),
+                "last_message_at": latest.created_at if latest else None,
+                "preview": preview[:240],
+            }
+        )
+    return result
+
+
+@app.get("/api/inbox")
+def inbox(
+    db: Db,
+    user: Operator,
+    group_by: str = Query("thread", pattern="^(thread|sender)$"),
+    from_at: datetime | None = Query(default=None, alias="from"),
+    to_at: datetime | None = Query(default=None, alias="to"),
+    q: str | None = Query(default=None, max_length=200),
+    status: str | None = None,
+    channel: str | None = None,
+    priority: str | None = None,
+    kind: str | None = None,
+    sender: str | None = Query(default=None, max_length=255),
+    offset: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+) -> dict:
+    if (from_at and from_at.tzinfo is None) or (to_at and to_at.tzinfo is None):
+        raise HTTPException(422, "Las fechas deben incluir zona horaria")
+    if from_at:
+        from_at = from_at.astimezone(UTC)
+    if to_at:
+        to_at = to_at.astimezone(UTC)
+    if from_at and to_at and from_at >= to_at:
+        raise HTTPException(422, "La fecha inicial debe ser anterior a la fecha final")
+
+    query = select(Conversation)
+    for column, value in (
+        (Conversation.status, status),
+        (Conversation.channel, channel),
+        (Conversation.priority, priority),
+        (Conversation.kind, kind),
+    ):
+        if value:
+            query = query.where(column == value)
+    if from_at:
+        query = query.where(Conversation.last_inbound_at >= from_at)
+    if to_at:
+        query = query.where(Conversation.last_inbound_at < to_at)
+    search = (q or "").strip()
+    if search:
+        pattern = f"%{search}%"
+        latest_body = (
+            select(Message.body)
+            .where(Message.conversation_id == Conversation.id)
+            .order_by(desc(Message.id))
+            .limit(1)
+            .scalar_subquery()
+        )
+        query = query.where(
+            or_(
+                Conversation.customer_name.ilike(pattern),
+                Conversation.customer_address.ilike(pattern),
+                Conversation.subject.ilike(pattern),
+                latest_body.ilike(pattern),
+            )
+        )
+
+    if group_by == "thread":
+        if sender:
+            all_sender_conversations = db.scalars(
+                query.where(Conversation.channel == "email").order_by(
+                    desc(Conversation.last_inbound_at), desc(Conversation.id)
+                )
+            ).all()
+            sender_key = _sender_identity(sender)[0]
+            conversations_page = [
+                item
+                for item in all_sender_conversations
+                if _sender_identity(item.customer_address, item.customer_name)[0] == sender_key
+            ]
+            total = len(conversations_page)
+            conversations_page = conversations_page[offset : offset + limit]
+        else:
+            total = db.scalar(select(func.count()).select_from(query.order_by(None).subquery())) or 0
+            conversations_page = db.scalars(
+                query.order_by(desc(Conversation.last_inbound_at), desc(Conversation.id))
+                .offset(offset)
+                .limit(limit)
+            ).all()
+        items = _inbox_thread_items(conversations_page, db)
+    else:
+        all_conversations = db.scalars(
+            query.order_by(desc(Conversation.last_inbound_at), desc(Conversation.id))
+        ).all()
+        sender_groups: dict[str, dict] = {}
+        whatsapp_conversations: list[Conversation] = []
+        for item in all_conversations:
+            if item.channel != "email":
+                whatsapp_conversations.append(item)
+                continue
+            sender_key, display_name, address = _sender_identity(
+                item.customer_address, item.customer_name
+            )
+            group = sender_groups.get(sender_key)
+            if group is None:
+                sender_groups[sender_key] = {
+                    "type": "sender",
+                    "sender": sender_key,
+                    "display_name": display_name,
+                    "address": address,
+                    "channel": "email",
+                    "conversation_count": 1,
+                    "last_inbound_at": item.last_inbound_at,
+                }
+            else:
+                group["conversation_count"] += 1
+        items = list(sender_groups.values()) + _inbox_thread_items(whatsapp_conversations, db)
+        items.sort(key=lambda item: (item["last_inbound_at"], item.get("id", 0)), reverse=True)
+        total = len(items)
+        items = items[offset : offset + limit]
+    return {"items": items, "total": total, "offset": offset, "limit": limit}
 
 
 @app.get("/api/conversations/{id}")
@@ -409,7 +598,8 @@ async def upload_csv(
         raise HTTPException(400, "Mapeo JSON inválido") from exc
     raw = await file.read(10_000_001)
     batch = import_csv(
-        db, raw=raw, filename=file.filename or "upload.csv", source="upload", mapping=parsed
+        db, raw=raw, filename=file.filename or "upload.csv", source="upload",
+        mapping=parsed, actor_user_id=admin.id,
     )
     db.add(
         AuditEvent(
@@ -423,40 +613,104 @@ async def upload_csv(
 
 
 @app.get("/api/imports")
-def imports(db: Db, user: Operator) -> list[dict]:
+def imports(db: Db, user: Operator, limit: int = Query(500, ge=1, le=2000)) -> list[dict]:
     return [
         {
             "id": b.id,
+            "dataset": b.dataset,
             "filename": b.filename,
             "source": b.source,
             "status": b.status,
             "rows": b.row_count,
             "error": b.error,
             "created_at": b.created_at,
+            "actor_user_id": b.actor_user_id,
+            "parser_version": b.parser_version,
+            "warning_count": len(b.warnings or []),
+            "change_count": len(b.changes or []),
         }
-        for b in db.scalars(select(ImportBatch).order_by(desc(ImportBatch.id)).limit(50)).all()
+        for b in db.scalars(select(ImportBatch).order_by(desc(ImportBatch.id)).limit(limit)).all()
     ]
 
 
-@app.get("/api/properties")
-def properties(db: Db, user: Operator) -> list[dict]:
-    batch = latest_batch(db)
+@app.get("/api/imports/{batch_id}")
+def import_detail(batch_id: int, db: Db, user: Operator) -> dict:
+    batch = db.get(ImportBatch, batch_id)
     if not batch:
-        return []
-    slots = db.scalars(select(AvailabilitySlot).where(AvailabilitySlot.batch_id == batch.id)).all()
-    properties: dict[str, dict] = {}
-    for slot in slots:
-        item = properties.setdefault(
-            slot.property_id,
-            {
-                "id": slot.property_id,
-                "name": slot.property_name,
-                "capacity": slot.capacity,
-                "periods": 0,
-            },
+        raise HTTPException(404, "Importación no encontrada")
+    return {
+        "id": batch.id, "dataset": batch.dataset, "filename": batch.filename,
+        "source": batch.source, "status": batch.status, "rows": batch.row_count,
+        "error": batch.error, "created_at": batch.created_at,
+        "checksum": batch.checksum, "actor_user_id": batch.actor_user_id,
+        "parser_version": batch.parser_version, "warnings": batch.warnings or [],
+        "changes": batch.changes or [],
+        "warning_count": len(batch.warnings or []), "change_count": len(batch.changes or []),
+    }
+
+
+@app.post("/api/source-imports/{dataset}/preview")
+async def preview_source_import(
+    dataset: str, db: Db, admin: Admin, file: Annotated[UploadFile, File()]
+) -> dict:
+    if dataset not in DATASETS:
+        raise HTTPException(404, "Tipo de datos no válido")
+    raw = await file.read(10_000_001)
+    try:
+        return preview_import(db, dataset, raw)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/source-imports/{dataset}")
+async def upload_source_import(
+    dataset: str, db: Db, admin: Admin,
+    file: Annotated[UploadFile, File()], expected_checksum: Annotated[str, Form()],
+) -> dict:
+    if dataset not in DATASETS:
+        raise HTTPException(404, "Tipo de datos no válido")
+    raw = await file.read(10_000_001)
+    current_batch = latest_source_batch(db, dataset)
+    existing = (
+        current_batch.id
+        if current_batch and current_batch.checksum == expected_checksum
+        else None
+    )
+    try:
+        batch = commit_import(
+            db, dataset, raw, file.filename or "upload.csv", admin.id, expected_checksum
         )
-        item["periods"] += 1
-    return sorted(properties.values(), key=lambda item: item["name"])
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    db.add(
+        AuditEvent(
+            actor_user_id=admin.id,
+            action="source.import_reused" if existing == batch.id else "source.imported",
+            detail={"batch_id": batch.id, "dataset": dataset, "status": batch.status},
+        )
+    )
+    db.commit()
+    return {"id": batch.id, "status": batch.status, "rows": batch.row_count, "error": batch.error,
+            "warnings": batch.warnings or [], "changes": batch.changes or []}
+
+
+@app.get("/api/properties")
+def properties(db: Db, user: Operator, batch_id: int | None = None) -> list[dict]:
+    try:
+        return properties_view(db, batch_id)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@app.get("/api/planning")
+def planning(
+    db: Db, user: Operator, start: date, end: date,
+    property_batch_id: int | None = None, reservation_batch_id: int | None = None,
+) -> dict:
+    try:
+        return planning_view(db, start, end, property_batch_id, reservation_batch_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @app.get("/api/integrations")
@@ -476,7 +730,10 @@ def integrations(db: Db, user: Operator) -> dict:
             )
         },
         "imap": {
-            "configured": bool(settings.imap_host),
+            "configured": bool(
+                settings.imap_host and settings.imap_user and settings.imap_password
+            ),
+            "connected": bool(cursor and cursor.last_success_at),
             "mailbox": settings.imap_mailbox,
             "read_only": True,
             "last_success_at": cursor.last_success_at if cursor else None,

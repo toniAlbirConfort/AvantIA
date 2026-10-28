@@ -11,7 +11,8 @@ from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.models import AvailabilitySlot, ImportBatch
+from app.models import AvailabilitySlot, ImportBatch, PropertySnapshot, ReservationSnapshot
+from app.planning import BLOCKING_STATUSES, latest_source_batch
 
 FIELDS = ("property_id", "property_name", "capacity", "start_date", "end_date", "status")
 STATUS = {
@@ -88,17 +89,26 @@ def parse_csv(raw: bytes, mapping: dict[str, str]) -> list[dict]:
 
 
 def import_csv(
-    db: Session, *, raw: bytes, filename: str, source: str, mapping: dict[str, str] | None = None
+    db: Session, *, raw: bytes, filename: str, source: str,
+    mapping: dict[str, str] | None = None, actor_user_id: int | None = None,
 ) -> ImportBatch:
     checksum = hashlib.sha256(raw).hexdigest()
     prior = db.scalar(
         select(ImportBatch)
-        .where(ImportBatch.checksum == checksum, ImportBatch.status == "valid")
+        .where(
+            ImportBatch.dataset == "availability",
+            ImportBatch.checksum == checksum,
+            ImportBatch.status == "valid",
+        )
         .order_by(desc(ImportBatch.id))
     )
     if prior:
         return prior
-    batch = ImportBatch(source=source, filename=filename[:255], checksum=checksum, status="invalid")
+    batch = ImportBatch(
+        dataset="availability", source=source, filename=filename[:255],
+        checksum=checksum, status="invalid", actor_user_id=actor_user_id,
+        parser_version="availability-1",
+    )
     db.add(batch)
     db.flush()
     try:
@@ -116,7 +126,7 @@ def import_csv(
 def latest_batch(db: Session) -> ImportBatch | None:
     return db.scalar(
         select(ImportBatch)
-        .where(ImportBatch.status == "valid")
+        .where(ImportBatch.dataset == "availability", ImportBatch.status == "valid")
         .order_by(desc(ImportBatch.created_at), desc(ImportBatch.id))
     )
 
@@ -133,6 +143,8 @@ class AvailabilityResult:
     requested: str
     status: str
     alternatives: list[dict]
+    property_batch_id: int | None = None
+    reservation_batch_id: int | None = None
 
     def as_dict(self) -> dict:
         return dict(
@@ -142,6 +154,8 @@ class AvailabilityResult:
             requested=self.requested,
             status=self.status,
             alternatives=self.alternatives,
+            property_batch_id=self.property_batch_id,
+            reservation_batch_id=self.reservation_batch_id,
         )
 
 
@@ -166,11 +180,18 @@ def check_availability(
     guests: int | None,
 ) -> AvailabilityResult:
     batch = latest_batch(db)
-    age = datetime.now(UTC) - aware(batch.created_at) if batch else None
-    stale = batch is None or age > timedelta(hours=get_settings().availability_max_age_hours)
+    property_batch = latest_source_batch(db, "properties")
+    reservation_batch = latest_source_batch(db, "reservations")
+    max_age = timedelta(hours=get_settings().availability_max_age_hours)
+    stale = any(
+        source is None or datetime.now(UTC) - aware(source.created_at) > max_age
+        for source in (batch, reservation_batch)
+    ) or property_batch is None
     base = dict(
         batch_id=batch.id if batch else None,
         imported_at=batch.created_at if batch else None,
+        property_batch_id=property_batch.id if property_batch else None,
+        reservation_batch_id=reservation_batch.id if reservation_batch else None,
         stale=stale,
         requested=property_query or "",
         alternatives=[],
@@ -184,28 +205,47 @@ def check_availability(
     if start < date.today() or start >= end or guests < 1:
         return AvailabilityResult(**base, status="manual_check")
     slots = list(db.scalars(select(AvailabilitySlot).where(AvailabilitySlot.batch_id == batch.id)))
+    catalog = list(
+        db.scalars(select(PropertySnapshot).where(PropertySnapshot.batch_id == property_batch.id))
+    )
+    reservations = list(
+        db.scalars(
+            select(ReservationSnapshot).where(
+                ReservationSnapshot.batch_id == reservation_batch.id,
+                ReservationSnapshot.status.in_(BLOCKING_STATUSES),
+                ReservationSnapshot.start_date < end,
+                ReservationSnapshot.end_date > start,
+            )
+        )
+    )
+    blocked = {row.property_id for row in reservations}
     properties: dict[str, list[AvailabilitySlot]] = {}
     for slot in slots:
         properties.setdefault(slot.property_id, []).append(slot)
+    catalog_by_id = {row.property_id: row for row in catalog}
     needle = property_query.casefold().strip()
     matches = [
-        key
-        for key, values in properties.items()
-        if key.casefold() == needle or values[0].property_name.casefold() == needle
+        row.property_id
+        for row in catalog
+        if row.property_id.casefold() == needle or row.name.casefold() == needle
     ]
     if len(matches) != 1:
         return AvailabilityResult(**base, status="ambiguous_property")
     requested = matches[0]
-    property_slots = properties[requested]
+    requested_property = catalog_by_id[requested]
+    property_slots = properties.get(requested, [])
     requested_status = (
         "available"
-        if property_slots[0].capacity >= guests and _covered(property_slots, start, end)
+        if requested_property.active and requested_property.capacity >= guests
+        and requested not in blocked and _covered(property_slots, start, end)
         else "unavailable"
     )
     alternatives = [
-        dict(property_id=key, name=values[0].property_name, capacity=values[0].capacity)
+        dict(property_id=key, name=catalog_by_id[key].name, capacity=catalog_by_id[key].capacity)
         for key, values in properties.items()
-        if key != requested and values[0].capacity >= guests and _covered(values, start, end)
+        if key != requested and key in catalog_by_id and catalog_by_id[key].active
+        and catalog_by_id[key].capacity >= guests and key not in blocked
+        and _covered(values, start, end)
     ]
     alternatives.sort(key=lambda item: (item["capacity"], item["name"]))
     return AvailabilityResult(

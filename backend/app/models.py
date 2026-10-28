@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
+from decimal import Decimal
 
 from sqlalchemy import (
     JSON,
@@ -9,6 +10,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -65,6 +67,7 @@ class Message(Base):
     provider_id: Mapped[str] = mapped_column(String(500))
     direction: Mapped[str] = mapped_column(String(10))
     body: Mapped[str] = mapped_column(Text)
+    html_body: Mapped[str | None] = mapped_column(Text)
     subject: Mapped[str | None] = mapped_column(String(500))
     sender: Mapped[str | None] = mapped_column(String(255))
     recipient: Mapped[str | None] = mapped_column(String(255))
@@ -104,13 +107,64 @@ class BookingTask(Base):
 class ImportBatch(Base):
     __tablename__ = "import_batches"
     id: Mapped[int] = mapped_column(primary_key=True)
+    dataset: Mapped[str] = mapped_column(String(20), default="availability", index=True)
     source: Mapped[str] = mapped_column(String(30))
     filename: Mapped[str] = mapped_column(String(255))
     checksum: Mapped[str] = mapped_column(String(64))
     status: Mapped[str] = mapped_column(String(20))
     error: Mapped[str | None] = mapped_column(Text)
     row_count: Mapped[int] = mapped_column(Integer, default=0)
+    actor_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    parser_version: Mapped[str | None] = mapped_column(String(20))
+    warnings: Mapped[list | None] = mapped_column(JSON, default=list)
+    changes: Mapped[list | None] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class PropertySnapshot(Base):
+    __tablename__ = "property_snapshots"
+    __table_args__ = (UniqueConstraint("batch_id", "property_id"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    batch_id: Mapped[int] = mapped_column(ForeignKey("import_batches.id"), index=True)
+    source_row: Mapped[int] = mapped_column(Integer)
+    row_hash: Mapped[str] = mapped_column(String(64))
+    property_id: Mapped[str] = mapped_column(String(100), index=True)
+    name: Mapped[str] = mapped_column(String(255))
+    status_original: Mapped[str] = mapped_column(String(100))
+    active: Mapped[bool] = mapped_column(Boolean)
+    category: Mapped[str] = mapped_column(String(100))
+    capacity: Mapped[int] = mapped_column(Integer)
+    building: Mapped[str | None] = mapped_column(String(255))
+    city: Mapped[str | None] = mapped_column(String(150))
+    address: Mapped[str | None] = mapped_column(String(255))
+
+
+class ReservationSnapshot(Base):
+    __tablename__ = "reservation_snapshots"
+    __table_args__ = (UniqueConstraint("batch_id", "locator"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    batch_id: Mapped[int] = mapped_column(ForeignKey("import_batches.id"), index=True)
+    source_batch_id: Mapped[int | None] = mapped_column(ForeignKey("import_batches.id"))
+    source_row: Mapped[int] = mapped_column(Integer)
+    row_hash: Mapped[str] = mapped_column(String(64))
+    locator: Mapped[str] = mapped_column(String(150), index=True)
+    property_id: Mapped[str] = mapped_column(String(100), index=True)
+    status_original: Mapped[str] = mapped_column(String(100))
+    status: Mapped[str] = mapped_column(String(30))
+    created_on: Mapped[date | None] = mapped_column(Date)
+    start_date: Mapped[date] = mapped_column(Date)
+    end_date: Mapped[date] = mapped_column(Date)
+    nights: Mapped[int] = mapped_column(Integer)
+    adults: Mapped[int] = mapped_column(Integer)
+    children: Mapped[int] = mapped_column(Integer)
+    infants: Mapped[int] = mapped_column(Integer)
+    display_name: Mapped[str] = mapped_column(String(255))
+    portal: Mapped[str | None] = mapped_column(String(100))
+    total: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    net: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    tax: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    paid: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    pending: Mapped[Decimal] = mapped_column(Numeric(12, 2))
 
 
 class AvailabilitySlot(Base):

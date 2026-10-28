@@ -40,6 +40,16 @@ Para declarar una vivienda disponible, el CSV debe cubrir **todo** el intervalo 
 
 Se puede subir desde Importaciones o copiar a `/data/imports` del volumen `csv_inbox`. El worker renombra los archivos procesados a `.imported` o `.invalid`; deja el resultado y los errores en el panel.
 
+## Catálogo, reservas y planning
+
+La sección Importaciones también acepta las exportaciones «Listado de propiedades» y «Listado de reservas». Un administrador selecciona el archivo, revisa la vista previa y confirma su activación. Estas dos fuentes solo se cargan manualmente; el vigilante de carpeta sigue reservado al CSV de disponibilidad. Propiedades es una instantánea completa. Reservas se consolidan por `Localizador`: cada archivo añade o actualiza sus filas y conserva las reservas ausentes de cargas anteriores. Un archivo inválido conserva la última versión válida; repetir el archivo vigente no crea otra versión. Conviene cargar primero los años antiguos y después los recientes; si un mismo localizador difiere, la última carga confirmada prevalece.
+
+El catálogo une `Código` con `id alojamiento`; las reservas usan `Localizador` como clave. La base de datos conserva campos operativos mínimos, hashes, lote y fila del CSV que aportó cada registro, incidencias y cambios entre versiones consolidadas. No guarda los CSV originales, contactos, documentos, fechas de nacimiento, nombres de propietarios ni comentarios libres. El planning integra automáticamente las exportaciones válidas por localizador y muestra estancias bloqueantes, peticiones y cancelaciones únicamente para apartamentos y villas activos. Al abrir una reserva se muestra su información operativa en un panel lateral; la trazabilidad de lote y fila permanece en base de datos y no se presenta en la interfaz. Las reservas confirmadas, pagadas, prerreservas, «No Disponible» y «De Propietario» bloquean `[entrada, salida)`. La ausencia de un localizador en una exportación parcial no se interpreta como cancelación: solo un estado explícito puede liberarlo. Los lotes y sus diferencias siguen disponibles en el historial de auditoría.
+
+La consulta automática solo declara disponibilidad cuando el CSV de disponibilidad vigente cubre todo el periodo, no hay bloqueo en reservas y existe catálogo válido. La instantánea de reservas y la de disponibilidad deben cumplir `AVAILABILITY_MAX_AGE_HOURS` (seis horas por defecto); si falta o caduca alguna, se exige comprobación manual. Los bloqueos del CSV de disponibilidad también se respetan. Esta función no activa envíos: `READ_ONLY_MODE` permanece habilitado.
+
+API de lectura: `GET /api/properties`, `GET /api/planning?start=YYYY-MM-DD&end=YYYY-MM-DD`, `GET /api/imports` y `GET /api/imports/{id}`. En planning, `start` es inclusivo, `end` exclusivo y el máximo son 92 días. La consulta normal integra todos los lotes válidos; `property_batch_id` y `reservation_batch_id` quedan disponibles para auditorías históricas por API. Importación de administrador: `POST /api/source-imports/{properties|reservations}/preview` con `file`, seguido de `POST /api/source-imports/{properties|reservations}` con `file` y `expected_checksum`.
+
 ## Operación diaria
 
 - El webhook firmado de GOWA guarda consultas 1 a 1, ignora grupos y mensajes propios y deduplica por ID del proveedor.
@@ -58,7 +68,7 @@ Para conectar el buzón, completar localmente `IMAP_HOST`, `IMAP_USER`, `IMAP_PA
 
 ## API principal
 
-`POST /api/login` entrega un token Bearer; el resto del panel requiere autenticación. `GET /api/conversations` filtra por estado, canal, prioridad y tipo. `GET /api/conversations/{id}` devuelve mensajes, análisis, borrador y auditoría. `PUT /api/conversations/{id}/draft` edita; `POST /api/conversations/{id}/approve` encola un único envío. `POST /api/imports` requiere administrador y recibe `multipart/form-data` con `file` y `mapping` JSON. `GET /api/integrations` muestra configuración y últimos estados. `POST /webhooks/gowa` verifica `X-Hub-Signature-256` antes de registrar el evento.
+`POST /api/login` entrega un token Bearer; el resto del panel requiere autenticación. `GET /api/conversations` filtra por estado, canal, prioridad y tipo. `GET /api/inbox` devuelve una página de hilos o grupos de remitentes (`group_by=thread|sender`), filtrable por `from`/`to` (instantes ISO 8601 con zona horaria), `q`, estado, canal, prioridad y tipo; usa `offset` y `limit` y responde con `items`, `total`, `offset` y `limit`. Para expandir un grupo se usa `group_by=thread&sender=<dirección normalizada>`. `GET /api/conversations/{id}` devuelve mensajes, análisis, borrador y auditoría. `PUT /api/conversations/{id}/draft` edita; `POST /api/conversations/{id}/approve` encola un único envío. `POST /api/imports` requiere administrador y recibe `multipart/form-data` con `file` y `mapping` JSON. `GET /api/integrations` muestra configuración y últimos estados. `POST /webhooks/gowa` verifica `X-Hub-Signature-256` antes de registrar el evento.
 
 ## Copias y recuperación
 
