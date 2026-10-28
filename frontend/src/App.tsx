@@ -2,8 +2,9 @@ import { DragEvent, FormEvent, useCallback, useEffect, useRef, useState } from '
 import { api, setToken, token } from './api'
 import { Planning } from './Planning'
 import { ImportHistory, SourceImportForm } from './SourceImports'
-import type { Conversation, InboxResponse, InboxThread, ImportBatch, Property, Summary, User } from './types'
-import { ArrowLeft, ArrowRight, CalendarDays, CalendarRange, Cable, ChevronDown, ChevronRight, House, Inbox, LayoutDashboard, LogOut, Menu, RefreshCw, Search, Upload, Users, X } from 'lucide-react'
+import type { Conversation, InboxResponse, InboxThread, ImportBatch, Message, Property, Summary, User } from './types'
+import { ArrowLeft, ArrowRight, CalendarDays, CalendarRange, Cable, ChevronDown, ChevronRight, House, Inbox, LayoutDashboard, LogOut, Maximize2, Menu, RefreshCw, Search, Upload, Users, X } from 'lucide-react'
+import { EmailPreviewDialog, emailDocument } from './EmailPreviewDialog'
 import { Badge as UiBadge } from './components/ui/badge'
 import { Alert } from './components/ui/alert'
 import { Button } from './components/ui/button'
@@ -17,10 +18,10 @@ import { Textarea } from './components/ui/textarea'
 type View = 'summary' | 'inbox' | 'bookings' | 'properties' | 'planning' | 'imports' | 'integrations' | 'users'
 const navigation: { id: View; label: string; icon: typeof LayoutDashboard }[] = [
   { id: 'summary', label: 'Resumen', icon: LayoutDashboard },
+  { id: 'planning', label: 'Planning', icon: CalendarRange },
   { id: 'inbox', label: 'Bandeja', icon: Inbox },
   { id: 'bookings', label: 'Prerreservas', icon: CalendarDays },
   { id: 'properties', label: 'Alojamientos', icon: House },
-  { id: 'planning', label: 'Planning', icon: CalendarRange },
   { id: 'imports', label: 'Importaciones', icon: Upload },
   { id: 'integrations', label: 'Integraciones', icon: Cable },
   { id: 'users', label: 'Usuarios', icon: Users },
@@ -56,10 +57,6 @@ function label(value: string) {
     unavailable: 'No disponible', manual_check: 'Revisión manual',
     ambiguous_property: 'Alojamiento ambiguo', valid: 'Válido', invalid: 'Inválido',
     whatsapp: 'WhatsApp', email: 'Email', booking: 'Booking' } as Record<string, string>)[value] || value
-}
-function emailDocument(source: string) {
-  const policy = "default-src 'none'; script-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:; connect-src 'none'; form-action 'none'; frame-src 'none'; object-src 'none'; media-src 'none'; base-uri 'none'"
-  return `<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${policy}"><meta name="referrer" content="no-referrer"><style>html,body{margin:0;padding:0;max-width:100%;overflow-wrap:anywhere}body{padding:12px;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.55;color:#243a41}img{max-width:100%;height:auto}</style>${source}`
 }
 const badgeStyles: Record<string, string> = {
   pending: 'bg-warning-bg text-warning-ink', queued: 'bg-info-bg text-info-ink', sending: 'bg-info-bg text-info-ink',
@@ -118,8 +115,13 @@ export default function App() {
   const [detail, setDetail] = useState<Conversation | null>(null)
   const [users, setUsers] = useState<User[]>([])
   const [properties, setProperties] = useState<Property[]>([])
+  const [propertySearch, setPropertySearch] = useState('')
+  const [propertyStatusFilter, setPropertyStatusFilter] = useState('active')
+  const [propertyCategoryFilter, setPropertyCategoryFilter] = useState('')
+  const [propertyCityFilter, setPropertyCityFilter] = useState('')
   const [imports, setImports] = useState<ImportBatch[]>([])
   const [integrations, setIntegrations] = useState<Record<string, any> | null>(null)
+  const [expandedEmail, setExpandedEmail] = useState<Message | null>(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [draftText, setDraftText] = useState('')
@@ -289,8 +291,9 @@ export default function App() {
   const selectedThreadLoaded = detail && loadedThreads.some(item => item.id === detail.id)
   const renderThread = (item: InboxThread) => <Button key={item.id} variant="ghost" className={`h-auto w-full flex-col items-stretch justify-start gap-2 rounded-none border-b border-border px-4 py-4 text-left text-foreground whitespace-normal hover:bg-accent ${selectedId === item.id ? 'border-l-4 border-l-primary bg-accent pl-3' : ''}`} onClick={() => void select(item.id)}>
     <span className="flex items-center justify-between gap-3"><strong className="truncate text-sm">{item.customer_name || item.customer_address || 'Cliente'}</strong><small className="shrink-0 text-xs text-muted-foreground">{date(item.last_inbound_at)}</small></span>
-    <span className="block truncate text-sm text-muted-foreground">{item.subject || `${label(item.channel)} · consulta #${item.id}`}</span>
-    <span className="block truncate text-sm text-muted-foreground">{item.preview || 'Sin vista previa del último mensaje'}</span>
+    {item.channel === 'email' && item.customer_name && item.customer_address && <small className="block truncate text-xs text-muted-foreground">{item.customer_address}</small>}
+    <span className="block truncate text-sm font-medium text-foreground">{item.subject || `${label(item.channel)} · consulta #${item.id}`}</span>
+    <span className={item.channel === 'email' ? 'line-clamp-2 whitespace-normal text-sm leading-5 text-muted-foreground' : 'block truncate text-sm text-muted-foreground'}>{item.preview || 'Sin vista previa del último mensaje'}</span>
     <span className="flex flex-wrap items-center gap-2"><Badge value={item.kind === 'booking' ? 'booking' : item.channel} /><Badge value={item.status} /><span className="ml-auto text-xs text-muted-foreground">{item.message_count} {item.message_count === 1 ? 'mensaje' : 'mensajes'}</span>{item.priority === 'high' && <span className="text-xs font-semibold text-warning-ink">ALTA</span>}</span>
   </Button>
   const clearInboxFilters = () => {
@@ -300,6 +303,25 @@ export default function App() {
   }
   const section = navigation.find(item => item.id === view)?.label || 'Resumen'
   const readOnlyMode = integrations?.mode?.read_only !== false
+  const propertyCategories = [...new Set(properties.map(item => item.category).filter(Boolean))]
+    .sort((left, right) => left.localeCompare(right, 'es-ES'))
+  const propertyCities = [...new Set(properties.map(item => item.city).filter((city): city is string => !!city))]
+    .sort((left, right) => left.localeCompare(right, 'es-ES'))
+  const propertyQuery = propertySearch.trim().toLocaleLowerCase('es-ES')
+  const filteredProperties = properties.filter(item => {
+    const searchable = `${item.name} ${item.id}`.toLocaleLowerCase('es-ES')
+    return (!propertyQuery || searchable.includes(propertyQuery))
+      && (propertyStatusFilter === 'all' || item.active === (propertyStatusFilter === 'active'))
+      && (!propertyCategoryFilter || item.category === propertyCategoryFilter)
+      && (!propertyCityFilter || item.city === propertyCityFilter)
+  })
+  const propertyFiltersChanged = !!propertySearch || propertyStatusFilter !== 'active' || !!propertyCategoryFilter || !!propertyCityFilter
+  const clearPropertyFilters = () => {
+    setPropertySearch('')
+    setPropertyStatusFilter('active')
+    setPropertyCategoryFilter('')
+    setPropertyCityFilter('')
+  }
 
   return <div className="min-h-screen bg-background text-foreground md:flex">
     {mobileMenu && <button type="button" className="fixed inset-0 z-30 bg-background/80 md:hidden" onClick={() => setMobileMenu(false)} aria-label="Cerrar menú" />}
@@ -318,6 +340,7 @@ export default function App() {
         <div className="mb-6 flex flex-wrap items-end justify-between gap-4"><div><p className="mb-2 text-xs font-semibold uppercase tracking-wide text-primary">TU ESPACIO DE HOSPITALIDAD <span className="px-1 text-muted-foreground">/</span> {section.toUpperCase()}</p><h1 className="mb-2 text-3xl font-semibold leading-tight sm:text-4xl">{section}</h1><p className="max-w-3xl text-sm leading-6 text-muted-foreground">{view === 'summary' ? 'Cada conversación, en su sitio. La atención empieza aquí.' : view === 'inbox' ? 'Lee el contexto, revisa el borrador y decide cómo responder.' : view === 'bookings' ? 'Prerreservas que necesitan una mirada y seguimiento humano.' : view === 'imports' ? 'Fuentes y disponibilidad, siempre con su origen a la vista.' : view === 'planning' ? 'Una vista clara de las estancias y los huecos disponibles.' : 'La información operativa de AvantIA, reunida con cuidado.'}</p></div><Button variant="outline" onClick={() => void refresh()} disabled={busy}><RefreshCw size={15} /> Actualizar</Button></div>
         {readOnlyMode && <Alert variant="info" role="status" className="mb-5 flex flex-wrap items-center gap-x-4 gap-y-1"><strong className="text-xs">MODO DESARROLLO · SOLO LECTURA</strong><span>IMAP se consulta sin modificar correos. Los envíos de email y WhatsApp están bloqueados.</span></Alert>}
         {error && <Alert variant="destructive" className="mb-5 flex items-center justify-between gap-4"><span>{error}</span><Button variant="ghost" size="icon" onClick={() => setError('')} aria-label="Cerrar aviso"><X size={16} /></Button></Alert>}
+        <EmailPreviewDialog message={expandedEmail} fallbackSubject={detail?.subject} onClose={() => setExpandedEmail(null)} />
 
         {view === 'summary' && <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-12">
           {[{ title: 'PENDIENTES', value: summary?.pending ?? '—', description: 'Consultas por atender', action: 'Abrir bandeja →', onClick: () => navigate('inbox') }, { title: 'PRERRESERVAS', value: summary?.bookings ?? '—', description: 'Booking · revisión humana', action: 'Ver tareas →', onClick: () => navigate('bookings') }, { title: 'ENVÍOS INCIERTOS', value: summary?.delivery_unknown ?? '—', description: 'Comprobar antes de reenviar' }].map((metric, index) => <Card key={metric.title} className={`relative overflow-hidden p-5 sm:p-6 xl:col-span-4 ${index === 1 ? 'border-primary/30' : ''}`}><span className="text-xs font-semibold tracking-wide text-muted-foreground">{metric.title}</span><strong className="my-3 block text-5xl font-semibold tabular-nums text-foreground">{metric.value}</strong><small className="block text-sm text-muted-foreground">{metric.description}</small>{metric.action && <Button variant="link" className="mt-3 h-auto p-0" onClick={metric.onClick}>{metric.action}</Button>}</Card>)}
@@ -346,7 +369,7 @@ export default function App() {
             <div className="border-b border-border bg-background px-4 py-3 text-xs text-muted-foreground sm:px-6">Recibido {date(detail.last_inbound_at)}</div>
             <div className={`grid max-h-[25rem] gap-3 overflow-auto bg-background p-4 sm:p-6 ${detail.channel === 'email' ? 'email-feed' : ''}`}>{detail.messages?.map(message => <article key={message.id} className={`w-fit max-w-[90%] overflow-hidden rounded-lg border border-border p-3 text-sm leading-6 ${message.direction === 'outbound' ? 'ml-auto bg-accent' : 'bg-card'} ${detail.channel === 'email' ? 'w-full max-w-4xl p-0' : ''}`}>
               <div className="mb-2 text-[0.65rem] font-semibold uppercase tracking-wide text-muted-foreground">{message.direction === 'inbound' ? 'RECIBIDO' : 'AVANTIA'} · {date(message.created_at)}</div>
-              {detail.channel === 'email' ? <><dl className="grid gap-2 border-b border-border px-4 pb-4 text-xs sm:grid-cols-[4rem_minmax(0,1fr)]"><dt className="text-muted-foreground">De</dt><dd className="m-0 break-all">{message.sender || detail.customer_address || '—'}</dd>{message.recipient && <><dt className="text-muted-foreground">Para</dt><dd className="m-0 break-all">{message.recipient}</dd></>}<dt className="text-muted-foreground">Asunto</dt><dd className="m-0 break-all">{message.subject || detail.subject || '(sin asunto)'}</dd></dl>{message.html_body ? <iframe className="block h-[60vh] min-h-[28rem] w-full border-0 bg-white" title={`Cuerpo del email: ${message.subject || detail.subject || 'sin asunto'}`} sandbox="" referrerPolicy="no-referrer" srcDoc={emailDocument(message.html_body)} /> : <div className="whitespace-pre-wrap p-4">{message.body || '(correo sin texto)'}</div>}</> : <p className="m-0 whitespace-pre-wrap break-words">{message.body}</p>}
+              {detail.channel === 'email' ? <><dl className="grid gap-2 border-b border-border px-4 pb-4 text-xs sm:grid-cols-[4rem_minmax(0,1fr)]"><dt className="text-muted-foreground">De</dt><dd className="m-0 break-all">{message.sender || detail.customer_address || '—'}</dd>{message.recipient && <><dt className="text-muted-foreground">Para</dt><dd className="m-0 break-all">{message.recipient}</dd></>}<dt className="text-muted-foreground">Asunto</dt><dd className="m-0 break-all">{message.subject || detail.subject || '(sin asunto)'}</dd></dl><div className="border-b border-border px-4 py-2"><Button type="button" variant="secondary" size="sm" onClick={() => setExpandedEmail(message)}><Maximize2 size={15} />Ampliar correo</Button></div>{message.html_body ? <iframe className="block h-48 w-full border-0 bg-white sm:h-56" title={`Cuerpo del email: ${message.subject || detail.subject || 'sin asunto'}`} sandbox="" referrerPolicy="no-referrer" srcDoc={emailDocument(message.html_body)} /> : <div className="whitespace-pre-wrap p-4">{message.body || '(correo sin texto)'}</div>}</> : <p className="m-0 whitespace-pre-wrap break-words">{message.body}</p>}
               {message.source_url && <a className="mt-2 inline-block text-sm text-primary underline underline-offset-4" href={message.source_url} target="_blank" rel="noreferrer">Abrir mensaje original ↗</a>}
             </article>)}</div>
             <div className="border-y border-border p-4 sm:p-6"><p className="mb-3 text-xs font-semibold uppercase tracking-wide text-primary">ANÁLISIS / DATOS VERIFICADOS</p><div className="grid grid-cols-2 gap-3 sm:grid-cols-4">{[['Alojamiento', String(detail.analysis.property_query || 'Sin identificar')], ['Entrada', String(detail.analysis.arrival || '—')], ['Salida', String(detail.analysis.departure || '—')], ['Huéspedes', String(detail.analysis.guests || '—')]].map(([name, value]) => <div key={name} className="min-w-0"><span className="block text-xs text-muted-foreground">{name}</span><strong className="mt-1 block break-words text-sm">{value}</strong></div>)}</div>{Boolean(detail.analysis.availability) && <div className="mt-4 flex flex-wrap items-center gap-2 text-sm">Disponibilidad: <Badge value={String((detail.analysis.availability as Record<string, unknown>).status)} />{(detail.analysis.availability as Record<string, unknown>).stale ? <span className="text-warning-ink">CSV desactualizado</span> : null}</div>}{Array.isArray((detail.analysis.availability as Record<string, unknown> | undefined)?.alternatives) && ((detail.analysis.availability as Record<string, unknown>).alternatives as { name: string; capacity: number }[]).length > 0 && <div className="mt-4 text-sm"><strong>Alternativas para revisión</strong><div className="mt-2 flex flex-wrap gap-2">{((detail.analysis.availability as Record<string, unknown>).alternatives as { name: string; capacity: number }[]).map((option, index) => <span key={index} className="rounded-md bg-accent px-2 py-1 text-xs">{option.name} · {option.capacity} plazas</span>)}</div></div>}{Boolean(detail.analysis.availability_changed) && <p className="mt-3 text-sm text-warning-ink">La disponibilidad cambió desde que se creó el borrador. Revísalo antes de aprobar.</p>}{Boolean(detail.analysis.analysis_error) && <p className="mt-3 text-sm text-warning-ink">El análisis automático falló; comprobar manualmente.</p>}</div>
@@ -355,7 +378,24 @@ export default function App() {
           </> : <Empty>Selecciona una conversación para revisar su contenido y preparar la respuesta.</Empty>}</section>
         </div>}
 
-        {view === 'properties' && <Card className="overflow-hidden p-4 sm:p-6"><div className="mb-5"><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">CATÁLOGO VERSIONADO</p><h2 className="text-xl font-semibold">Alojamientos</h2></div>{properties.length ? <div className="max-w-full overflow-auto"><Table><TableHeader><TableRow><TableHead>ID</TableHead><TableHead>Alojamiento</TableHead><TableHead>Estado</TableHead><TableHead>Clase</TableHead><TableHead>Capacidad</TableHead><TableHead>Edificio / ubicación</TableHead><TableHead>Origen</TableHead></TableRow></TableHeader><TableBody>{properties.map(item => <TableRow key={item.id}><TableCell>{item.id}</TableCell><TableCell>{item.name}</TableCell><TableCell>{item.active ? 'Activo' : 'Inactivo'}</TableCell><TableCell>{item.category}</TableCell><TableCell>{item.capacity} plazas</TableCell><TableCell>{[item.building, item.city, item.address].filter(Boolean).join(' · ') || '—'}</TableCell><TableCell>#{item.batch_id} · fila {item.source_row}</TableCell></TableRow>)}</TableBody></Table></div> : <Empty>Importa una exportación de propiedades para ver el catálogo.</Empty>}</Card>}
+        {view === 'properties' && <Card className="overflow-hidden p-4 sm:p-6">
+          <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
+            <div><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">CATÁLOGO VERSIONADO</p><h2 className="text-xl font-semibold">Alojamientos</h2></div>
+            <p className="text-sm text-muted-foreground" aria-live="polite">{filteredProperties.length} de {properties.length} alojamientos</p>
+          </div>
+          <div className="mb-5 grid gap-3 rounded-lg border border-border bg-background p-3 sm:grid-cols-2 xl:grid-cols-[minmax(14rem,2fr)_repeat(3,minmax(10rem,1fr))_auto]">
+            <label className="grid gap-1.5 text-xs font-medium">Buscar alojamiento<Input type="search" aria-label="Buscar alojamiento por nombre o ID" placeholder="Nombre o ID…" value={propertySearch} onChange={event => setPropertySearch(event.target.value)} /></label>
+            <label className="grid gap-1.5 text-xs font-medium">Estado<Select value={propertyStatusFilter} onChange={event => setPropertyStatusFilter(event.target.value)}><option value="active">Solo activos</option><option value="inactive">Solo inactivos</option><option value="all">Todos</option></Select></label>
+            <label className="grid gap-1.5 text-xs font-medium">Clase<Select value={propertyCategoryFilter} onChange={event => setPropertyCategoryFilter(event.target.value)}><option value="">Cualquier clase</option>{propertyCategories.map(category => <option key={category} value={category}>{category}</option>)}</Select></label>
+            <label className="grid gap-1.5 text-xs font-medium">Población<Select value={propertyCityFilter} onChange={event => setPropertyCityFilter(event.target.value)}><option value="">Cualquier población</option>{propertyCities.map(city => <option key={city} value={city}>{city}</option>)}</Select></label>
+            <Button type="button" className="self-end" variant="ghost" size="sm" onClick={clearPropertyFilters} disabled={!propertyFiltersChanged}><X size={14} /> Limpiar</Button>
+          </div>
+          {properties.length === 0
+            ? <Empty>Importa una exportación de propiedades para ver el catálogo.</Empty>
+            : filteredProperties.length === 0
+              ? <Empty>No hay alojamientos con esos filtros. <Button type="button" variant="link" onClick={clearPropertyFilters}>Restablecer filtros</Button></Empty>
+              : <div className="max-w-full overflow-auto"><Table><TableHeader><TableRow><TableHead>ID</TableHead><TableHead>Alojamiento</TableHead><TableHead>Estado</TableHead><TableHead>Clase</TableHead><TableHead>Capacidad</TableHead><TableHead>Edificio / ubicación</TableHead></TableRow></TableHeader><TableBody>{filteredProperties.map(item => <TableRow key={item.id}><TableCell>{item.id}</TableCell><TableCell>{item.name}</TableCell><TableCell>{item.active ? 'Activo' : 'Inactivo'}</TableCell><TableCell>{item.category}</TableCell><TableCell>{item.capacity} plazas</TableCell><TableCell>{[item.building, item.city, item.address].filter(Boolean).join(' · ') || '—'}</TableCell></TableRow>)}</TableBody></Table></div>}
+        </Card>}
         {view === 'planning' && <Planning />}
         {view === 'imports' && <div className="grid items-start gap-4 xl:grid-cols-2"><Card className="p-4 sm:p-6"><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">CATÁLOGO Y RESERVAS</p><h2 className="mb-3 text-xl font-semibold">Importación supervisada</h2><p className="mb-5 text-sm leading-6 text-muted-foreground">Valida la exportación, revisa cambios e incidencias y confirma la nueva instantánea. Los CSV originales no se conservan.</p><SourceImportForm onDone={refresh} admin={user.role === 'admin'} /></Card><Card className="p-4 sm:p-6"><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">INTERVALOS</p><h2 className="mb-3 text-xl font-semibold">Importar disponibilidad</h2><p className="mb-5 text-sm leading-6 text-muted-foreground">El archivo describe intervalos con salida exclusiva y estado disponible u ocupado. Una importación inválida conserva la última válida.</p><ImportForm onDone={refresh} admin={user.role === 'admin'} /></Card><Card className="p-4 sm:p-6 xl:col-span-2"><ImportHistory imports={imports} /></Card></div>}
         {view === 'integrations' && <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{integrations ? Object.entries(integrations).filter(([name]) => name !== 'mode').map(([name, value]) => <Card className="p-5" key={name}><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">CANAL / FUENTE</p><h2 className="mb-3 text-xl font-semibold">{name.toUpperCase()}</h2><Badge value={value.configured === false || value.stale || (name === 'imap' && !value.connected) ? 'manual_check' : 'available'} /><p className="my-4 text-sm leading-6 text-muted-foreground">{value.sending_enabled === false ? 'Envío bloqueado por modo de solo lectura.' : value.read_only ? value.connected ? `Conectado en solo lectura · buzón ${value.mailbox || ''}` : value.configured ? `Esperando primera conexión · buzón ${value.mailbox || ''}` : 'Falta configurar el acceso IMAP.' : value.configured === false ? 'Pendiente de configurar.' : value.stale ? 'La fuente está desactualizada.' : 'Configurado o disponible.'}</p>{value.last_success_at && <small className="block text-xs text-muted-foreground">Última conexión: {date(value.last_success_at)}</small>}{value.last_import_at && <small className="mt-1 block text-xs text-muted-foreground">Última carga: {date(value.last_import_at)}</small>}{value.last_error && <p className="mt-2 break-words text-sm text-error-ink">{value.last_error}</p>}</Card>) : <Empty>Cargando integraciones…</Empty>}</div>}
