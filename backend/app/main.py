@@ -28,6 +28,7 @@ from app.models import (
     ImportBatch,
     MailCursor,
     Message,
+    ReservationSyncState,
     User,
     now,
 )
@@ -718,6 +719,7 @@ def integrations(db: Db, user: Operator) -> dict:
     settings = get_settings()
     batch = latest_batch(db)
     cursor = db.scalar(select(MailCursor).where(MailCursor.mailbox == settings.imap_mailbox))
+    reservation_sync = db.get(ReservationSyncState, "avantio_reservations")
     age = (datetime.now(UTC) - aware(batch.created_at)).total_seconds() / 3600 if batch else None
     return {
         "mode": {"read_only": READ_ONLY_MODE, "outbound_enabled": not READ_ONLY_MODE},
@@ -748,6 +750,20 @@ def integrations(db: Db, user: Operator) -> dict:
             "last_import_at": batch.created_at if batch else None,
             "age_hours": age,
             "stale": age is None or age > settings.availability_max_age_hours,
+        },
+        "avantio": {
+            "configured": bool(
+                settings.avantio_export_url.strip()
+                and settings.avantio_username.strip()
+                and settings.avantio_password
+            ),
+            "status": reservation_sync.status if reservation_sync else "idle",
+            "interval_hours": settings.avantio_sync_interval_hours,
+            "last_attempt_at": reservation_sync.last_attempt_at if reservation_sync else None,
+            "last_success_at": reservation_sync.last_success_at if reservation_sync else None,
+            "last_batch_id": reservation_sync.last_batch_id if reservation_sync else None,
+            "row_count": reservation_sync.row_count if reservation_sync else 0,
+            "last_error": reservation_sync.last_error if reservation_sync else None,
         },
     }
 

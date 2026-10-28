@@ -52,7 +52,28 @@ Se puede subir desde Importaciones o copiar a `/data/imports` del volumen `csv_i
 
 ## Catálogo, reservas y planning
 
-La sección Importaciones también acepta las exportaciones «Listado de propiedades» y «Listado de reservas». Un administrador selecciona el archivo, revisa la vista previa y confirma su activación. Estas dos fuentes solo se cargan manualmente; el vigilante de carpeta sigue reservado al CSV de disponibilidad. Propiedades es una instantánea completa. Reservas se consolidan por `Localizador`: cada archivo añade o actualiza sus filas y conserva las reservas ausentes de cargas anteriores. Un archivo inválido conserva la última versión válida; repetir el archivo vigente no crea otra versión. Conviene cargar primero los años antiguos y después los recientes; si un mismo localizador difiere, la última carga confirmada prevalece.
+La sección Importaciones también acepta las exportaciones «Listado de propiedades» y «Listado de reservas». Un administrador selecciona el archivo, revisa la vista previa y confirma su activación. Propiedades se carga manualmente; reservas también se pueden sincronizar automáticamente desde Avantio. El vigilante de carpeta sigue reservado al CSV de disponibilidad. Propiedades es una instantánea completa. Reservas se consolidan por `Localizador`: cada archivo añade o actualiza sus filas y conserva las reservas ausentes de cargas anteriores. Un archivo inválido conserva la última versión válida; repetir el archivo vigente no crea otra versión. Conviene cargar primero los años antiguos y después los recientes; si un mismo localizador difiere, la última carga confirmada prevalece.
+
+## Exportación automática de reservas desde Avantio
+
+El worker usa Playwright y Chromium sin interfaz para abrir la página de Compromisos configurada, iniciar sesión y descargar el CSV mediante **Más acciones → Descargar CSV**. El enlace debe conservar el filtro de reservas creadas durante los últimos 14 días. La primera ejecución se intenta al iniciar el worker; las siguientes se programan con `AVANTIO_SYNC_INTERVAL_HOURS` (seis horas por defecto).
+
+Configura estos valores directamente en `C:\PROYECTOS ANTIGRAVITY\AvantIA\.env` del servidor; no incluyas las credenciales ni el enlace con parámetros de vista en Git:
+
+```dotenv
+AVANTIO_EXPORT_URL=
+AVANTIO_USERNAME=
+AVANTIO_PASSWORD=
+AVANTIO_SYNC_INTERVAL_HOURS=6
+```
+
+La sincronización queda desactivada si falta la URL o alguna credencial. El CSV se valida con el importador de reservas existente y se procesa en memoria; no se conserva el archivo. Un fallo de acceso, descarga o validación mantiene activa la última instantánea válida. En **Integraciones** se muestran el último intento, la última carga correcta, el número de filas y el error más reciente. El historial de importaciones identifica los lotes cargados por Playwright.
+
+Después de configurar el `.env` del servidor, recrea el worker para cargar las variables:
+
+```powershell
+docker compose -f compose.yaml -f compose.prod.yaml up -d --force-recreate worker
+```
 
 El catálogo une `Código` con `id alojamiento`; las reservas usan `Localizador` como clave. La base de datos conserva campos operativos mínimos, hashes, lote y fila del CSV que aportó cada registro, incidencias y cambios entre versiones consolidadas. No guarda los CSV originales, contactos, documentos, fechas de nacimiento, nombres de propietarios ni comentarios libres. El planning integra automáticamente las exportaciones válidas por localizador y muestra estancias bloqueantes, peticiones y cancelaciones únicamente para apartamentos y villas activos. Al abrir una reserva se muestra su información operativa en un panel lateral; la trazabilidad de lote y fila permanece en base de datos y no se presenta en la interfaz. Las reservas confirmadas, pagadas, prerreservas, «No Disponible» y «De Propietario» bloquean `[entrada, salida)`. La ausencia de un localizador en una exportación parcial no se interpreta como cancelación: solo un estado explícito puede liberarlo. Los lotes y sus diferencias siguen disponibles en el historial de auditoría.
 

@@ -421,7 +421,13 @@ def preview_import(db: Session, dataset: str, raw: bytes) -> dict:
 
 
 def commit_import(
-    db: Session, dataset: str, raw: bytes, filename: str, actor_user_id: int, expected_checksum: str
+    db: Session,
+    dataset: str,
+    raw: bytes,
+    filename: str,
+    actor_user_id: int | None,
+    expected_checksum: str,
+    source: str = "upload",
 ) -> ImportBatch:
     checksum = hashlib.sha256(raw).hexdigest()
     if checksum != expected_checksum:
@@ -432,7 +438,7 @@ def commit_import(
         return duplicate
     batch = ImportBatch(
         dataset=dataset,
-        source="upload",
+        source=source,
         filename=filename[:255],
         checksum=checksum,
         status="invalid",
