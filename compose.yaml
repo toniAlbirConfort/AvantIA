@@ -34,6 +34,9 @@ services:
     build: ./backend
     restart: unless-stopped
     env_file: .env
+    environment:
+      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11435}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-dania:16k}
     depends_on:
       bootstrap:
         condition: service_completed_successfully
@@ -48,6 +51,9 @@ services:
     build: ./backend
     restart: unless-stopped
     env_file: .env
+    environment:
+      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11435}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-dania:16k}
     command: ["python", "-m", "app.worker"]
     depends_on:
       api:
