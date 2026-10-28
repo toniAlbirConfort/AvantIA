@@ -108,7 +108,7 @@ export default function App() {
   const [user, setUser] = useState<User | null>(null)
   const [checking, setChecking] = useState(!!token())
   const path = window.location.pathname
-  const [view, setView] = useState<View>(path.startsWith('/inbox') ? 'inbox' : navigation.find(item => path === `/${item.id}`)?.id || 'summary')
+  const [view, setView] = useState<View>(path.startsWith('/inbox') ? 'inbox' : path.startsWith('/bookings') ? 'bookings' : navigation.find(item => path === `/${item.id}`)?.id || 'summary')
   const [selectedId, setSelectedId] = useState<number | null>(Number(path.split('/')[2]) || null)
   const [summary, setSummary] = useState<Summary | null>(null)
   const [items, setItems] = useState<Conversation[]>([])
@@ -266,14 +266,15 @@ export default function App() {
 
   function navigate(next: View, id?: number) {
     setView(next); setMobileMenu(false); setError('')
-    const target = next === 'inbox' && id ? `/inbox/${id}` : `/${next}`
+    const target = (next === 'inbox' || next === 'bookings') && id ? `/${next}/${id}` : `/${next}`
     window.history.pushState({}, '', target)
     if (id) setSelectedId(id)
     else if (next !== 'inbox' && next !== 'bookings') { setSelectedId(null); setDetail(null) }
   }
   async function select(id: number) {
     setDraftDirty(false)
-    setSelectedId(id); navigate('inbox', id)
+    setDetail(null)
+    navigate(view === 'bookings' ? 'bookings' : 'inbox', id)
     try { setDetail(await api<Conversation>(`/api/conversations/${id}`)) }
     catch (err) { setError((err as Error).message) }
   }
@@ -365,7 +366,7 @@ export default function App() {
             </div>
           </section>
           <section className={`min-h-[32rem] min-w-0 overflow-hidden rounded-xl border border-border bg-card ${selectedThreadLoaded ? '' : 'hidden lg:block'}`}>{detail && selectedThreadLoaded ? <>
-            <div className="flex items-start justify-between gap-3 border-b border-border p-4 sm:p-6"><div className="min-w-0"><Button variant="outline" size="sm" className="mb-3 lg:hidden" onClick={() => { setSelectedId(null); setDetail(null); window.history.pushState({}, '', '/inbox') }}><ArrowLeft size={16} /> Bandeja</Button><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">CONVERSACIÓN #{detail.id} / {label(detail.channel).toUpperCase()}</p><h2 className="truncate text-xl font-semibold">{detail.customer_name || detail.customer_address || 'Cliente'}</h2><p className="mt-1 truncate text-sm text-muted-foreground">{detail.subject || 'Consulta de alojamiento'}</p></div><Badge value={detail.status} /></div>
+            <div className="flex items-start justify-between gap-3 border-b border-border p-4 sm:p-6"><div className="min-w-0"><Button variant="outline" size="sm" className="mb-3 lg:hidden" onClick={() => { setSelectedId(null); setDetail(null); window.history.pushState({}, '', view === 'bookings' ? '/bookings' : '/inbox') }}><ArrowLeft size={16} /> {view === 'bookings' ? 'Prerreservas' : 'Bandeja'}</Button><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">CONVERSACIÓN #{detail.id} / {label(detail.channel).toUpperCase()}</p><h2 className="truncate text-xl font-semibold">{detail.customer_name || detail.customer_address || 'Cliente'}</h2><p className="mt-1 truncate text-sm text-muted-foreground">{detail.subject || 'Consulta de alojamiento'}</p></div><Badge value={detail.status} /></div>
             <div className="border-b border-border bg-background px-4 py-3 text-xs text-muted-foreground sm:px-6">Recibido {date(detail.last_inbound_at)}</div>
             <div className={`grid max-h-[25rem] gap-3 overflow-auto bg-background p-4 sm:p-6 ${detail.channel === 'email' ? 'email-feed' : ''}`}>{detail.messages?.map(message => <article key={message.id} className={`w-fit max-w-[90%] overflow-hidden rounded-lg border border-border p-3 text-sm leading-6 ${message.direction === 'outbound' ? 'ml-auto bg-accent' : 'bg-card'} ${detail.channel === 'email' ? 'w-full max-w-4xl p-0' : ''}`}>
               <div className="mb-2 text-[0.65rem] font-semibold uppercase tracking-wide text-muted-foreground">{message.direction === 'inbound' ? 'RECIBIDO' : 'AVANTIA'} · {date(message.created_at)}</div>
