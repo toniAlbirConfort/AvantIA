@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 from sqlalchemy import create_engine
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app import models  # noqa: F401
@@ -17,4 +17,15 @@ def db():
     Base.metadata.create_all(engine)
     with Session(engine, expire_on_commit=False) as session:
         yield session
+    engine.dispose()
+
+
+@pytest.fixture
+def session_factory():
+    engine = create_engine(
+        "sqlite+pysqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    yield factory
     engine.dispose()

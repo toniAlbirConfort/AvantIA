@@ -15,7 +15,9 @@ services:
       timeout: 3s
       retries: 10
   migrate:
-    build: ./backend
+    build:
+      context: ./backend
+      target: api
     env_file: .env
     command: ["alembic", "upgrade", "head"]
     depends_on:
@@ -23,7 +25,9 @@ services:
         condition: service_healthy
     restart: "no"
   bootstrap:
-    build: ./backend
+    build:
+      context: ./backend
+      target: api
     env_file: .env
     command: ["python", "-m", "app.bootstrap"]
     depends_on:
@@ -31,7 +35,9 @@ services:
         condition: service_completed_successfully
     restart: "no"
   api:
-    build: ./backend
+    build:
+      context: ./backend
+      target: api
     restart: unless-stopped
     env_file: .env
     environment:
@@ -48,8 +54,12 @@ services:
     ports:
       - "127.0.0.1:${AVANTIA_API_PORT:-18100}:8000"
   worker:
-    build: ./backend
+    build:
+      context: ./backend
+      target: worker
     restart: unless-stopped
+    init: true
+    shm_size: "512mb"
     env_file: .env
     environment:
       OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11435}

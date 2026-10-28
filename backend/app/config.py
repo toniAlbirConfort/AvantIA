@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Desarrollo: se mantiene bloqueado en código, sin variable de entorno para desactivarlo.
@@ -46,6 +47,10 @@ class Settings(BaseSettings):
     booking_sender_domains: str = "booking.com"
     admin_username: str = ""
     admin_password: str = ""
+    avantio_export_url: str = ""
+    avantio_username: str = ""
+    avantio_password: str = ""
+    avantio_sync_interval_hours: int = Field(default=6, ge=1, le=168)
 
 
 @lru_cache

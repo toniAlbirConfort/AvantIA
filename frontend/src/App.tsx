@@ -56,6 +56,7 @@ function label(value: string) {
     delivery_unknown: 'Envío incierto', closed: 'Cerrado', available: 'Disponible',
     unavailable: 'No disponible', manual_check: 'Revisión manual',
     ambiguous_property: 'Alojamiento ambiguo', valid: 'Válido', invalid: 'Inválido',
+    syncing: 'Sincronizando', sync_error: 'Error', synced: 'Al día',
     whatsapp: 'WhatsApp', email: 'Email', booking: 'Booking' } as Record<string, string>)[value] || value
 }
 const badgeStyles: Record<string, string> = {
@@ -63,12 +64,56 @@ const badgeStyles: Record<string, string> = {
   sent: 'bg-success-bg text-success-ink', valid: 'bg-success-bg text-success-ink', available: 'bg-success-bg text-success-ink',
   closed: 'bg-muted text-muted-foreground', booking: 'bg-info-bg text-info-ink', whatsapp: 'bg-success-bg text-success-ink',
   email: 'bg-info-bg text-info-ink', invalid: 'bg-error-bg text-error-ink', unavailable: 'bg-error-bg text-error-ink',
+  syncing: 'bg-info-bg text-info-ink', synced: 'bg-success-bg text-success-ink', sync_error: 'bg-error-bg text-error-ink',
   delivery_unknown: 'bg-warning-bg text-warning-ink', manual_check: 'bg-warning-bg text-warning-ink',
   ambiguous_property: 'bg-warning-bg text-warning-ink', high: 'bg-warning-bg text-warning-ink', admin: 'bg-info-bg text-info-ink',
   operator: 'bg-muted text-muted-foreground',
 }
 function Badge({ value }: { value: string }) { return <UiBadge className={badgeStyles[value] || 'bg-muted text-muted-foreground'}>{label(value)}</UiBadge> }
 function Empty({ children }: { children: React.ReactNode }) { return <div className="grid min-h-28 place-items-center px-6 py-10 text-center text-sm leading-7 text-muted-foreground">{children}</div> }
+
+function integrationTitle(name: string) {
+  return name === 'avantio' ? 'Reservas Avantio' : name.toUpperCase()
+}
+
+function integrationBadge(name: string, value: any) {
+  if (name !== 'avantio') {
+    return value.configured === false || value.stale || (name === 'imap' && !value.connected) ? 'manual_check' : 'available'
+  }
+  if (!value.configured) return 'manual_check'
+  if (value.status === 'running') return 'syncing'
+  if (value.status === 'failed') return 'sync_error'
+  if (!value.last_success_at) return 'pending'
+  const intervalMs = Number(value.interval_hours || 6) * 60 * 60 * 1000
+  return Date.now() - new Date(value.last_success_at).getTime() > intervalMs * 1.5 ? 'manual_check' : 'synced'
+}
+
+function integrationDescription(name: string, value: any) {
+  if (name === 'avantio') {
+    if (!value.configured) return 'Pendiente de configurar el enlace y el acceso de Avantio en el .env del servidor.'
+    if (value.status === 'running') return 'Descargando el CSV de Compromisos y actualizando el planning.'
+    if (value.status === 'failed') return 'Falló la última sincronización. La última instantánea válida sigue activa.'
+    return `Exportación automática cada ${value.interval_hours} h.`
+  }
+  if (value.sending_enabled === false) return 'Envío bloqueado por modo de solo lectura.'
+  if (value.read_only) return value.connected ? `Conectado en solo lectura · buzón ${value.mailbox || ''}` : value.configured ? `Esperando primera conexión · buzón ${value.mailbox || ''}` : 'Falta configurar el acceso IMAP.'
+  if (value.configured === false) return 'Pendiente de configurar.'
+  if (value.stale) return 'La fuente está desactualizada.'
+  return 'Configurado o disponible.'
+}
+
+function IntegrationCard({ name, value }: { name: string; value: any }) {
+  return <Card className="p-5" key={name}>
+    <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">CANAL / FUENTE</p>
+    <h2 className="mb-3 text-xl font-semibold">{integrationTitle(name)}</h2>
+    <Badge value={integrationBadge(name, value)} />
+    <p className="my-4 text-sm leading-6 text-muted-foreground">{integrationDescription(name, value)}</p>
+    {value.last_attempt_at && <small className="block text-xs text-muted-foreground">Último intento: {date(value.last_attempt_at)}</small>}
+    {value.last_success_at && <small className="mt-1 block text-xs text-muted-foreground">{name === 'avantio' ? 'Última sincronización' : 'Última conexión'}: {date(value.last_success_at)}{name === 'avantio' ? ` · ${value.row_count || 0} filas · lote #${value.last_batch_id ?? '—'}` : ''}</small>}
+    {name !== 'avantio' && value.last_import_at && <small className="mt-1 block text-xs text-muted-foreground">Última carga: {date(value.last_import_at)}</small>}
+    {value.last_error && <p className="mt-2 break-words text-sm text-error-ink">{value.last_error}</p>}
+  </Card>
+}
 
 function Login({ onLogin }: { onLogin: (user: User) => void }) {
   const [username, setUsername] = useState('')
@@ -399,7 +444,7 @@ export default function App() {
         </Card>}
         {view === 'planning' && <Planning />}
         {view === 'imports' && <div className="grid items-start gap-4 xl:grid-cols-2"><Card className="p-4 sm:p-6"><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">CATÁLOGO Y RESERVAS</p><h2 className="mb-3 text-xl font-semibold">Importación supervisada</h2><p className="mb-5 text-sm leading-6 text-muted-foreground">Valida la exportación, revisa cambios e incidencias y confirma la nueva instantánea. Los CSV originales no se conservan.</p><SourceImportForm onDone={refresh} admin={user.role === 'admin'} /></Card><Card className="p-4 sm:p-6"><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">INTERVALOS</p><h2 className="mb-3 text-xl font-semibold">Importar disponibilidad</h2><p className="mb-5 text-sm leading-6 text-muted-foreground">El archivo describe intervalos con salida exclusiva y estado disponible u ocupado. Una importación inválida conserva la última válida.</p><ImportForm onDone={refresh} admin={user.role === 'admin'} /></Card><Card className="p-4 sm:p-6 xl:col-span-2"><ImportHistory imports={imports} /></Card></div>}
-        {view === 'integrations' && <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{integrations ? Object.entries(integrations).filter(([name]) => name !== 'mode').map(([name, value]) => <Card className="p-5" key={name}><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">CANAL / FUENTE</p><h2 className="mb-3 text-xl font-semibold">{name.toUpperCase()}</h2><Badge value={value.configured === false || value.stale || (name === 'imap' && !value.connected) ? 'manual_check' : 'available'} /><p className="my-4 text-sm leading-6 text-muted-foreground">{value.sending_enabled === false ? 'Envío bloqueado por modo de solo lectura.' : value.read_only ? value.connected ? `Conectado en solo lectura · buzón ${value.mailbox || ''}` : value.configured ? `Esperando primera conexión · buzón ${value.mailbox || ''}` : 'Falta configurar el acceso IMAP.' : value.configured === false ? 'Pendiente de configurar.' : value.stale ? 'La fuente está desactualizada.' : 'Configurado o disponible.'}</p>{value.last_success_at && <small className="block text-xs text-muted-foreground">Última conexión: {date(value.last_success_at)}</small>}{value.last_import_at && <small className="mt-1 block text-xs text-muted-foreground">Última carga: {date(value.last_import_at)}</small>}{value.last_error && <p className="mt-2 break-words text-sm text-error-ink">{value.last_error}</p>}</Card>) : <Empty>Cargando integraciones…</Empty>}</div>}
+        {view === 'integrations' && <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{integrations ? Object.entries(integrations).filter(([name]) => name !== 'mode').map(([name, value]) => <IntegrationCard key={name} name={name} value={value} />) : <Empty>Cargando integraciones…</Empty>}</div>}
         {view === 'users' && user.role === 'admin' && <div className="grid items-start gap-4 xl:grid-cols-2"><Card className="p-5 sm:p-6"><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">ACCESO</p><h2 className="mb-4 text-xl font-semibold">Operadores</h2>{users.map(item => <div className="flex items-center justify-between gap-3 border-t border-border py-3" key={item.id}><strong className="text-sm">{item.username}</strong><Badge value={item.role} /></div>)}</Card><UserForm onDone={refresh} /></div>}
       </main>
     </div>

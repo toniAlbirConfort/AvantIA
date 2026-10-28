@@ -211,3 +211,16 @@ class MailCursor(Base):
     last_uid: Mapped[int] = mapped_column(Integer, default=0)
     last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_error: Mapped[str | None] = mapped_column(Text)
+
+
+class ReservationSyncState(Base):
+    __tablename__ = "reservation_sync_states"
+
+    key: Mapped[str] = mapped_column(String(80), primary_key=True)
+    status: Mapped[str] = mapped_column(String(20), default="idle")
+    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_batch_id: Mapped[int | None] = mapped_column(ForeignKey("import_batches.id"))
+    row_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_error: Mapped[str | None] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
