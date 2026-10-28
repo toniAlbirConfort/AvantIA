@@ -115,6 +115,10 @@ export default function App() {
   const [detail, setDetail] = useState<Conversation | null>(null)
   const [users, setUsers] = useState<User[]>([])
   const [properties, setProperties] = useState<Property[]>([])
+  const [propertySearch, setPropertySearch] = useState('')
+  const [propertyStatusFilter, setPropertyStatusFilter] = useState('active')
+  const [propertyCategoryFilter, setPropertyCategoryFilter] = useState('')
+  const [propertyCityFilter, setPropertyCityFilter] = useState('')
   const [imports, setImports] = useState<ImportBatch[]>([])
   const [integrations, setIntegrations] = useState<Record<string, any> | null>(null)
   const [expandedEmail, setExpandedEmail] = useState<Message | null>(null)
@@ -299,6 +303,25 @@ export default function App() {
   }
   const section = navigation.find(item => item.id === view)?.label || 'Resumen'
   const readOnlyMode = integrations?.mode?.read_only !== false
+  const propertyCategories = [...new Set(properties.map(item => item.category).filter(Boolean))]
+    .sort((left, right) => left.localeCompare(right, 'es-ES'))
+  const propertyCities = [...new Set(properties.map(item => item.city).filter((city): city is string => !!city))]
+    .sort((left, right) => left.localeCompare(right, 'es-ES'))
+  const propertyQuery = propertySearch.trim().toLocaleLowerCase('es-ES')
+  const filteredProperties = properties.filter(item => {
+    const searchable = `${item.name} ${item.id}`.toLocaleLowerCase('es-ES')
+    return (!propertyQuery || searchable.includes(propertyQuery))
+      && (propertyStatusFilter === 'all' || item.active === (propertyStatusFilter === 'active'))
+      && (!propertyCategoryFilter || item.category === propertyCategoryFilter)
+      && (!propertyCityFilter || item.city === propertyCityFilter)
+  })
+  const propertyFiltersChanged = !!propertySearch || propertyStatusFilter !== 'active' || !!propertyCategoryFilter || !!propertyCityFilter
+  const clearPropertyFilters = () => {
+    setPropertySearch('')
+    setPropertyStatusFilter('active')
+    setPropertyCategoryFilter('')
+    setPropertyCityFilter('')
+  }
 
   return <div className="min-h-screen bg-background text-foreground md:flex">
     {mobileMenu && <button type="button" className="fixed inset-0 z-30 bg-background/80 md:hidden" onClick={() => setMobileMenu(false)} aria-label="Cerrar menú" />}
@@ -355,7 +378,24 @@ export default function App() {
           </> : <Empty>Selecciona una conversación para revisar su contenido y preparar la respuesta.</Empty>}</section>
         </div>}
 
-        {view === 'properties' && <Card className="overflow-hidden p-4 sm:p-6"><div className="mb-5"><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">CATÁLOGO VERSIONADO</p><h2 className="text-xl font-semibold">Alojamientos</h2></div>{properties.length ? <div className="max-w-full overflow-auto"><Table><TableHeader><TableRow><TableHead>ID</TableHead><TableHead>Alojamiento</TableHead><TableHead>Estado</TableHead><TableHead>Clase</TableHead><TableHead>Capacidad</TableHead><TableHead>Edificio / ubicación</TableHead><TableHead>Origen</TableHead></TableRow></TableHeader><TableBody>{properties.map(item => <TableRow key={item.id}><TableCell>{item.id}</TableCell><TableCell>{item.name}</TableCell><TableCell>{item.active ? 'Activo' : 'Inactivo'}</TableCell><TableCell>{item.category}</TableCell><TableCell>{item.capacity} plazas</TableCell><TableCell>{[item.building, item.city, item.address].filter(Boolean).join(' · ') || '—'}</TableCell><TableCell>#{item.batch_id} · fila {item.source_row}</TableCell></TableRow>)}</TableBody></Table></div> : <Empty>Importa una exportación de propiedades para ver el catálogo.</Empty>}</Card>}
+        {view === 'properties' && <Card className="overflow-hidden p-4 sm:p-6">
+          <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
+            <div><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">CATÁLOGO VERSIONADO</p><h2 className="text-xl font-semibold">Alojamientos</h2></div>
+            <p className="text-sm text-muted-foreground" aria-live="polite">{filteredProperties.length} de {properties.length} alojamientos</p>
+          </div>
+          <div className="mb-5 grid gap-3 rounded-lg border border-border bg-background p-3 sm:grid-cols-2 xl:grid-cols-[minmax(14rem,2fr)_repeat(3,minmax(10rem,1fr))_auto]">
+            <label className="grid gap-1.5 text-xs font-medium">Buscar alojamiento<Input type="search" aria-label="Buscar alojamiento por nombre o ID" placeholder="Nombre o ID…" value={propertySearch} onChange={event => setPropertySearch(event.target.value)} /></label>
+            <label className="grid gap-1.5 text-xs font-medium">Estado<Select value={propertyStatusFilter} onChange={event => setPropertyStatusFilter(event.target.value)}><option value="active">Solo activos</option><option value="inactive">Solo inactivos</option><option value="all">Todos</option></Select></label>
+            <label className="grid gap-1.5 text-xs font-medium">Clase<Select value={propertyCategoryFilter} onChange={event => setPropertyCategoryFilter(event.target.value)}><option value="">Cualquier clase</option>{propertyCategories.map(category => <option key={category} value={category}>{category}</option>)}</Select></label>
+            <label className="grid gap-1.5 text-xs font-medium">Población<Select value={propertyCityFilter} onChange={event => setPropertyCityFilter(event.target.value)}><option value="">Cualquier población</option>{propertyCities.map(city => <option key={city} value={city}>{city}</option>)}</Select></label>
+            <Button type="button" className="self-end" variant="ghost" size="sm" onClick={clearPropertyFilters} disabled={!propertyFiltersChanged}><X size={14} /> Limpiar</Button>
+          </div>
+          {properties.length === 0
+            ? <Empty>Importa una exportación de propiedades para ver el catálogo.</Empty>
+            : filteredProperties.length === 0
+              ? <Empty>No hay alojamientos con esos filtros. <Button type="button" variant="link" onClick={clearPropertyFilters}>Restablecer filtros</Button></Empty>
+              : <div className="max-w-full overflow-auto"><Table><TableHeader><TableRow><TableHead>ID</TableHead><TableHead>Alojamiento</TableHead><TableHead>Estado</TableHead><TableHead>Clase</TableHead><TableHead>Capacidad</TableHead><TableHead>Edificio / ubicación</TableHead></TableRow></TableHeader><TableBody>{filteredProperties.map(item => <TableRow key={item.id}><TableCell>{item.id}</TableCell><TableCell>{item.name}</TableCell><TableCell>{item.active ? 'Activo' : 'Inactivo'}</TableCell><TableCell>{item.category}</TableCell><TableCell>{item.capacity} plazas</TableCell><TableCell>{[item.building, item.city, item.address].filter(Boolean).join(' · ') || '—'}</TableCell></TableRow>)}</TableBody></Table></div>}
+        </Card>}
         {view === 'planning' && <Planning />}
         {view === 'imports' && <div className="grid items-start gap-4 xl:grid-cols-2"><Card className="p-4 sm:p-6"><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">CATÁLOGO Y RESERVAS</p><h2 className="mb-3 text-xl font-semibold">Importación supervisada</h2><p className="mb-5 text-sm leading-6 text-muted-foreground">Valida la exportación, revisa cambios e incidencias y confirma la nueva instantánea. Los CSV originales no se conservan.</p><SourceImportForm onDone={refresh} admin={user.role === 'admin'} /></Card><Card className="p-4 sm:p-6"><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">INTERVALOS</p><h2 className="mb-3 text-xl font-semibold">Importar disponibilidad</h2><p className="mb-5 text-sm leading-6 text-muted-foreground">El archivo describe intervalos con salida exclusiva y estado disponible u ocupado. Una importación inválida conserva la última válida.</p><ImportForm onDone={refresh} admin={user.role === 'admin'} /></Card><Card className="p-4 sm:p-6 xl:col-span-2"><ImportHistory imports={imports} /></Card></div>}
         {view === 'integrations' && <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{integrations ? Object.entries(integrations).filter(([name]) => name !== 'mode').map(([name, value]) => <Card className="p-5" key={name}><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">CANAL / FUENTE</p><h2 className="mb-3 text-xl font-semibold">{name.toUpperCase()}</h2><Badge value={value.configured === false || value.stale || (name === 'imap' && !value.connected) ? 'manual_check' : 'available'} /><p className="my-4 text-sm leading-6 text-muted-foreground">{value.sending_enabled === false ? 'Envío bloqueado por modo de solo lectura.' : value.read_only ? value.connected ? `Conectado en solo lectura · buzón ${value.mailbox || ''}` : value.configured ? `Esperando primera conexión · buzón ${value.mailbox || ''}` : 'Falta configurar el acceso IMAP.' : value.configured === false ? 'Pendiente de configurar.' : value.stale ? 'La fuente está desactualizada.' : 'Configurado o disponible.'}</p>{value.last_success_at && <small className="block text-xs text-muted-foreground">Última conexión: {date(value.last_success_at)}</small>}{value.last_import_at && <small className="mt-1 block text-xs text-muted-foreground">Última carga: {date(value.last_import_at)}</small>}{value.last_error && <p className="mt-2 break-words text-sm text-error-ink">{value.last_error}</p>}</Card>) : <Empty>Cargando integraciones…</Empty>}</div>}
