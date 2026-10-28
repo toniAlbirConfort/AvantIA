@@ -1,6 +1,6 @@
 export type User = { id: number; username: string; role: string; active: boolean }
 export type Draft = { id: number; text: string; status: string; approved_by_id: number | null; approved_at: string | null; sent_at: string | null; error: string | null }
-export type Message = { id: number; direction: string; body: string; html_body?: string | null; sender: string | null; recipient?: string | null; subject: string | null; source_url: string | null; provider_id: string; created_at: string }
+export type Message = { id: number; direction: string; body: string; html_body?: string | null; sender: string | null; recipient?: string | null; subject: string | null; source_url: string | null; provider_id: string; created_at: string; classification?: Record<string, unknown> | null }
 export type EmailTranslation = { message_id: number; language: 'es'; body: string }
 export type Audit = { action: string; actor_user_id: number | null; detail: Record<string, unknown>; created_at: string }
 export type Conversation = {
@@ -14,7 +14,8 @@ export type InboxThread = {
   type: 'thread'; id: number; channel: string; kind: string; customer_name: string | null;
   customer_address: string | null; subject: string | null; status: string; priority: string;
   assigned_user_id: number | null; last_inbound_at: string; message_count: number;
-  last_message_at: string | null; preview: string
+  last_message_at: string | null; preview: string; classification?: string | null;
+  classification_confidence?: number | null; valid_query?: boolean | null
 }
 export type InboxSenderGroup = {
   type: 'sender'; sender: string; display_name: string; address: string; channel: 'email';
