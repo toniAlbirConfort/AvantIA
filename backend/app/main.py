@@ -8,6 +8,7 @@ from datetime import UTC, date, datetime
 from email.utils import parseaddr
 from typing import Annotated
 
+import httpx
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -20,6 +21,7 @@ from app.avantio import availability_provider
 from app.config import READ_ONLY_MODE, get_settings
 from app.db import get_db
 from app.ingest import enqueue, ingest
+from app.integrations import ollama_translate_email
 from app.models import (
     AuditEvent,
     BookingTask,
@@ -450,6 +452,36 @@ def inbox(
 @app.get("/api/conversations/{id}")
 def conversation(id: int, db: Db, user: Operator) -> dict:
     return _conversation(_get_conv(db, id), db, detail=True)
+
+
+@app.post("/api/conversations/{conversation_id}/messages/{message_id}/translate")
+async def translate_email(
+    conversation_id: int, message_id: int, db: Db, user: Operator
+) -> dict:
+    conv = _get_conv(db, conversation_id)
+    if conv.channel != "email":
+        raise HTTPException(409, "Solo se pueden traducir emails")
+    message = db.get(Message, message_id)
+    if not message or message.conversation_id != conv.id:
+        raise HTTPException(404, "Email no encontrado")
+    if message.direction != "inbound":
+        raise HTTPException(409, "Solo se pueden traducir emails recibidos")
+    subject = message.subject or conv.subject or ""
+    body = message.body or ""
+    if not subject.strip() and not body.strip():
+        raise HTTPException(422, "El email no tiene contenido para traducir")
+    try:
+        translated = await ollama_translate_email(subject, body)
+    except RuntimeError as exc:
+        raise HTTPException(503, "Ollama no está disponible para traducir el email") from exc
+    except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+        raise HTTPException(502, "No se pudo traducir el email; inténtalo de nuevo") from exc
+    return {
+        "message_id": message.id,
+        "language": "es",
+        "subject": translated["subject"],
+        "body": translated["body"],
+    }
 
 
 @app.put("/api/conversations/{id}/draft")
