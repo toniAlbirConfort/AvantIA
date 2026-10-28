@@ -13,7 +13,7 @@ Centro de atención supervisada para consultas de huéspedes. Reúne WhatsApp in
 | `gowa` | Sesión WhatsApp **propia de AvantIA** en un volumen persistente. |
 | `migrate`, `bootstrap` | Migraciones y creación inicial del administrador. |
 
-Ollama se configura mediante una URL interna y no se levanta en este Compose. DanIA es solo una referencia de implementación; este proyecto no lee ni modifica sus datos o contenedores.
+Ollama no se levanta en este Compose. El worker llama a su API `/api/chat` y usa `dania:16k` por defecto; la API recibe la misma configuración para mostrar el estado de la integración.
 
 ## Arranque local
 
@@ -24,11 +24,21 @@ Ollama se configura mediante una URL interna y no se levanta en este Compose. Da
 
 El primer sondeo IMAP fija la posición actual del buzón y no importa correo histórico (`IMAP_INITIAL_BACKFILL=0`). Para una prueba controlada con mensajes anteriores, establecer un número positivo de mensajes **antes del primer arranque**. Las respuestas se mantienen en espera hasta que se configuren y prueben SMTP y GOWA.
 
+### Ollama en desarrollo local
+
+El worker local accede al Ollama de producción por un túnel SSH, sin publicar el puerto 11434 en la LAN. En una segunda ventana de PowerShell, desde la raíz del proyecto, ejecutar y mantener abierto:
+
+```powershell
+.\scripts\open-local-ollama-tunnel.ps1 -SshTarget informatica2@192.168.0.158
+```
+
+El túnel conecta `127.0.0.1:11435` del equipo local con `127.0.0.1:11434` del servidor. Docker Desktop expone el extremo local al contenedor mediante `host.docker.internal`; Compose usa esa URL y el modelo `dania:16k` por defecto. Si se cambia `.env`, recrear `api` y `worker` con `docker compose up -d --force-recreate api worker`.
+
 ## Producción
 
 Configurar `APP_DOMAIN`, `PUBLIC_BASE_URL=https://<dominio>` y DNS hacia el VPS. Ejecutar `docker compose -f compose.yaml -f compose.prod.yaml up --build -d`. Caddy gestiona los certificados HTTPS. PostgreSQL no publica puertos. GOWA solo publica su interfaz en `127.0.0.1:3002`; acceder mediante túnel SSH, vincular el número dedicado por QR y configurar `GOWA_DEVICE_ID` con el ID real del dispositivo. No eliminar el volumen `gowa_session`.
 
-La URL de Ollama debe ser accesible **desde el contenedor worker**. `GOWA_INTERNAL_CHAT_ID` indica el grupo o chat interno de avisos. Si está vacío, las tareas siguen visibles en el panel, pero no hay aviso WhatsApp. `MAIL_MESSAGE_URL_TEMPLATE` es opcional: puede contener `{message_id}` para abrir el correo en el webmail corporativo. El ID original siempre queda registrado.
+En producción, Compose configura el worker y la API para usar `http://host.docker.internal:11434` con el modelo `dania:16k`, accesible desde el contenedor worker del servidor. Se puede sobrescribir con `OLLAMA_URL` y `OLLAMA_MODEL` en el `.env` del servidor. `GOWA_INTERNAL_CHAT_ID` indica el grupo o chat interno de avisos. Si está vacío, las tareas siguen visibles en el panel, pero no hay aviso WhatsApp. `MAIL_MESSAGE_URL_TEMPLATE` es opcional: puede contener `{message_id}` para abrir el correo en el webmail corporativo. El ID original siempre queda registrado.
 
 El desplegador debe permitir tráfico entrante 80/443 y restringir el acceso SSH y al túnel GOWA. Crear usuarios individuales desde la sección Usuarios. Los tokens de sesión duran ocho horas.
 
