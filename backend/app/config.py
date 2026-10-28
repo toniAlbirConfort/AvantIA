@@ -51,6 +51,7 @@ class Settings(BaseSettings):
     avantio_username: str = ""
     avantio_password: str = ""
     avantio_sync_interval_hours: int = Field(default=6, ge=1, le=168)
+    avantio_storage_state_path: str = "/run/avantio-auth/storage-state.json"
 
 
 @lru_cache

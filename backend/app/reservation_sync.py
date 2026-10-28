@@ -53,6 +53,18 @@ def sync_is_due(
     return _utc(current_time) - _utc(last_attempt_at) >= timedelta(hours=interval_hours)
 
 
+def storage_state_updated_since(
+    last_attempt_at: datetime | None,
+    storage_state_path: str | Path,
+) -> bool:
+    if last_attempt_at is None:
+        return False
+    try:
+        return Path(storage_state_path).stat().st_mtime > _utc(last_attempt_at).timestamp()
+    except OSError:
+        return False
+
+
 def _claim_if_due(
     settings: Settings,
     session_factory: Callable[[], Session] = SessionLocal,
@@ -68,10 +80,15 @@ def _claim_if_due(
                 .where(ReservationSyncState.key == SYNC_STATE_KEY)
                 .with_for_update()
             )
-            if state is not None and not sync_is_due(
-                state.last_attempt_at, settings.avantio_sync_interval_hours, current_time
-            ):
-                return False
+            if state is not None:
+                due = sync_is_due(
+                    state.last_attempt_at, settings.avantio_sync_interval_hours, current_time
+                )
+                state_changed = storage_state_updated_since(
+                    state.last_attempt_at, settings.avantio_storage_state_path
+                )
+                if not due and not state_changed:
+                    return False
             if state is None:
                 state = ReservationSyncState(key=SYNC_STATE_KEY)
                 db.add(state)
@@ -166,20 +183,32 @@ async def download_reservations_csv(settings: Settings) -> tuple[str, bytes]:
         async with async_playwright() as playwright:
             browser = await playwright.chromium.launch(headless=True)
             try:
-                context = await browser.new_context(accept_downloads=True)
+                context_options: dict[str, object] = {"accept_downloads": True}
+                storage_state_path = Path(settings.avantio_storage_state_path)
+                if storage_state_path.is_file():
+                    context_options["storage_state"] = str(storage_state_path)
+                context = await browser.new_context(**context_options)
                 page = await context.new_page()
                 page.set_default_timeout(15_000)
-                await page.goto(
+                response = await page.goto(
                     settings.avantio_export_url,
                     wait_until="domcontentloaded",
                     timeout=NAVIGATION_TIMEOUT_MS,
                 )
+                if response is not None and response.status == 403:
+                    raise ReservationSyncError(
+                        "Avantio bloque la petición automatizada con HTTP 403 antes del login."
+                    )
                 await _login_if_needed(page, settings)
-                await page.goto(
+                response = await page.goto(
                     settings.avantio_export_url,
                     wait_until="domcontentloaded",
                     timeout=NAVIGATION_TIMEOUT_MS,
                 )
+                if response is not None and response.status == 403:
+                    raise ReservationSyncError(
+                        "Avantio bloque la petición automatizada con HTTP 403 antes del login."
+                    )
                 if await _visible_locator(page, ('input[type="password"]',)) is not None:
                     raise ReservationSyncError(
                         "Avantio rechazó el acceso con las credenciales configuradas."
