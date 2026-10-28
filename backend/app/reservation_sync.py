@@ -205,7 +205,7 @@ async def _open_navigation_menu(page) -> None:
 async def download_reservations_csv(settings: Settings) -> tuple[str, bytes]:
     try:
         async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch(headless=True)
+            browser = await playwright.chromium.launch(headless=False)
             try:
                 context_options: dict[str, object] = {"accept_downloads": True}
                 storage_state_path = Path(settings.avantio_storage_state_path)
