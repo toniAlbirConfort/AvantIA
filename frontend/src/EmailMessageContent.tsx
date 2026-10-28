@@ -39,8 +39,6 @@ export function EmailMessageContent({
     }
   }
 
-  const subject = showTranslation && translation?.subject ? translation.subject : originalSubject
-
   return <>
     <dl className="grid gap-2 border-b border-border px-4 pb-4 text-xs sm:grid-cols-[4rem_minmax(0,1fr)]">
       <dt className="text-muted-foreground">De</dt>
@@ -50,7 +48,7 @@ export function EmailMessageContent({
         <dd className="m-0 break-all">{message.recipient}</dd>
       </>}
       <dt className="text-muted-foreground">Asunto</dt>
-      <dd className="m-0 break-all">{subject}</dd>
+      <dd className="m-0 break-all">{originalSubject}</dd>
     </dl>
     <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2">
       <Button type="button" variant="secondary" size="sm" onClick={() => onExpand(message)}>

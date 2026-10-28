@@ -466,12 +466,11 @@ async def translate_email(
         raise HTTPException(404, "Email no encontrado")
     if message.direction != "inbound":
         raise HTTPException(409, "Solo se pueden traducir emails recibidos")
-    subject = message.subject or conv.subject or ""
     body = message.body or ""
-    if not subject.strip() and not body.strip():
-        raise HTTPException(422, "El email no tiene contenido para traducir")
+    if not body.strip():
+        raise HTTPException(422, "El email no tiene cuerpo para traducir")
     try:
-        translated = await ollama_translate_email(subject, body)
+        translated = await ollama_translate_email(body)
     except RuntimeError as exc:
         raise HTTPException(503, "Ollama no está disponible para traducir el email") from exc
     except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
@@ -479,7 +478,6 @@ async def translate_email(
     return {
         "message_id": message.id,
         "language": "es",
-        "subject": translated["subject"],
         "body": translated["body"],
     }
 
