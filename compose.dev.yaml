@@ -1,0 +1,66 @@
+services:
+  api:
+    develop:
+      watch:
+        - action: sync+restart
+          path: ./backend/app
+          target: /app/app
+          initial_sync: true
+          ignore:
+            - __pycache__/
+            - .pytest_cache/
+            - .ruff_cache/
+        - action: rebuild
+          path: ./backend/pyproject.toml
+        - action: rebuild
+          path: ./backend/Dockerfile
+
+  worker:
+    develop:
+      watch:
+        - action: sync+restart
+          path: ./backend/app
+          target: /app/app
+          initial_sync: true
+          ignore:
+            - __pycache__/
+            - .pytest_cache/
+            - .ruff_cache/
+        - action: rebuild
+          path: ./backend/pyproject.toml
+        - action: rebuild
+          path: ./backend/Dockerfile
+
+  frontend:
+    develop:
+      watch:
+        - action: sync
+          path: ./frontend
+          target: /app
+          initial_sync: true
+          ignore:
+            - node_modules/
+            - dist/
+            - .env
+            - .env.local
+            - .env.development
+            - .env.development.local
+            - .env.production
+            - .env.production.local
+            - package.json
+            - package-lock.json
+            - Dockerfile.dev
+            - vite.config.ts
+            - tsconfig.json
+        - action: sync+restart
+          path: ./frontend/vite.config.ts
+          target: /app/vite.config.ts
+        - action: sync+restart
+          path: ./frontend/tsconfig.json
+          target: /app/tsconfig.json
+        - action: rebuild
+          path: ./frontend/package.json
+        - action: rebuild
+          path: ./frontend/package-lock.json
+        - action: rebuild
+          path: ./frontend/Dockerfile.dev

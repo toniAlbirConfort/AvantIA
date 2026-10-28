@@ -33,6 +33,21 @@
 
 8. Para desactivar la automatización, ejecuta `Unregister-ScheduledTask -TaskName 'AvantIA Production Auto Deploy'` desde la cuenta que la instaló.
 
+## Auto-refresh en desarrollo local
+
+- En el equipo local de desarrollo, Compose Watch mantiene actualizados los contenedores al editar archivos del host. Requiere Docker Compose 2.22.0 o posterior; la configuración está en `compose.dev.yaml` y solo se aplica al usar ese archivo.
+- Para activar el vigilante una sola vez, desde PowerShell en el equipo local (nunca en `DESKTOP-4597Q79`) ejecuta:
+
+  ```powershell
+  Set-Location "C:\Users\informatica3\Workspace\AvantIA"
+  git switch main
+  git pull --ff-only origin main
+  .\scripts\install-local-compose-watch-task.ps1
+  ```
+
+- La tarea `AvantIA Local Auto Refresh` se ejecuta en la sesión interactiva de Docker Desktop. Vite aplica cambios de frontend al guardarlos; los cambios del backend sincronizan y reinician `api` y `worker`; los cambios de dependencias reconstruyen las imágenes afectadas. Para obtener cambios nuevos de `main` en el checkout local, primero actualiza el repositorio; después el vigilante refresca los contenedores.
+- El registro está en `%LOCALAPPDATA%\AvantIA\local-compose-watch.log`. Para desactivar la tarea, ejecuta `Unregister-ScheduledTask -TaskName 'AvantIA Local Auto Refresh'` desde la cuenta que la instaló.
+
 ## Secretos y datos de producción
 
 - Configura `.env` y las credenciales directamente en el servidor. Nunca las incluyas en commits ni las pegues en instrucciones, logs o mensajes.
