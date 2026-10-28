@@ -3,7 +3,11 @@ import { X } from 'lucide-react'
 import { api } from './api'
 import { issueText } from './SourceImports'
 import type { PlanningBar, PlanningData } from './types'
+import { Alert } from './components/ui/alert'
+import { Badge } from './components/ui/badge'
 import { Button } from './components/ui/button'
+import { Card } from './components/ui/card'
+import { Input } from './components/ui/input'
 
 const DAY_WIDTH = 44
 function isoDate(date: Date) { return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}` }
@@ -12,6 +16,12 @@ function dayDiff(a: string, b: string) { return Math.round((Date.parse(`${b}T00:
 function money(value: string) { return new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR' }).format(Number(value)) }
 function dateLabel(value: string | null) { return value ? new Intl.DateTimeFormat('es-ES', { dateStyle: 'long', timeZone: 'UTC' }).format(new Date(`${value}T00:00:00Z`)) : '—' }
 const stateLabel: Record<string, string> = { confirmed: 'Confirmada', pre_reservation: 'Prerreserva', paid: 'Pagada', unavailable: 'No disponible', owner: 'De propietario', inquiry: 'Petición de información', cancelled: 'Cancelada' }
+const stateStyle: Record<string, string> = {
+  confirmed: 'bg-success-bg text-success-ink', paid: 'bg-primary text-primary-foreground',
+  pre_reservation: 'bg-info-bg text-info-ink', owner: 'bg-secondary text-secondary-foreground',
+  unavailable: 'bg-error-bg text-error-ink', inquiry: 'bg-warning-bg text-warning-ink',
+  cancelled: 'bg-muted text-muted-foreground',
+}
 
 export function Planning() {
   const today = useMemo(() => isoDate(new Date()), [])
@@ -31,7 +41,7 @@ export function Planning() {
   useEffect(() => {
     if (!selected) return
     const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
-    document.querySelector<HTMLButtonElement>('.planning-close')?.focus()
+    document.querySelector<HTMLButtonElement>('[data-slot="planning-dialog-close"]')?.focus()
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === 'Escape') {
         event.preventDefault()
@@ -39,7 +49,7 @@ export function Planning() {
         return
       }
       if (event.key !== 'Tab') return
-      const panel = document.querySelector<HTMLElement>('.planning-detail[role="dialog"]')
+      const panel = document.querySelector<HTMLElement>('[data-slot="planning-dialog"][role="dialog"]')
       const focusable = panel?.querySelectorAll<HTMLElement>('button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])')
       if (!focusable?.length) return
       const first = focusable[0]
@@ -62,56 +72,37 @@ export function Planning() {
     else groups.push({ label, days: 1 })
   }
   const visible = data?.properties.filter(item => `${item.name} ${item.building || ''} ${item.id}`.toLocaleLowerCase('es-ES').includes(search.toLocaleLowerCase('es-ES'))) || []
-  return <div className="planning-page">
-    <div className="planning-toolbar card"><label>Desde<input type="date" value={start} onChange={e => setStart(e.target.value)} /></label><label>Hasta (exclusivo)<input type="date" value={end} onChange={e => setEnd(e.target.value)} /></label></div>
-    <div className="planning-meta"><span className="planning-key confirmed">Confirmada · bloquea</span><span className="planning-key paid">Pagada · bloquea</span><span className="planning-key pre_reservation">Prerreserva · bloquea</span><span className="planning-key owner">Propietario · bloquea</span><span className="planning-key unavailable">No disponible · bloquea</span><span className="planning-key inquiry">Peticiones · lista inferior</span><span className="planning-key cancelled">Canceladas · lista inferior</span><span>{data?.reservation_coverage ? `${data.reservations_in_range} en este intervalo · ${data.reservation_coverage.effective_rows} integradas` : 'Sin reservas importadas'}</span></div>
-    {error && <div className="error-banner" role="alert">{error}</div>}
-    {!data?.property_batch || !data?.reservation_batch ? <div className="card empty">Importa y confirma las exportaciones de propiedades y reservas para completar el planning. La falta de barras no confirma disponibilidad.</div> : <>
-      {data.reservation_coverage && <p className="planning-coverage">{data.reservation_coverage.effective_rows} reservas integradas · entradas desde {data.reservation_coverage.first_arrival} · salidas hasta {data.reservation_coverage.last_departure}. Se muestran las reservas del intervalo correspondientes a alojamientos activos.</p>}
-      {data.reservations_in_range === 0 && <div className="card empty" role="status">No hay reservas de alojamientos activos entre {start} y {end}. La ausencia de barras no acredita que el alojamiento esté libre.</div>}
-      <label className="planning-search">Buscar alojamiento<input value={search} onChange={e => setSearch(e.target.value)} placeholder="Nombre, edificio o código" /></label>
-      <div className="planning-scroll card" role="region" aria-label="Planning de alojamientos" tabIndex={0}>
-        <div className="planning-grid" style={{ width: `calc(var(--planning-label-width) + ${days.length * DAY_WIDTH}px)` }}>
-          <div className="planning-header"><div className="planning-sticky planning-corner">{visible.length} alojamientos</div><div className="planning-dates" style={{ width: days.length * DAY_WIDTH }}><div className="planning-months">{groups.map((group, index) => <div key={index} style={{ width: group.days * DAY_WIDTH }}>{group.label}</div>)}</div><div className="planning-days">{days.map(day => <div key={day} className={new Date(`${day}T00:00:00Z`).getUTCDay() % 6 === 0 ? 'weekend' : ''}>{new Date(`${day}T00:00:00Z`).getUTCDate()}<small>{new Intl.DateTimeFormat('es-ES', { weekday: 'narrow', timeZone: 'UTC' }).format(new Date(`${day}T00:00:00Z`))}</small></div>)}</div></div></div>
-          {visible.map(property => {
+  return <div className="grid gap-4">
+    <Card className="flex flex-wrap items-end gap-4 p-4"><label className="grid min-w-40 flex-1 gap-1.5 text-sm font-medium">Desde<Input type="date" value={start} onChange={e => setStart(e.target.value)} /></label><label className="grid min-w-40 flex-1 gap-1.5 text-sm font-medium">Hasta (exclusivo)<Input type="date" value={end} onChange={e => setEnd(e.target.value)} /></label></Card>
+    <div className="flex flex-wrap items-center gap-2"><Badge className={stateStyle.confirmed}>Confirmada · bloquea</Badge><Badge className={stateStyle.paid}>Pagada · bloquea</Badge><Badge className={stateStyle.pre_reservation}>Prerreserva · bloquea</Badge><Badge className={stateStyle.owner}>Propietario · bloquea</Badge><Badge className={stateStyle.unavailable}>No disponible · bloquea</Badge><Badge className={stateStyle.inquiry}>Peticiones · lista inferior</Badge><Badge className={stateStyle.cancelled}>Canceladas · lista inferior</Badge><span className="text-xs text-muted-foreground">{data?.reservation_coverage ? `${data.reservations_in_range} en este intervalo · ${data.reservation_coverage.effective_rows} integradas` : 'Sin reservas importadas'}</span></div>
+    {error && <Alert variant="destructive">{error}</Alert>}
+    {!data?.property_batch || !data?.reservation_batch ? <Card className="p-6 text-sm leading-7 text-muted-foreground">Importa y confirma las exportaciones de propiedades y reservas para completar el planning. La falta de barras no confirma disponibilidad.</Card> : <>
+      {data.reservation_coverage && <Alert variant="info">{data.reservation_coverage.effective_rows} reservas integradas · entradas desde {data.reservation_coverage.first_arrival} · salidas hasta {data.reservation_coverage.last_departure}. Se muestran las reservas del intervalo correspondientes a alojamientos activos.</Alert>}
+      {data.reservations_in_range === 0 && <Alert variant="warning" role="status">No hay reservas de alojamientos activos entre {start} y {end}. La ausencia de barras no acredita que el alojamiento esté libre.</Alert>}
+      <label className="grid max-w-md gap-1.5 text-sm font-medium">Buscar alojamiento<Input value={search} onChange={e => setSearch(e.target.value)} placeholder="Nombre, edificio o código" /></label>
+      <div className="max-h-[68vh] max-w-full overflow-auto rounded-xl border border-border bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" role="region" aria-label="Planning de alojamientos" tabIndex={0}>
+        <div className="w-max min-w-full">
+          <div className="sticky top-0 z-20 flex h-[4.75rem] w-max bg-card"><div className="sticky left-0 z-30 flex w-56 min-w-56 items-end border-r border-border bg-card p-3 text-xs font-semibold text-muted-foreground md:w-72 md:min-w-72">{visible.length} alojamientos</div><div className="flex flex-col" style={{ width: days.length * DAY_WIDTH }}><div className="flex h-9 border-b border-border">{groups.map((group, index) => <div className="shrink-0 border-r border-border px-2 py-2 text-xs font-semibold capitalize" key={index} style={{ width: group.days * DAY_WIDTH }}>{group.label}</div>)}</div><div className="flex h-10">{days.map(day => { const date = new Date(`${day}T00:00:00Z`); const weekend = date.getUTCDay() % 6 === 0; return <div key={day} className={`flex w-11 shrink-0 items-center justify-center gap-0.5 border-r border-border text-xs ${weekend ? 'bg-accent/60' : ''}`}>{date.getUTCDate()}<small className="text-[0.6rem] text-muted-foreground">{new Intl.DateTimeFormat('es-ES', { weekday: 'narrow', timeZone: 'UTC' }).format(date)}</small></div> })}</div></div></div>
+          {visible.map((property, propertyIndex) => {
             const bars = (data.bars || []).filter(bar => bar.property_id === property.id).sort((a, b) => a.start_date.localeCompare(b.start_date))
             const laneEnds: string[] = []
             const placed = bars.map(bar => { let lane = laneEnds.findIndex(value => value <= bar.start_date); if (lane < 0) lane = laneEnds.length; laneEnds[lane] = bar.end_date; return { bar, lane } })
             const height = Math.max(46, laneEnds.length * 32 + 8)
-            return <div className="planning-row" key={property.id} style={{ height }}><div className="planning-sticky planning-property"><strong>{property.name}</strong><small>{property.building || property.id} · {property.category}{property.capacity > 0 ? ` · ${property.capacity} plazas` : ''}</small></div><div className="planning-track" style={{ width: days.length * DAY_WIDTH, height, backgroundSize: `${DAY_WIDTH}px 100%` }}>{placed.map(({ bar, lane }) => {
+            return <div className={`flex w-max border-b border-border ${propertyIndex % 2 ? 'bg-background' : 'bg-card'}`} key={property.id} style={{ height }}><div className={`sticky left-0 z-10 flex w-56 min-w-56 flex-col justify-center overflow-hidden border-r border-border px-3 py-2 md:w-72 md:min-w-72 ${propertyIndex % 2 ? 'bg-background' : 'bg-card'}`}><strong className="truncate text-xs">{property.name}</strong><small className="mt-1 truncate text-[0.65rem] text-muted-foreground">{property.building || property.id} · {property.category}{property.capacity > 0 ? ` · ${property.capacity} plazas` : ''}</small></div><div className="relative shrink-0" style={{ width: days.length * DAY_WIDTH, height }}><div aria-hidden="true" className="pointer-events-none absolute inset-0 flex">{days.map(day => <span key={day} className="h-full w-11 shrink-0 border-r border-border/70" />)}</div>{placed.map(({ bar, lane }) => {
               const left = Math.max(0, dayDiff(start, bar.start_date)) * DAY_WIDTH + 2
               const right = Math.min(count, dayDiff(start, bar.end_date)) * DAY_WIDTH - 2
-              return <Button key={bar.locator} className={`planning-bar ${bar.status}`} style={{ left, width: Math.max(8, right - left), top: 7 + lane * 32 }} title={`${stateLabel[bar.status]} · ${bar.display_name} · ${bar.start_date} → ${bar.end_date}`} onClick={() => setSelected(bar)}>{bar.display_name} · {money(bar.total)}</Button>
+              return <Button key={bar.locator} variant="ghost" className={`absolute z-10 h-[25px] min-h-0 justify-start overflow-hidden rounded px-2 py-0 text-left text-[0.68rem] font-semibold whitespace-nowrap hover:brightness-110 ${stateStyle[bar.status] || 'bg-secondary text-secondary-foreground'}`} style={{ left, width: Math.max(8, right - left), top: 7 + lane * 32 }} title={`${stateLabel[bar.status]} · ${bar.display_name} · ${bar.start_date} → ${bar.end_date}`} onClick={() => setSelected(bar)}>{bar.display_name} · {money(bar.total)}</Button>
             })}</div></div>
           })}
         </div>
       </div>
-      {selected && <div className="planning-overlay" onClick={event => { if (event.target === event.currentTarget) setSelected(null) }}>
-        <section className="card planning-detail" role="dialog" aria-modal="true" aria-labelledby="planning-detail-title" aria-describedby="planning-detail-description">
-          <header className="planning-detail-header"><div><p className="eyebrow">RESERVA / {stateLabel[selected.status]?.toUpperCase()}</p><h2 id="planning-detail-title">{selected.display_name}</h2></div><Button type="button" variant="ghost" size="icon" className="planning-close" onClick={() => setSelected(null)} aria-label="Cerrar detalle"><X aria-hidden="true" /></Button></header>
-          <div className="planning-detail-content"><p id="planning-detail-description" className="planning-detail-lead">Información operativa de la reserva.</p><dl>
-            <div><dt>Estado</dt><dd>{stateLabel[selected.status] || selected.status_original}</dd></div>
-            <div><dt>Estado en exportación</dt><dd>{selected.status_original}</dd></div>
-            <div><dt>Localizador</dt><dd>{selected.locator}</dd></div>
-            <div><dt>Alojamiento</dt><dd>{data.properties.find(item => item.id === selected.property_id)?.name || selected.property_id} · {selected.property_id}</dd></div>
-            <div><dt>Fecha de alta</dt><dd>{dateLabel(selected.created_on)}</dd></div>
-            <div><dt>Entrada</dt><dd>{dateLabel(selected.start_date)}</dd></div>
-            <div><dt>Salida</dt><dd>{dateLabel(selected.end_date)} · exclusiva</dd></div>
-            <div><dt>Noches</dt><dd>{selected.nights}</dd></div>
-            <div><dt>Adultos</dt><dd>{selected.adults}</dd></div>
-            <div><dt>Niños</dt><dd>{selected.children}</dd></div>
-            <div><dt>Bebés</dt><dd>{selected.infants}</dd></div>
-            <div><dt>Portal</dt><dd>{selected.portal || '—'}</dd></div>
-          </dl><h3>Importes</h3><dl className="planning-amounts">
-            <div><dt>Total</dt><dd>{money(selected.total)}</dd></div>
-            <div><dt>Neto</dt><dd>{money(selected.net)}</dd></div>
-            <div><dt>Tasas</dt><dd>{money(selected.tax)}</dd></div>
-            <div><dt>Pagado</dt><dd>{money(selected.paid)}</dd></div>
-            <div><dt>Pendiente</dt><dd>{money(selected.pending)}</dd></div>
-          </dl></div>
+      {selected && <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/70 p-4" onClick={event => { if (event.target === event.currentTarget) setSelected(null) }}>
+        <section data-slot="planning-dialog" className="my-auto max-h-[90vh] w-full max-w-3xl overflow-auto rounded-xl border border-border bg-card p-5 shadow-2xl sm:p-7" role="dialog" aria-modal="true" aria-labelledby="planning-detail-title" aria-describedby="planning-detail-description">
+          <header className="mb-4 flex items-start justify-between gap-4 border-b border-border pb-4"><div><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">RESERVA / {stateLabel[selected.status]?.toUpperCase()}</p><h2 id="planning-detail-title" className="text-xl font-semibold">{selected.display_name}</h2></div><Button type="button" variant="ghost" size="icon" data-slot="planning-dialog-close" className="shrink-0" onClick={() => setSelected(null)} aria-label="Cerrar detalle"><X aria-hidden="true" /></Button></header>
+          <div><p id="planning-detail-description" className="mb-4 text-sm text-muted-foreground">Información operativa de la reserva.</p><dl className="grid grid-cols-2 gap-x-5 gap-y-4 sm:grid-cols-3">{[['Estado', stateLabel[selected.status] || selected.status_original], ['Estado en exportación', selected.status_original], ['Localizador', selected.locator], ['Alojamiento', `${data.properties.find(item => item.id === selected.property_id)?.name || selected.property_id} · ${selected.property_id}`], ['Fecha de alta', dateLabel(selected.created_on)], ['Entrada', dateLabel(selected.start_date)], ['Salida', `${dateLabel(selected.end_date)} · exclusiva`], ['Noches', selected.nights], ['Adultos', selected.adults], ['Niños', selected.children], ['Bebés', selected.infants], ['Portal', selected.portal || '—']].map(([title, value]) => <div className="min-w-0" key={title}><dt className="text-xs text-muted-foreground">{title}</dt><dd className="mt-1 break-words text-sm">{value}</dd></div>)}</dl><h3 className="mb-3 mt-6 text-base font-semibold">Importes</h3><dl className="grid grid-cols-2 gap-3 sm:grid-cols-5">{[['Total', money(selected.total)], ['Neto', money(selected.net)], ['Tasas', money(selected.tax)], ['Pagado', money(selected.paid)], ['Pendiente', money(selected.pending)]].map(([title, value]) => <div className="rounded-md bg-background p-3" key={title}><dt className="text-xs text-muted-foreground">{title}</dt><dd className="mt-1 text-sm font-semibold">{value}</dd></div>)}</dl></div>
         </section>
       </div>}
-      <div className="planning-lower"><section className="card"><p className="eyebrow">NO BLOQUEAN</p><h2>Peticiones de información ({data.inquiries.length})</h2>{data.inquiries.length ? <ul>{data.inquiries.map(item => <li key={item.locator}><button type="button" className="planning-reservation-link" onClick={() => setSelected(item)} aria-label={`Abrir reserva ${item.locator}`}>{item.locator} · {item.property_id} · {item.start_date} → {item.end_date}</button></li>)}</ul> : <p>Sin peticiones en el intervalo.</p>}<h2>Canceladas ({data.cancellations.length})</h2>{data.cancellations.length ? <ul>{data.cancellations.map(item => <li key={item.locator}><button type="button" className="planning-reservation-link" onClick={() => setSelected(item)} aria-label={`Abrir reserva ${item.locator}`}>{item.locator} · {item.property_id} · {item.start_date} → {item.end_date}</button></li>)}</ul> : <p>Sin cancelaciones en el intervalo.</p>}</section><section className="card"><p className="eyebrow">AUDITORÍA</p><h2>Incidencias ({data.warnings.length})</h2>{data.warnings.length ? <ul>{data.warnings.map((issue, index) => <li key={index}>{issueText(issue)}</li>)}</ul> : <p>Sin incidencias registradas.</p>}</section></div>
+      <div className="grid gap-4 xl:grid-cols-2"><Card className="p-5"><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">NO BLOQUEAN</p><h2 className="mb-4 text-lg font-semibold">Peticiones de información ({data.inquiries.length})</h2>{data.inquiries.length ? <ul className="mb-5 max-h-60 list-disc space-y-2 overflow-auto pl-5 text-sm">{data.inquiries.map(item => <li key={item.locator}><button type="button" className="text-left text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => setSelected(item)} aria-label={`Abrir reserva ${item.locator}`}>{item.locator} · {item.property_id} · {item.start_date} → {item.end_date}</button></li>)}</ul> : <p className="mb-5 text-sm text-muted-foreground">Sin peticiones en el intervalo.</p>}<h2 className="mb-3 text-lg font-semibold">Canceladas ({data.cancellations.length})</h2>{data.cancellations.length ? <ul className="max-h-60 list-disc space-y-2 overflow-auto pl-5 text-sm">{data.cancellations.map(item => <li key={item.locator}><button type="button" className="text-left text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => setSelected(item)} aria-label={`Abrir reserva ${item.locator}`}>{item.locator} · {item.property_id} · {item.start_date} → {item.end_date}</button></li>)}</ul> : <p className="text-sm text-muted-foreground">Sin cancelaciones en el intervalo.</p>}</Card><Card className="p-5"><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">AUDITORÍA</p><h2 className="mb-4 text-lg font-semibold">Incidencias ({data.warnings.length})</h2>{data.warnings.length ? <ul className="max-h-72 list-disc space-y-2 overflow-auto pl-5 text-sm text-muted-foreground">{data.warnings.map((issue, index) => <li key={index}>{issueText(issue)}</li>)}</ul> : <p className="text-sm text-muted-foreground">Sin incidencias registradas.</p>}</Card></div>
     </>}
   </div>
 }
