@@ -9,6 +9,7 @@ $script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $stateDirectory = Join-Path $env:LOCALAPPDATA 'AvantIA'
 $script:LogPath = Join-Path $stateDirectory 'deploy-watch.log'
 $script:DeployedRevisionPath = Join-Path $stateDirectory 'last-successful-deploy.txt'
+$script:CurrentStage = 'initialization'
 $env:GIT_TERMINAL_PROMPT = '0'
 $env:GCM_INTERACTIVE = 'Never'
 
@@ -21,37 +22,98 @@ function Write-DeployLog {
     Add-Content -LiteralPath $script:LogPath -Value "$timestamp $Message" -Encoding UTF8
 }
 
+function Invoke-NativeQuiet {
+    param(
+        [Parameter(Mandatory)][string]$Executable,
+        [Parameter(Mandatory)][string[]]$Arguments
+    )
+
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        # PowerShell 5.1 turns native stderr into Error records. Keep those
+        # diagnostics from aborting the check; use the process exit code below.
+        $ErrorActionPreference = 'Continue'
+        Get-Command -Name $Executable -ErrorAction Stop | Out-Null
+        & $Executable @Arguments *> $null
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+
+    return $exitCode
+}
+
+function Invoke-NativeCapture {
+    param(
+        [Parameter(Mandatory)][string]$Executable,
+        [Parameter(Mandatory)][string[]]$Arguments
+    )
+
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        Get-Command -Name $Executable -ErrorAction Stop | Out-Null
+        $output = @(& $Executable @Arguments 2>$null)
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+
+    return [pscustomobject]@{
+        ExitCode = $exitCode
+        Output   = $output
+    }
+}
+
 function Invoke-GitText {
     param([Parameter(Mandatory)][string[]]$Arguments)
 
-    $output = & git -C $script:RepoRoot @Arguments 2>$null
-    if ($LASTEXITCODE -ne 0) {
+    $gitArguments = @('-C', $script:RepoRoot) + $Arguments
+    $result = Invoke-NativeCapture -Executable 'git' -Arguments $gitArguments
+    if ($result.ExitCode -ne 0) {
         return $null
     }
 
-    return (($output | ForEach-Object { [string]$_ }) -join "`n").Trim()
+    return (($result.Output | ForEach-Object { [string]$_ }) -join "`n").Trim()
 }
 
 function Invoke-GitQuiet {
     param([Parameter(Mandatory)][string[]]$Arguments)
 
-    & git -C $script:RepoRoot @Arguments *> $null
-    return $LASTEXITCODE
+    $gitArguments = @('-C', $script:RepoRoot) + $Arguments
+    return (Invoke-NativeQuiet -Executable 'git' -Arguments $gitArguments)
+}
+
+function Invoke-DockerQuiet {
+    param([Parameter(Mandatory)][string[]]$Arguments)
+
+    return (Invoke-NativeQuiet -Executable 'docker' -Arguments $Arguments)
+}
+
+function Invoke-DockerCapture {
+    param([Parameter(Mandatory)][string[]]$Arguments)
+
+    return (Invoke-NativeCapture -Executable 'docker' -Arguments $Arguments)
 }
 
 function Invoke-DeploymentCheck {
+    $script:CurrentStage = 'checking the branch'
     $branch = Invoke-GitText -Arguments @('branch', '--show-current')
     if ($branch -ne 'main') {
         Write-DeployLog 'Skipped: checkout is not on main.'
         return
     }
 
+    $script:CurrentStage = 'checking the origin URL'
     $remoteUrl = Invoke-GitText -Arguments @('remote', 'get-url', 'origin')
     if ($remoteUrl -ne 'https://github.com/toniAlbirConfort/AvantIA.git') {
         Write-DeployLog 'Skipped: origin does not match the configured AvantIA repository.'
         return
     }
 
+    $script:CurrentStage = 'checking the working tree'
     $workingTree = Invoke-GitText -Arguments @('status', '--porcelain')
     if ($null -eq $workingTree) {
         Write-DeployLog 'Skipped: could not inspect the working tree.'
@@ -62,11 +124,14 @@ function Invoke-DeploymentCheck {
         return
     }
 
-    if ((Invoke-GitQuiet -Arguments @('fetch', '--quiet', 'origin', 'refs/heads/main:refs/remotes/origin/main')) -ne 0) {
-        Write-DeployLog 'Fetch failed; will retry at the next check.'
+    $script:CurrentStage = 'fetching origin/main'
+    $fetchExitCode = Invoke-GitQuiet -Arguments @('fetch', '--quiet', 'origin', 'refs/heads/main:refs/remotes/origin/main')
+    if ($fetchExitCode -ne 0) {
+        Write-DeployLog "Fetch failed (exit code $fetchExitCode); will retry at the next check."
         return
     }
 
+    $script:CurrentStage = 'reading the fetched revisions'
     $targetRevision = Invoke-GitText -Arguments @('rev-parse', 'refs/remotes/origin/main')
     $currentRevision = Invoke-GitText -Arguments @('rev-parse', 'HEAD')
     if (-not $targetRevision -or -not $currentRevision) {
@@ -74,17 +139,21 @@ function Invoke-DeploymentCheck {
         return
     }
 
-    & git -C $script:RepoRoot merge-base --is-ancestor HEAD refs/remotes/origin/main *> $null
-    if ($LASTEXITCODE -ne 0) {
+    $script:CurrentStage = 'checking fast-forward safety'
+    $ancestryExitCode = Invoke-GitQuiet -Arguments @('merge-base', '--is-ancestor', 'HEAD', 'refs/remotes/origin/main')
+    if ($ancestryExitCode -ne 0) {
         Write-DeployLog 'Skipped: local main diverges from origin/main; inspect the checkout manually.'
         return
     }
 
     if ($currentRevision -ne $targetRevision) {
-        if ((Invoke-GitQuiet -Arguments @('pull', '--ff-only', 'origin', 'main')) -ne 0) {
-            Write-DeployLog 'Fast-forward update failed; will retry at the next check.'
+        $script:CurrentStage = 'updating the checkout from origin/main'
+        $pullExitCode = Invoke-GitQuiet -Arguments @('pull', '--ff-only', 'origin', 'main')
+        if ($pullExitCode -ne 0) {
+            Write-DeployLog "Fast-forward update failed (exit code $pullExitCode); will retry at the next check."
             return
         }
+        $script:CurrentStage = 'verifying the updated checkout'
         $currentRevision = Invoke-GitText -Arguments @('rev-parse', 'HEAD')
         if ($currentRevision -ne $targetRevision) {
             Write-DeployLog 'Skipped: checkout did not reach the fetched origin/main revision.'
@@ -100,20 +169,23 @@ function Invoke-DeploymentCheck {
         return
     }
 
+    $script:CurrentStage = 'building and starting production services'
     Push-Location -LiteralPath $script:RepoRoot
     try {
-        & docker compose -f compose.yaml -f compose.prod.yaml up --build -d *> $null
-        if ($LASTEXITCODE -ne 0) {
-            Write-DeployLog "Docker Compose deployment failed (exit code $LASTEXITCODE); will retry."
+        $deployExitCode = Invoke-DockerQuiet -Arguments @('compose', '-f', 'compose.yaml', '-f', 'compose.prod.yaml', 'up', '--build', '-d')
+        if ($deployExitCode -ne 0) {
+            Write-DeployLog "Docker Compose deployment failed (exit code $deployExitCode); will retry."
             return
         }
 
-        $runningServices = & docker compose -f compose.yaml -f compose.prod.yaml ps --services --status running 2>$null
-        if ($LASTEXITCODE -ne 0) {
-            Write-DeployLog "Docker Compose status check failed (exit code $LASTEXITCODE); will retry."
+        $script:CurrentStage = 'checking the running services'
+        $statusResult = Invoke-DockerCapture -Arguments @('compose', '-f', 'compose.yaml', '-f', 'compose.prod.yaml', 'ps', '--services', '--status', 'running')
+        if ($statusResult.ExitCode -ne 0) {
+            Write-DeployLog "Docker Compose status check failed (exit code $($statusResult.ExitCode)); will retry."
             return
         }
 
+        $runningServices = $statusResult.Output
         $requiredServices = @('db', 'api', 'worker', 'gowa', 'frontend')
         $missingServices = @($requiredServices | Where-Object { $runningServices -notcontains $_ })
         if ($missingServices.Count -gt 0) {
@@ -121,6 +193,7 @@ function Invoke-DeploymentCheck {
             return
         }
 
+        $script:CurrentStage = 'recording the successful revision'
         Set-Content -LiteralPath $script:DeployedRevisionPath -Value $targetRevision -Encoding ASCII
         Write-DeployLog "Deployment completed for revision $targetRevision."
     }
@@ -135,7 +208,7 @@ while ($true) {
         Invoke-DeploymentCheck
     }
     catch {
-        Write-DeployLog "Check failed with $($_.Exception.GetType().Name); will retry."
+        Write-DeployLog "Check failed during $script:CurrentStage ($($_.Exception.GetType().Name)); will retry."
     }
 
     Start-Sleep -Seconds $PollIntervalSeconds
