@@ -3,11 +3,13 @@ from __future__ import annotations
 import asyncio
 import csv
 import io
+import os
 import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from sqlalchemy import select
 
 from app.config import Settings
@@ -16,7 +18,9 @@ from app.models import ImportBatch, ReservationSnapshot, ReservationSyncState, U
 from app.planning import latest_source_batch
 from app.reservation_sync import (
     SYNC_STATE_KEY,
+    ReservationSyncError,
     download_reservations_csv,
+    storage_state_updated_since,
     sync_is_due,
     sync_reservations_if_due,
 )
@@ -130,12 +134,14 @@ class FakePage:
         self.actions = []
         self.fills = []
         self.visited = []
+        self.response_status = None
 
     def set_default_timeout(self, timeout):
         self.timeout = timeout
 
     async def goto(self, url, **kwargs):
         self.visited.append(url)
+        return SimpleNamespace(status=self.response_status) if self.response_status else None
 
     def locator(self, selector: str):
         if selector == 'input[type="password"]':
@@ -175,8 +181,11 @@ class FakeBrowser:
     def __init__(self, context):
         self.context = context
 
-    async def new_context(self, accept_downloads):
-        assert accept_downloads is True
+        self.context_options = None
+
+    async def new_context(self, **kwargs):
+        assert kwargs["accept_downloads"] is True
+        self.context_options = kwargs
         return self.context
 
     async def close(self):
@@ -218,6 +227,56 @@ def test_playwright_login_clicks_export_and_reads_temporary_download(monkeypatch
     assert page.actions == ["submit", "Más acciones", "Descargar CSV"]
     assert page.fills == [("username", "operador"), ("password", "test-password")]
     assert len(page.visited) == 2
+    assert browser.context_options == {"accept_downloads": True}
+
+
+def test_playwright_loads_saved_storage_state_without_printing_it(tmp_path, monkeypatch):
+    raw = reservation_csv()
+    download_path = tmp_path / "download.csv"
+    download_path.write_bytes(raw)
+    storage_state_path = tmp_path / "storage-state.json"
+    storage_state_path.write_text('{"cookies":[],"origins":[]}', encoding="utf-8")
+    page = FakePage(FakeDownload(download_path))
+    browser = FakeBrowser(FakeContext(page))
+    settings = configured_settings()
+    settings.avantio_storage_state_path = str(storage_state_path)
+    monkeypatch.setattr(
+        "app.reservation_sync.async_playwright",
+        lambda: FakePlaywrightManager(browser),
+    )
+
+    filename, downloaded = asyncio.run(download_reservations_csv(settings))
+
+    assert filename == "reservas.csv"
+    assert downloaded == raw
+    assert browser.context_options == {
+        "accept_downloads": True,
+        "storage_state": str(storage_state_path),
+    }
+
+
+def test_playwright_reports_cloudfront_403_before_login(tmp_path, monkeypatch):
+    page = FakePage(FakeDownload(tmp_path / "unused.csv"))
+    page.response_status = 403
+    browser = FakeBrowser(FakeContext(page))
+    monkeypatch.setattr(
+        "app.reservation_sync.async_playwright",
+        lambda: FakePlaywrightManager(browser),
+    )
+
+    with pytest.raises(ReservationSyncError, match="HTTP 403"):
+        asyncio.run(download_reservations_csv(configured_settings()))
+
+
+def test_new_storage_state_triggers_retry_before_interval(tmp_path):
+    last_attempt = datetime(2026, 10, 28, 8, tzinfo=UTC)
+    state_file = tmp_path / "storage-state.json"
+    state_file.write_text("{}", encoding="utf-8")
+    updated = last_attempt.timestamp() + 1
+    os.utime(state_file, (updated, updated))
+
+    assert storage_state_updated_since(last_attempt, state_file)
+    assert not storage_state_updated_since(last_attempt, tmp_path / "missing.json")
 
 
 def test_repeated_csv_updates_last_success_without_duplicate_batches(
