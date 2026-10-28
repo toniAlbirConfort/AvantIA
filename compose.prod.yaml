@@ -3,6 +3,12 @@ services:
     ports: !reset []
     environment:
       CORS_ORIGIN: https://${APP_DOMAIN:?Set APP_DOMAIN}
+      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-dania:16k}
+  worker:
+    environment:
+      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-dania:16k}
   frontend:
     build:
       context: ./frontend
