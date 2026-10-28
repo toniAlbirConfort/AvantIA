@@ -56,7 +56,7 @@ La sección Importaciones también acepta las exportaciones «Listado de propied
 
 ## Exportación automática de reservas desde Avantio
 
-El worker usa Playwright y Chromium sin interfaz para abrir la página de Compromisos configurada, iniciar sesión y descargar el CSV mediante **Más acciones → Descargar CSV**. El enlace debe conservar el filtro de reservas creadas durante los últimos 14 días. La primera ejecución se intenta al iniciar el worker; las siguientes se programan con `AVANTIO_SYNC_INTERVAL_HOURS` (seis horas por defecto).
+El worker usa Playwright y Chromium sin interfaz para abrir Avantio, iniciar sesión y seguir **☰ → Reservas → Listado de reservas → Más acciones → Descargar CSV**. El listado debe usar el filtro de reservas creadas durante los últimos 14 días. La primera ejecución se intenta al iniciar el worker; las siguientes se programan con `AVANTIO_SYNC_INTERVAL_HOURS` (seis horas por defecto).
 
 Configura estos valores directamente en `C:\PROYECTOS ANTIGRAVITY\AvantIA\.env` del servidor; no incluyas las credenciales ni el enlace con parámetros de vista en Git:
 
@@ -81,7 +81,7 @@ docker compose -f compose.yaml -f compose.prod.yaml up -d --force-recreate worke
 Si el login automatizado recibe un HTTP 403 aunque Avantio funcione en Chrome normal, crea un estado de sesión para el worker:
 
 1. En PowerShell de la sesión interactiva del servidor, ejecuta `scripts/start-avantio-session.ps1`. Se abrirá un perfil Chrome separado, con depuración enlazada solo a `127.0.0.1`.
-2. Inicia sesión en ese Chrome y abre Compromisos hasta ver el listado.
+2. Inicia sesión en ese Chrome y abre **☰ → Reservas → Listado de reservas** hasta ver el listado.
 3. Ejecuta `scripts/capture-avantio-session.ps1` en la misma sesión. El script guarda solo cookies y almacenamiento local de `app.avantio.pro` en `%LOCALAPPDATA%\AvantIA\AvantioAuth\storage-state.json`, con permisos restringidos al usuario, SYSTEM y administradores. Actualiza solo `AVANTIO_STORAGE_STATE_DIR` en el `.env`, sin mostrar ni modificar los demás valores.
 4. Recrea el worker. El contenedor monta esa carpeta en modo solo lectura; el archivo nunca se incluye en Git ni se imprime en pantalla.
 

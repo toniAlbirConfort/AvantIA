@@ -94,8 +94,14 @@ class FakeLocator:
         self.page.actions.append(self.name)
         if self.name == "submit":
             self.page.logged_in = True
-        elif self.name == "Más acciones":
+        elif self.name == "navigation menu":
             self.page.menu_open = True
+        elif self.name == "Reservas":
+            self.page.reservas_menu_open = True
+        elif self.name == "Listado de reservas":
+            self.page.reservation_list_open = True
+        elif self.name == "Más acciones":
+            self.page.actions_menu_open = True
         elif self.name == "Descargar CSV":
             self.page.download_future.set_result(self.page.download)
 
@@ -131,6 +137,9 @@ class FakePage:
         self.download_future = None
         self.logged_in = False
         self.menu_open = False
+        self.reservas_menu_open = False
+        self.reservation_list_open = False
+        self.actions_menu_open = False
         self.actions = []
         self.fills = []
         self.visited = []
@@ -144,6 +153,8 @@ class FakePage:
         return SimpleNamespace(status=self.response_status) if self.response_status else None
 
     def locator(self, selector: str):
+        if selector == 'button[aria-label*="menu" i]':
+            return FakeLocator(self, "navigation menu", visible=self.logged_in)
         if selector == 'input[type="password"]':
             return FakeLocator(self, "password", visible=not self.logged_in)
         if selector == 'input[autocomplete="username"]' or selector == 'input[type="email"]':
@@ -155,10 +166,14 @@ class FakePage:
         return FakeLocator(self, selector, visible=False)
 
     def get_by_role(self, role, name, exact):
-        if role == "button" and name == "Más acciones":
-            return FakeLocator(self, name, visible=self.logged_in)
-        if role == "menuitem" and name == "Descargar CSV":
+        if role == "menuitem" and name == "Reservas":
             return FakeLocator(self, name, visible=self.menu_open)
+        if role == "menuitem" and name == "Listado de reservas":
+            return FakeLocator(self, name, visible=self.reservas_menu_open)
+        if role == "button" and name == "Más acciones":
+            return FakeLocator(self, name, visible=self.reservation_list_open)
+        if role == "menuitem" and name == "Descargar CSV":
+            return FakeLocator(self, name, visible=self.actions_menu_open)
         return FakeLocator(self, name, visible=False)
 
     def get_by_text(self, label, exact):
@@ -224,9 +239,17 @@ def test_playwright_login_clicks_export_and_reads_temporary_download(monkeypatch
 
     assert filename == "reservas.csv"
     assert downloaded == raw
-    assert page.actions == ["submit", "Más acciones", "Descargar CSV"]
+    assert page.actions == [
+        "submit",
+        "navigation menu",
+        "Reservas",
+        "Listado de reservas",
+        "Más acciones",
+        "Descargar CSV",
+    ]
     assert page.fills == [("username", "operador"), ("password", "test-password")]
     assert len(page.visited) == 2
+    assert page.visited == ["https://app.avantio.pro/"] * 2
     assert browser.context_options == {"accept_downloads": True}
 
 
