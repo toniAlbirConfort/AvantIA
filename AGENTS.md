@@ -9,16 +9,19 @@
 
 ## Flujo de cambios y despliegue
 
-1. Implementa cada cambio solicitado en el checkout de desarrollo y crea un commit separado por cambio, con un mensaje descriptivo.
-2. Sube los commits aprobados a `origin/main`.
-3. En el servidor, desde `C:\PROYECTOS ANTIGRAVITY\AvantIA`, incorpora los cambios con `git pull origin main`.
-4. Para aplicar la versión actualizada, ejecuta desde esa misma carpeta:
+1. Cada tarea que implique cambios debe implementarse en una rama nueva y exclusiva para esa tarea. No reutilices ramas de otras tareas ni trabajes directamente sobre `main`.
+2. Antes de crear la rama, actualiza las referencias remotas con `git fetch origin`. La base de toda rama de trabajo será siempre la referencia remota `origin/main`, nunca una rama local desactualizada ni otra rama de trabajo.
+3. Usa este formato común para los nombres de rama: `codex/<tipo>/<slug>`. `<tipo>` debe ser uno de `feat`, `fix`, `refactor`, `docs` o `chore`; `<slug>` debe describir brevemente la tarea en minúsculas y con palabras separadas por guiones. Por ejemplo: `codex/feat/resumen-reservas` o `codex/fix/fechas-estancia`.
+4. Crea la rama nueva desde `origin/main` (por ejemplo, `git switch --create codex/fix/fechas-estancia origin/main`) e implementa allí los cambios. Crea commits descriptivos y separados por cambio dentro de la rama de la tarea.
+5. Publica la rama de tarea en `origin` para revisión. Tras su aprobación, integra sus commits en `origin/main` mediante el mecanismo de integración aprobado; no publiques directamente los commits de trabajo sobre `main`.
+6. El despliegue siempre se actualiza desde `origin/main`. En el servidor, desde `C:\PROYECTOS ANTIGRAVITY\AvantIA`, incorpora los cambios ya integrados con `git pull origin main`.
+7. Para aplicar la versión actualizada, ejecuta desde esa misma carpeta:
 
    ```powershell
    docker compose -f compose.yaml -f compose.prod.yaml up --build -d
    ```
 
-5. Comprueba el estado de los servicios con `docker compose -f compose.yaml -f compose.prod.yaml ps`.
+8. Comprueba el estado de los servicios con `docker compose -f compose.yaml -f compose.prod.yaml ps`.
 
 ## Secretos y datos de producción
 
