@@ -17,10 +17,10 @@ import { Textarea } from './components/ui/textarea'
 type View = 'summary' | 'inbox' | 'bookings' | 'properties' | 'planning' | 'imports' | 'integrations' | 'users'
 const navigation: { id: View; label: string; icon: typeof LayoutDashboard }[] = [
   { id: 'summary', label: 'Resumen', icon: LayoutDashboard },
+  { id: 'planning', label: 'Planning', icon: CalendarRange },
   { id: 'inbox', label: 'Bandeja', icon: Inbox },
   { id: 'bookings', label: 'Prerreservas', icon: CalendarDays },
   { id: 'properties', label: 'Alojamientos', icon: House },
-  { id: 'planning', label: 'Planning', icon: CalendarRange },
   { id: 'imports', label: 'Importaciones', icon: Upload },
   { id: 'integrations', label: 'Integraciones', icon: Cable },
   { id: 'users', label: 'Usuarios', icon: Users },
