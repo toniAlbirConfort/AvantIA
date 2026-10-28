@@ -5,6 +5,7 @@ import logging
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
@@ -178,6 +179,29 @@ async def _login_if_needed(page, settings: Settings) -> None:
         ) from exc
 
 
+async def _open_navigation_menu(page) -> None:
+    menu_button = await _visible_locator(
+        page,
+        (
+            'button[aria-label*="menu" i]',
+            'button[aria-label*="menú" i]',
+            'button[aria-label*="navigation" i]',
+            'button[aria-label*="navegación" i]',
+            'button[title*="menu" i]',
+            'button[title*="menú" i]',
+            'button[title*="navigation" i]',
+            'button.navbar-toggler',
+            'button.sidebar-toggle',
+            'button:has(.fa-bars)',
+            '[role="button"]:has(.fa-bars)',
+            '.fa-bars',
+        ),
+    )
+    if menu_button is None:
+        raise ReservationSyncError("No se encontró el menú de navegación de Avantio.")
+    await menu_button.click()
+
+
 async def download_reservations_csv(settings: Settings) -> tuple[str, bytes]:
     try:
         async with async_playwright() as playwright:
@@ -190,8 +214,10 @@ async def download_reservations_csv(settings: Settings) -> tuple[str, bytes]:
                 context = await browser.new_context(**context_options)
                 page = await context.new_page()
                 page.set_default_timeout(15_000)
+                avantio_url = urlsplit(settings.avantio_export_url)
+                home_url = f"{avantio_url.scheme}://{avantio_url.netloc}/"
                 response = await page.goto(
-                    settings.avantio_export_url,
+                    home_url,
                     wait_until="domcontentloaded",
                     timeout=NAVIGATION_TIMEOUT_MS,
                 )
@@ -201,7 +227,7 @@ async def download_reservations_csv(settings: Settings) -> tuple[str, bytes]:
                     )
                 await _login_if_needed(page, settings)
                 response = await page.goto(
-                    settings.avantio_export_url,
+                    home_url,
                     wait_until="domcontentloaded",
                     timeout=NAVIGATION_TIMEOUT_MS,
                 )
@@ -214,6 +240,13 @@ async def download_reservations_csv(settings: Settings) -> tuple[str, bytes]:
                         "Avantio rechazó el acceso con las credenciales configuradas."
                     )
 
+                await _open_navigation_menu(page)
+                await _click_label(page, "Reservas", ("menuitem", "link", "button"))
+                await _click_label(
+                    page,
+                    "Listado de reservas",
+                    ("menuitem", "link", "button"),
+                )
                 await _click_label(page, "Más acciones", ("button", "link"))
                 async with page.expect_download(timeout=DOWNLOAD_TIMEOUT_MS) as download_info:
                     await _click_label(page, "Descargar CSV", ("menuitem", "button", "link"))
