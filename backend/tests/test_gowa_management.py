@@ -4,6 +4,7 @@ import base64
 import json
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 
 from app import gowa
@@ -175,7 +176,13 @@ def test_gowa_status_accepts_empty_device_registry(db, monkeypatch):
         app.dependency_overrides.clear()
 
 
-def test_gowa_connect_creates_device_and_proxies_qr_without_trusting_returned_host(db, monkeypatch):
+@pytest.mark.parametrize(
+    "qr_path",
+    ["/statics/qrcode/current.png", "/statics/images/qrcode/current.png"],
+)
+def test_gowa_connect_creates_device_and_proxies_qr_without_trusting_returned_host(
+    db, monkeypatch, qr_path
+):
     _configure(db, monkeypatch)
     requests = []
     qr_png = b"\x89PNG\r\n\x1a\nqr-image"
@@ -194,11 +201,11 @@ def test_gowa_connect_creates_device_and_proxies_qr_without_trusting_returned_ho
                 json={
                     "results": {
                         "qr_duration": 30,
-                        "qr_link": "http://untrusted.example/statics/images/qrcode/current.png",
+                        "qr_link": f"http://untrusted.example{qr_path}",
                     }
                 },
             )
-        if request.url.path == "/statics/images/qrcode/current.png":
+        if request.url.path == qr_path:
             assert request.url.host == "gowa"
             return httpx.Response(200, content=qr_png, headers={"content-type": "image/png"})
         return httpx.Response(404)
@@ -219,7 +226,7 @@ def test_gowa_connect_creates_device_and_proxies_qr_without_trusting_returned_ho
                 "/devices",
                 "/devices",
                 "/app/login",
-                "/statics/images/qrcode/current.png",
+                qr_path,
             ]
     finally:
         app.dependency_overrides.clear()
