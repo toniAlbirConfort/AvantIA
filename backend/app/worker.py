@@ -15,8 +15,6 @@ from app.delivery import send_approved
 from app.mail import poll_mail
 from app.models import Conversation, Draft, Job
 from app.processing import alert_conversation, analyze_message, schedule_overdue
-from app.reservation_sync import is_configured as avantio_sync_configured
-from app.reservation_sync import sync_reservations_if_due
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -111,8 +109,6 @@ def recover_stale_jobs() -> None:
 async def main() -> None:
     last_mail = 0.0
     last_housekeeping = 0.0
-    last_reservation_sync_check = -30.0
-    reservation_sync_task: asyncio.Task[bool] | None = None
     settings = get_settings()
     while True:
         tick = time.monotonic()
@@ -129,13 +125,6 @@ async def main() -> None:
             recover_stale_jobs()
             watch_csv()
             last_housekeeping = tick
-        if tick - last_reservation_sync_check >= 30:
-            if (
-                avantio_sync_configured(settings)
-                and (reservation_sync_task is None or reservation_sync_task.done())
-            ):
-                reservation_sync_task = asyncio.create_task(sync_reservations_if_due(settings))
-            last_reservation_sync_check = tick
         if not await run_job():
             await asyncio.sleep(settings.worker_poll_seconds)
 

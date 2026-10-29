@@ -92,10 +92,10 @@ function integrationBadge(name: string, value: any) {
 
 function integrationDescription(name: string, value: any) {
   if (name === 'avantio') {
-    if (!value.configured) return 'Pendiente de configurar el enlace y el acceso de Avantio en el .env del servidor.'
-    if (value.status === 'running') return 'Descargando el CSV de Compromisos y actualizando el planning.'
+    if (!value.configured) return 'Falta configurar AVANTIO_EXPORT_URL en el .env del servidor.'
+    if (value.status === 'running') return 'Chrome dedicado está exportando el CSV y actualizando el planning.'
     if (value.status === 'failed') return 'Falló la última sincronización. La última instantánea válida sigue activa.'
-    return `Exportación automática cada ${value.interval_hours} h.`
+    return `Exportación con Chrome dedicado en Windows cada ${value.interval_hours} h.`
   }
   if (value.sending_enabled === false) return 'Envío bloqueado por modo de solo lectura.'
   if (value.read_only) return value.connected ? `Conectado en solo lectura · buzón ${value.mailbox || ''}` : value.configured ? `Esperando primera conexión · buzón ${value.mailbox || ''}` : 'Falta configurar el acceso IMAP.'
@@ -110,6 +110,7 @@ function IntegrationCard({ name, value }: { name: string; value: any }) {
     <h2 className="mb-3 text-xl font-semibold">{integrationTitle(name)}</h2>
     <Badge value={integrationBadge(name, value)} />
     <p className="my-4 text-sm leading-6 text-muted-foreground">{integrationDescription(name, value)}</p>
+    {name === 'avantio' && value.runner === 'windows_chrome_cdp' && <small className="block text-xs text-muted-foreground">Exportador: Chrome dedicado del servidor</small>}
     {value.last_attempt_at && <small className="block text-xs text-muted-foreground">Último intento: {date(value.last_attempt_at)}</small>}
     {value.last_success_at && <small className="mt-1 block text-xs text-muted-foreground">{name === 'avantio' ? 'Última sincronización' : 'Última conexión'}: {date(value.last_success_at)}{name === 'avantio' ? ` · ${value.row_count || 0} filas · lote #${value.last_batch_id ?? '—'}` : ''}</small>}
     {name !== 'avantio' && value.last_import_at && <small className="mt-1 block text-xs text-muted-foreground">Última carga: {date(value.last_import_at)}</small>}

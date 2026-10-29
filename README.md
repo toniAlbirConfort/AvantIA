@@ -69,38 +69,32 @@ La sección Importaciones también acepta las exportaciones «Listado de propied
 
 ## Exportación automática de reservas desde Avantio
 
-El worker usa Playwright y Chromium en modo visible dentro de un display virtual Xvfb para abrir Avantio, iniciar sesión y seguir **☰ → Reservas → Listado de reservas → Más acciones → Descargar CSV**. El listado debe usar el filtro de reservas creadas durante los últimos 14 días. La primera ejecución se intenta al iniciar el worker; las siguientes se programan con `AVANTIO_SYNC_INTERVAL_HOURS` (seis horas por defecto).
+Avantio entrega el CSV desde un Chrome con sesión interactiva en Windows. Una tarea programada de la cuenta que mantiene Docker Desktop conecta Playwright al perfil Chrome dedicado mediante CDP local, sigue **☰ → Reservas → Listado de reservas → Más acciones → Descargar CSV** y abre de nuevo `AVANTIO_EXPORT_URL` para conservar el filtro de reservas creadas durante los últimos 14 días. El CSV pasa temporalmente por una carpeta compartida con el worker, que lo valida con el importador existente y lo elimina al terminar. La consolidación por localizador conserva las reservas ausentes de esta exportación parcial.
 
-Configura estos valores directamente en `C:\PROYECTOS ANTIGRAVITY\AvantIA\.env` del servidor; no incluyas las credenciales ni el enlace con parámetros de vista en Git:
+Configura el enlace directamente en `C:\PROYECTOS ANTIGRAVITY\AvantIA\.env` del servidor; no lo incluyas en Git:
 
 ```dotenv
 AVANTIO_EXPORT_URL=
-AVANTIO_USERNAME=
-AVANTIO_PASSWORD=
 AVANTIO_SYNC_INTERVAL_HOURS=6
-AVANTIO_STORAGE_STATE_DIR=
 ```
 
-La sincronización queda desactivada si falta la URL o alguna credencial. El CSV se valida con el importador de reservas existente y se procesa en memoria; no se conserva el archivo. Un fallo de acceso, descarga o validación mantiene activa la última instantánea válida. En **Integraciones** se muestran el último intento, la última carga correcta, el número de filas y el error más reciente. El historial de importaciones identifica los lotes cargados por Playwright.
-
-Después de configurar el `.env` del servidor, recrea el worker para cargar las variables:
+Para activar la tarea, inicia sesión en el servidor con la cuenta que ejecuta Docker Desktop y ejecuta una vez desde PowerShell:
 
 ```powershell
-docker compose -f compose.yaml -f compose.prod.yaml up -d --force-recreate worker
+Set-Location "C:\PROYECTOS ANTIGRAVITY\AvantIA"
+.\scripts\install-avantio-sync-task.ps1
 ```
 
-### Sesión de Chrome para el acceso de Avantio
+El instalador crea un entorno Python local con Playwright `1.64.1`, configura la carpeta temporal `AVANTIO_IMPORT_DIR`, limita sus permisos a la cuenta, SYSTEM y administradores, compila y recrea API y worker, y registra `AvantIA Avantio Reservation Sync` al inicio de sesión interactivo. La tarea abre Chrome con el perfil `%LOCALAPPDATA%\AvantIA\AvantioChromeProfile` y ejecuta una primera exportación. Inicia sesión manualmente en ese Chrome y déjalo abierto; no hacen falta usuario ni contraseña de Avantio en `.env`. Si el primer intento ocurrió antes de iniciar sesión, vuelve a lanzar la tarea:
 
-Si el login automatizado recibe un HTTP 403 aunque Avantio funcione en Chrome normal, crea un estado de sesión para el worker:
+```powershell
+Stop-ScheduledTask -TaskName 'AvantIA Avantio Reservation Sync'
+Start-ScheduledTask -TaskName 'AvantIA Avantio Reservation Sync'
+```
 
-1. En PowerShell de la sesión interactiva del servidor, ejecuta `scripts/start-avantio-session.ps1`. Se abrirá un perfil Chrome separado, con depuración enlazada solo a `127.0.0.1`.
-2. Inicia sesión en ese Chrome y abre **☰ → Reservas → Listado de reservas** hasta ver el listado.
-3. Ejecuta `scripts/capture-avantio-session.ps1` en la misma sesión. El script guarda solo cookies y almacenamiento local de `app.avantio.pro` en `%LOCALAPPDATA%\AvantIA\AvantioAuth\storage-state.json`, con permisos restringidos al usuario, SYSTEM y administradores. Actualiza solo `AVANTIO_STORAGE_STATE_DIR` en el `.env`, sin mostrar ni modificar los demás valores.
-4. Recrea el worker. El contenedor monta esa carpeta en modo solo lectura; el archivo nunca se incluye en Git ni se imprime en pantalla.
+La sincronización se repite cada `AVANTIO_SYNC_INTERVAL_HOURS` horas (seis por defecto); el proceso vuelve a leer el valor del `.env` cada 30 segundos y publica el intervalo activo en Integraciones, así que cambiarlo no requiere reinstalar la tarea. Si falla Avantio, Chrome o la validación, el estado aparece en **Integraciones** y se reintenta en 15 minutos. La última instantánea válida se conserva. El historial identifica los lotes como `avantio_chrome`. El registro local, sin URL ni contenido del CSV, está en `%LOCALAPPDATA%\AvantIA\avantio-sync.log`.
 
-Cierra el Chrome dedicado después de capturar el estado. Mientras está abierto, el puerto CDP local permite controlar ese perfil.
-
-El worker usa el estado guardado y conserva el login con usuario y contraseña como respaldo. Cuando se vuelve a capturar un estado actualizado, el siguiente intento se adelanta al intervalo normal. Si el worker aún recibe HTTP 403 con la sesión guardada, Avantio está bloqueando la solicitud automatizada antes de servir la aplicación y habrá que pedir acceso compatible a Avantio.
+Para detener la automatización, ejecuta `Unregister-ScheduledTask -TaskName 'AvantIA Avantio Reservation Sync'`. Chrome y el perfil están ligados a la sesión interactiva de esa cuenta; si se cierra sesión en Windows, la sincronización se reanudará al volver a iniciar sesión.
 
 El catálogo une `Código` con `id alojamiento`; las reservas usan `Localizador` como clave. La base de datos conserva campos operativos mínimos, hashes, lote y fila del CSV que aportó cada registro, incidencias y cambios entre versiones consolidadas. No guarda los CSV originales, contactos, documentos, fechas de nacimiento, nombres de propietarios ni comentarios libres. El planning integra automáticamente las exportaciones válidas por localizador y muestra estancias bloqueantes, peticiones y cancelaciones únicamente para apartamentos y villas activos. Al abrir una reserva se muestra su información operativa en un panel lateral; la trazabilidad de lote y fila permanece en base de datos y no se presenta en la interfaz. Las reservas confirmadas, pagadas, prerreservas, «No Disponible» y «De Propietario» bloquean `[entrada, salida)`. La ausencia de un localizador en una exportación parcial no se interpreta como cancelación: solo un estado explícito puede liberarlo. Los lotes y sus diferencias siguen disponibles en el historial de auditoría.
 
