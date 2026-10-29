@@ -3,9 +3,12 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import os
 import re
+import uuid
 from datetime import UTC, date, datetime
 from email.utils import parseaddr
+from pathlib import Path
 from typing import Annotated
 
 import httpx
@@ -839,3 +842,82 @@ async def gowa_webhook(request: Request, db: Db) -> dict:
         db.rollback()
         raise HTTPException(400, "Evento GOWA no válido") from exc
     return {"status": "accepted", "duplicate": duplicate, "message_id": message.id}
+
+
+@app.post("/webhooks/github/deploy")
+async def github_deploy_webhook(request: Request) -> dict:
+    settings = get_settings()
+    if not settings.github_deploy_webhook_secret:
+        raise HTTPException(503, "Webhook de despliegue no configurado")
+
+    raw = bytearray()
+    async for chunk in request.stream():
+        raw.extend(chunk)
+        if len(raw) > 5 * 1024 * 1024:
+            raise HTTPException(413, "Evento de GitHub demasiado grande")
+    body = bytes(raw)
+
+    received = request.headers.get("X-Hub-Signature-256", "")
+    expected = "sha256=" + hmac.new(
+        settings.github_deploy_webhook_secret.encode(), body, hashlib.sha256
+    ).hexdigest()
+    if not hmac.compare_digest(received, expected):
+        raise HTTPException(401, "Firma de GitHub no válida")
+
+    try:
+        event = json.loads(body)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise HTTPException(400, "Evento de GitHub no válido") from exc
+    if not isinstance(event, dict):
+        raise HTTPException(400, "Evento de GitHub no válido")
+
+    if request.headers.get("X-GitHub-Event") != "pull_request":
+        return {"status": "ignored"}
+
+    repository = event.get("repository") or {}
+    pull_request = event.get("pull_request") or {}
+    if not isinstance(repository, dict) or not isinstance(pull_request, dict):
+        raise HTTPException(400, "Evento de GitHub no válido")
+    base = pull_request.get("base") or {}
+    if not isinstance(base, dict):
+        raise HTTPException(400, "Evento de GitHub no válido")
+    head = pull_request.get("head") or {}
+    if not isinstance(head, dict):
+        raise HTTPException(400, "Evento de GitHub no válido")
+    if str(repository.get("full_name", "")).lower() != "tonialbirconfort/avantia":
+        return {"status": "ignored"}
+    if (
+        event.get("action") != "closed"
+        or pull_request.get("merged") is not True
+        or base.get("ref") != "main"
+    ):
+        return {"status": "ignored"}
+
+    revision = pull_request.get("merge_commit_sha") or head.get("sha")
+    if not isinstance(revision, str) or not revision:
+        raise HTTPException(400, "El evento de merge no contiene una revisión")
+
+    signal_path = Path(settings.deploy_signal_path)
+    temporary_path = signal_path.with_name(f".{signal_path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        signal_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path.write_text(
+            json.dumps(
+                {
+                    "delivery": request.headers.get("X-GitHub-Delivery", ""),
+                    "revision": revision,
+                    "pull_request": pull_request.get("number"),
+                }
+            ),
+            encoding="utf-8",
+        )
+        os.replace(temporary_path, signal_path)
+    except OSError as exc:
+        raise HTTPException(503, "No se pudo solicitar el despliegue") from exc
+    finally:
+        try:
+            temporary_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    return {"status": "accepted", "revision": revision}

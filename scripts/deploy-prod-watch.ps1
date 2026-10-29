@@ -6,6 +6,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$script:DeployRequestPath = Join-Path $script:RepoRoot '.deploy-trigger\request.json'
 $stateDirectory = Join-Path $env:LOCALAPPDATA 'AvantIA'
 $script:LogPath = Join-Path $stateDirectory 'deploy-watch.log'
 $script:DeployedRevisionPath = Join-Path $stateDirectory 'last-successful-deploy.txt'
@@ -202,7 +203,33 @@ function Invoke-DeploymentCheck {
     }
 }
 
-Write-DeployLog "Watcher started; polling every $PollIntervalSeconds seconds."
+function Wait-ForDeploymentRequest {
+    param([Parameter(Mandatory)][int]$TimeoutSeconds)
+
+    for ($elapsed = 0; $elapsed -lt $TimeoutSeconds; $elapsed++) {
+        if (Test-Path -LiteralPath $script:DeployRequestPath) {
+            $claimedPath = "$($script:DeployRequestPath).processing-$([guid]::NewGuid().ToString('N'))"
+            try {
+                Move-Item -LiteralPath $script:DeployRequestPath -Destination $claimedPath -ErrorAction Stop
+                Remove-Item -LiteralPath $claimedPath -Force -ErrorAction Stop
+                Write-DeployLog 'GitHub merge webhook received; checking origin/main immediately.'
+                return $true
+            }
+            catch {
+                if (Test-Path -LiteralPath $script:DeployRequestPath) {
+                    Write-DeployLog "Could not consume the deployment request ($($_.Exception.GetType().Name)); will retry at the next check."
+                    return $false
+                }
+            }
+        }
+
+        Start-Sleep -Seconds 1
+    }
+
+    return $false
+}
+
+Write-DeployLog "Watcher started; checking every $PollIntervalSeconds seconds and waiting for webhook requests."
 while ($true) {
     try {
         Invoke-DeploymentCheck
@@ -211,5 +238,5 @@ while ($true) {
         Write-DeployLog "Check failed during $script:CurrentStage ($($_.Exception.GetType().Name)); will retry."
     }
 
-    Start-Sleep -Seconds $PollIntervalSeconds
+    [void](Wait-ForDeploymentRequest -TimeoutSeconds $PollIntervalSeconds)
 }

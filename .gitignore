@@ -15,3 +15,4 @@ build/
 data/
 *.sqlite3
 .avantio-auth/
+/.deploy-trigger/
