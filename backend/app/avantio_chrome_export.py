@@ -46,8 +46,8 @@ async def _click_visible_label(page, label: str, roles: tuple[str, ...]) -> None
             if await candidate.is_visible():
                 visible.append(candidate)
         if visible:
-            if label == "Más acciones" and len(visible) > 1:
-                # The toolbar action is above the per-reservation actions in the table.
+            if label in ("Reservas", "Más acciones") and len(visible) > 1:
+                # The navigation item and toolbar action are above duplicate dashboard/row labels.
                 candidates = []
                 for candidate in visible:
                     bounds = await candidate.bounding_box()
