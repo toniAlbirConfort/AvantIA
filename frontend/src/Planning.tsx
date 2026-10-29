@@ -1,10 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
-import { X } from 'lucide-react'
+import { ChevronLeft, ChevronRight, X } from 'lucide-react'
 import { api } from './api'
 import { issueText } from './SourceImports'
 import type { PlanningBar, PlanningData } from './types'
 import { Alert } from './components/ui/alert'
-import { Badge } from './components/ui/badge'
 import { Button } from './components/ui/button'
 import { Card } from './components/ui/card'
 import { Input } from './components/ui/input'
@@ -15,13 +14,23 @@ function addDays(value: string, count: number) { const date = new Date(`${value}
 function dayDiff(a: string, b: string) { return Math.round((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86400000) }
 function money(value: string) { return new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR' }).format(Number(value)) }
 function dateLabel(value: string | null) { return value ? new Intl.DateTimeFormat('es-ES', { dateStyle: 'long', timeZone: 'UTC' }).format(new Date(`${value}T00:00:00Z`)) : '—' }
-const stateLabel: Record<string, string> = { confirmed: 'Confirmada', pre_reservation: 'Prerreserva', paid: 'Pagada', unavailable: 'No disponible', owner: 'De propietario', inquiry: 'Petición de información', cancelled: 'Cancelada' }
+const stateLabel: Record<string, string> = { confirmed: 'Confirmada', pre_reservation: 'Prereserva', paid: 'Pagada', unavailable: 'Bloqueado', stop_sell: 'StopSell', owner: 'De propietario', inquiry: 'Bajo petición', cancelled: 'Cancelada' }
 const stateStyle: Record<string, string> = {
-  confirmed: 'bg-brand-turquoise text-brand-blue-ink', paid: 'bg-brand-orange text-primary-foreground',
-  pre_reservation: 'bg-brand-blue-light text-brand-blue-ink', owner: 'bg-secondary text-secondary-foreground',
-  unavailable: 'bg-error-bg text-error-ink', inquiry: 'bg-brand-yellow text-brand-yellow-ink',
+  confirmed: 'bg-plan-confirmada text-plan-confirmada-ink', paid: 'bg-plan-pagada text-plan-pagada-ink',
+  pre_reservation: 'bg-plan-prereserva text-plan-prereserva-ink', owner: 'bg-plan-propietario text-plan-propietario-ink',
+  unavailable: 'bg-plan-bloqueado text-plan-bloqueado-ink', stop_sell: 'bg-plan-stopsell text-plan-stopsell-ink',
+  inquiry: 'bg-plan-peticion text-plan-peticion-ink',
   cancelled: 'bg-muted text-muted-foreground',
 }
+const legendItems = [
+  { label: 'Prereserva', color: 'bg-plan-prereserva' },
+  { label: 'Confirmada', color: 'bg-plan-confirmada' },
+  { label: 'Pagada', color: 'bg-plan-pagada' },
+  { label: 'De propietario', color: 'bg-plan-propietario' },
+  { label: 'Bloqueado', color: 'bg-plan-bloqueado' },
+  { label: 'StopSell', color: 'bg-plan-stopsell' },
+  { label: 'Bajo petición', color: 'bg-plan-peticion' },
+]
 
 export function Planning() {
   const today = useMemo(() => isoDate(new Date()), [])
@@ -31,6 +40,7 @@ export function Planning() {
   const [data, setData] = useState<PlanningData | null>(null)
   const [selected, setSelected] = useState<PlanningBar | null>(null)
   const [error, setError] = useState('')
+  const [legendOpen, setLegendOpen] = useState(() => window.matchMedia('(min-width: 768px)').matches)
   useEffect(() => {
     if (!start || !end || !Number.isFinite(dayDiff(start, end)) || dayDiff(start, end) < 1 || dayDiff(start, end) > 92) { setError('Selecciona un intervalo de 1 a 92 días.'); return }
     let cancelled = false
@@ -74,7 +84,7 @@ export function Planning() {
   const visible = data?.properties.filter(item => `${item.name} ${item.building || ''} ${item.id}`.toLocaleLowerCase('es-ES').includes(search.toLocaleLowerCase('es-ES'))) || []
   return <div className="grid gap-4">
     <Card className="flex flex-wrap items-end gap-4 p-4"><label className="grid min-w-40 flex-1 gap-1.5 text-sm font-medium">Desde<Input type="date" value={start} onChange={e => setStart(e.target.value)} /></label><label className="grid min-w-40 flex-1 gap-1.5 text-sm font-medium">Hasta (exclusivo)<Input type="date" value={end} onChange={e => setEnd(e.target.value)} /></label></Card>
-    <div className="flex flex-wrap items-center gap-2"><Badge className={stateStyle.confirmed}>Confirmada · bloquea</Badge><Badge className={stateStyle.paid}>Pagada · bloquea</Badge><Badge className={stateStyle.pre_reservation}>Prerreserva · bloquea</Badge><Badge className={stateStyle.owner}>Propietario · bloquea</Badge><Badge className={stateStyle.unavailable}>No disponible · bloquea</Badge><Badge className={stateStyle.inquiry}>Peticiones · lista inferior</Badge><Badge className={stateStyle.cancelled}>Canceladas · lista inferior</Badge><span className="text-xs text-muted-foreground">{data?.reservation_coverage ? `${data.reservations_in_range} en este intervalo · ${data.reservation_coverage.effective_rows} integradas` : 'Sin reservas importadas'}</span></div>
+    <div className="flex flex-wrap items-center gap-2"><span className="text-xs text-muted-foreground">{data?.reservation_coverage ? `${data.reservations_in_range} en este intervalo · ${data.reservation_coverage.effective_rows} integradas` : 'Sin reservas importadas'}</span></div>
     {error && <Alert variant="destructive">{error}</Alert>}
     {!data?.property_batch || !data?.reservation_batch ? <Card className="p-6 text-sm leading-7 text-muted-foreground">Importa y confirma las exportaciones de propiedades y reservas para completar el planning. La falta de barras no confirma disponibilidad.</Card> : <>
       {data.reservation_coverage && <Alert variant="info">{data.reservation_coverage.effective_rows} reservas integradas · entradas desde {data.reservation_coverage.first_arrival} · salidas hasta {data.reservation_coverage.last_departure}. Se muestran las reservas del intervalo correspondientes a alojamientos activos.</Alert>}
@@ -104,5 +114,30 @@ export function Planning() {
       </div>}
       <div className="grid gap-4 xl:grid-cols-2"><Card className="p-5"><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">NO BLOQUEAN</p><h2 className="mb-4 text-lg font-semibold">Peticiones de información ({data.inquiries.length})</h2>{data.inquiries.length ? <ul className="mb-5 max-h-60 list-disc space-y-2 overflow-auto pl-5 text-sm">{data.inquiries.map(item => <li key={item.locator}><button type="button" className="text-left text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => setSelected(item)} aria-label={`Abrir reserva ${item.locator}`}>{item.locator} · {item.property_id} · {item.start_date} → {item.end_date}</button></li>)}</ul> : <p className="mb-5 text-sm text-muted-foreground">Sin peticiones en el intervalo.</p>}<h2 className="mb-3 text-lg font-semibold">Canceladas ({data.cancellations.length})</h2>{data.cancellations.length ? <ul className="max-h-60 list-disc space-y-2 overflow-auto pl-5 text-sm">{data.cancellations.map(item => <li key={item.locator}><button type="button" className="text-left text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => setSelected(item)} aria-label={`Abrir reserva ${item.locator}`}>{item.locator} · {item.property_id} · {item.start_date} → {item.end_date}</button></li>)}</ul> : <p className="text-sm text-muted-foreground">Sin cancelaciones en el intervalo.</p>}</Card><Card className="p-5"><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">AUDITORÍA</p><h2 className="mb-4 text-lg font-semibold">Incidencias ({data.warnings.length})</h2>{data.warnings.length ? <ul className="max-h-72 list-disc space-y-2 overflow-auto pl-5 text-sm text-muted-foreground">{data.warnings.map((issue, index) => <li key={index}>{issueText(issue)}</li>)}</ul> : <p className="text-sm text-muted-foreground">Sin incidencias registradas.</p>}</Card></div>
     </>}
+    <aside className="fixed bottom-3 right-3 z-30 flex max-w-[calc(100vw-1.5rem)] items-center overflow-hidden rounded-lg border border-border bg-card shadow-md sm:bottom-5 sm:right-5" aria-label="Leyenda del planning">
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        className="size-9 min-h-9 w-9 shrink-0 rounded-none border-r border-border p-0 text-muted-foreground"
+        onClick={() => setLegendOpen(open => !open)}
+        aria-expanded={legendOpen}
+        aria-controls="planning-status-legend"
+        aria-label={legendOpen ? 'Contraer leyenda de estados' : 'Desplegar leyenda de estados'}
+      >
+        {legendOpen ? <ChevronRight aria-hidden="true" /> : <ChevronLeft aria-hidden="true" />}
+      </Button>
+      <div id="planning-status-legend" className={legendOpen ? 'max-h-32 max-w-[calc(100vw-3.75rem)] overflow-y-auto p-2 sm:max-h-none sm:max-w-[min(70vw,56rem)] sm:overflow-visible' : 'px-3 py-2'}>
+        {legendOpen
+          ? <ul className="flex flex-wrap items-center gap-1.5 sm:flex-nowrap" aria-label="Estados de reserva">
+            {legendItems.map(item => <li key={item.label} className="flex shrink-0 items-center gap-1.5 rounded bg-secondary px-2 py-1 text-xs text-secondary-foreground">
+              <span aria-hidden="true" className={`size-2 shrink-0 rounded-full ${item.color}`} />{item.label}
+            </li>)}
+          </ul>
+          : <div className="grid grid-cols-2 gap-1.5" aria-hidden="true">
+            {legendItems.slice(0, 4).map(item => <span key={item.label} className={`size-2 rounded-full ${item.color}`} />)}
+          </div>}
+      </div>
+    </aside>
   </div>
 }

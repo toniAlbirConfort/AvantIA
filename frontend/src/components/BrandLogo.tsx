@@ -1,18 +1,23 @@
+import { useId } from 'react'
+
 type BrandLogoProps = {
   className?: string
 }
 
 export function BrandMark({ className = 'size-10' }: BrandLogoProps) {
+  const clipId = `avantia-mark-${useId().replaceAll(':', '')}`
+
   return <svg
     className={className}
-    viewBox="0 0 40 40"
+    viewBox="0 0 45 45"
     fill="none"
     aria-hidden="true"
     focusable="false"
   >
-    <rect width="40" height="40" rx="12" fill="#F15F41" />
-    <path d="M9.5 31V20.5c0-6.4 4.7-11.5 10.5-11.5s10.5 5.1 10.5 11.5V31" stroke="white" strokeWidth="3.25" strokeLinecap="round" />
-    <path d="M15.5 31v-7a4.5 4.5 0 0 1 9 0v7" stroke="#00CCCC" strokeWidth="3.25" strokeLinecap="round" />
+    <defs>
+      <clipPath id={clipId}><circle cx="22.5" cy="22.5" r="22.5" /></clipPath>
+    </defs>
+    <image href="/avantio-mark.png" x="-15" y="-23" width="61" height="75" preserveAspectRatio="none" clipPath={`url(#${clipId})`} />
   </svg>
 }
 
