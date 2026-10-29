@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ChevronLeft, ChevronRight, X } from 'lucide-react'
+import { CalendarDays, ChevronDown, ChevronLeft, ChevronRight, Globe2, House, Moon, Users, X } from 'lucide-react'
 import { api } from './api'
 import { issueText } from './SourceImports'
 import type { PlanningBar, PlanningData } from './types'
@@ -14,6 +14,13 @@ function addDays(value: string, count: number) { const date = new Date(`${value}
 function dayDiff(a: string, b: string) { return Math.round((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86400000) }
 function money(value: string) { return new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR' }).format(Number(value)) }
 function dateLabel(value: string | null) { return value ? new Intl.DateTimeFormat('es-ES', { dateStyle: 'long', timeZone: 'UTC' }).format(new Date(`${value}T00:00:00Z`)) : '—' }
+function dateParts(value: string) {
+  const date = new Date(`${value}T00:00:00Z`)
+  return {
+    day: new Intl.DateTimeFormat('es-ES', { day: '2-digit', timeZone: 'UTC' }).format(date),
+    monthYear: new Intl.DateTimeFormat('es-ES', { month: 'short', year: 'numeric', timeZone: 'UTC' }).format(date).replace('.', ''),
+  }
+}
 const stateLabel: Record<string, string> = { confirmed: 'Confirmada', pre_reservation: 'Prereserva', paid: 'Pagada', unavailable: 'Bloqueado', stop_sell: 'StopSell', owner: 'De propietario', inquiry: 'Bajo petición', cancelled: 'Cancelada' }
 const stateStyle: Record<string, string> = {
   confirmed: 'bg-plan-confirmada text-plan-confirmada-ink', paid: 'bg-plan-pagada text-plan-pagada-ink',
@@ -60,7 +67,7 @@ export function Planning() {
       }
       if (event.key !== 'Tab') return
       const panel = document.querySelector<HTMLElement>('[data-slot="planning-dialog"][role="dialog"]')
-      const focusable = panel?.querySelectorAll<HTMLElement>('button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])')
+      const focusable = panel?.querySelectorAll<HTMLElement>('button:not(:disabled), summary, [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])')
       if (!focusable?.length) return
       const first = focusable[0]
       const last = focusable[focusable.length - 1]
@@ -82,6 +89,9 @@ export function Planning() {
     else groups.push({ label, days: 1 })
   }
   const visible = data?.properties.filter(item => `${item.name} ${item.building || ''} ${item.id}`.toLocaleLowerCase('es-ES').includes(search.toLocaleLowerCase('es-ES'))) || []
+  const selectedProperty = selected ? data?.properties.find(item => item.id === selected.property_id) : undefined
+  const guestCount = selected ? selected.adults + selected.children + selected.infants : 0
+  const paidPercent = selected && Number(selected.total) > 0 ? Math.min(100, Math.max(0, Number(selected.paid) / Number(selected.total) * 100)) : 0
   return <div className="grid gap-4">
     <Card className="flex flex-wrap items-end gap-4 p-4"><label className="grid min-w-40 flex-1 gap-1.5 text-sm font-medium">Desde<Input type="date" value={start} onChange={e => setStart(e.target.value)} /></label><label className="grid min-w-40 flex-1 gap-1.5 text-sm font-medium">Hasta (exclusivo)<Input type="date" value={end} onChange={e => setEnd(e.target.value)} /></label></Card>
     <div className="flex flex-wrap items-center gap-2"><span className="text-xs text-muted-foreground">{data?.reservation_coverage ? `${data.reservations_in_range} en este intervalo · ${data.reservation_coverage.effective_rows} integradas` : 'Sin reservas importadas'}</span></div>
@@ -106,10 +116,58 @@ export function Planning() {
           })}
         </div>
       </div>
-      {selected && <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/70 p-4" onClick={event => { if (event.target === event.currentTarget) setSelected(null) }}>
-        <section data-slot="planning-dialog" className="my-auto max-h-[90vh] w-full max-w-3xl overflow-auto rounded-xl border border-border bg-card p-5 shadow-2xl sm:p-7" role="dialog" aria-modal="true" aria-labelledby="planning-detail-title" aria-describedby="planning-detail-description">
-          <header className="mb-4 flex items-start justify-between gap-4 border-b border-border pb-4"><div><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">RESERVA / {stateLabel[selected.status]?.toUpperCase()}</p><h2 id="planning-detail-title" className="text-xl font-semibold">{selected.display_name}</h2></div><Button type="button" variant="ghost" size="icon" data-slot="planning-dialog-close" className="shrink-0" onClick={() => setSelected(null)} aria-label="Cerrar detalle"><X aria-hidden="true" /></Button></header>
-          <div><p id="planning-detail-description" className="mb-4 text-sm text-muted-foreground">Información operativa de la reserva.</p><dl className="grid grid-cols-2 gap-x-5 gap-y-4 sm:grid-cols-3">{[['Estado', stateLabel[selected.status] || selected.status_original], ['Estado en exportación', selected.status_original], ['Localizador', selected.locator], ['Alojamiento', `${data.properties.find(item => item.id === selected.property_id)?.name || selected.property_id} · ${selected.property_id}`], ['Fecha de alta', dateLabel(selected.created_on)], ['Entrada', dateLabel(selected.start_date)], ['Salida', `${dateLabel(selected.end_date)} · exclusiva`], ['Noches', selected.nights], ['Adultos', selected.adults], ['Niños', selected.children], ['Bebés', selected.infants], ['Portal', selected.portal || '—']].map(([title, value]) => <div className="min-w-0" key={title}><dt className="text-xs text-muted-foreground">{title}</dt><dd className="mt-1 break-words text-sm">{value}</dd></div>)}</dl><h3 className="mb-3 mt-6 text-base font-semibold">Importes</h3><dl className="grid grid-cols-2 gap-3 sm:grid-cols-5">{[['Total', money(selected.total)], ['Neto', money(selected.net)], ['Tasas', money(selected.tax)], ['Pagado', money(selected.paid)], ['Pendiente', money(selected.pending)]].map(([title, value]) => <div className="rounded-md bg-background p-3" key={title}><dt className="text-xs text-muted-foreground">{title}</dt><dd className="mt-1 text-sm font-semibold">{value}</dd></div>)}</dl></div>
+      {selected && <div className="fixed inset-0 z-50 flex justify-end bg-black/45" onClick={event => { if (event.target === event.currentTarget) setSelected(null) }}>
+        <section data-slot="planning-dialog" className="flex h-full max-h-[100dvh] w-full max-w-xl flex-col overflow-hidden border-l border-border bg-card shadow-2xl" role="dialog" aria-modal="true" aria-labelledby="planning-detail-title" aria-describedby="planning-detail-description">
+          <header className="z-10 flex shrink-0 items-center justify-between gap-4 border-b border-border bg-card px-5 py-4 sm:px-7">
+            <div className="min-w-0"><p className="mb-0.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Detalle de reserva</p><h2 id="planning-detail-title" className="truncate text-lg font-semibold sm:text-xl">Reserva {selected.locator}</h2></div>
+            <Button type="button" variant="ghost" size="icon" data-slot="planning-dialog-close" className="size-9 shrink-0" onClick={() => setSelected(null)} aria-label="Cerrar detalle"><X aria-hidden="true" /></Button>
+          </header>
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <p id="planning-detail-description" className="sr-only">Detalle operativo de la reserva {selected.locator}.</p>
+            <div className="px-5 pb-7 sm:px-7">
+              <div className="pt-5">
+                <div className="rounded-t-xl bg-brand-charcoal px-5 pb-12 pt-5 text-white">
+                  <div className="flex items-start gap-3"><span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-white/10"><House aria-hidden="true" className="size-5" /></span><div className="min-w-0"><p className="mb-0.5 text-xs text-white/70">{selectedProperty?.building || 'Alojamiento'}</p><p className="truncate font-semibold">{selectedProperty?.name || selected.property_id}</p></div></div>
+                </div>
+                <div className="relative -mt-7 mx-4 grid grid-cols-2 rounded-xl border border-border bg-card shadow-md sm:mx-8">
+                  {[{ label: 'Entrada', value: dateParts(selected.start_date) }, { label: 'Salida', value: dateParts(selected.end_date) }].map((item, index) => <div className={`flex items-center gap-3 px-4 py-3.5 sm:px-5 ${index === 0 ? 'border-r border-border' : ''}`} key={item.label}><CalendarDays aria-hidden="true" className="size-5 shrink-0 text-muted-foreground" /><div className="min-w-0"><p className="text-xs text-muted-foreground">{item.label}</p><p className="text-xl font-semibold leading-6">{item.value.day}</p><p className="text-sm font-medium capitalize">{item.value.monthYear}</p></div></div>)}
+                </div>
+              </div>
+
+              <div className="mt-5 flex flex-wrap items-center justify-center gap-x-5 gap-y-3 border-b border-border pb-5 text-sm text-muted-foreground">
+                {selected.portal && <span className="inline-flex items-center gap-1.5"><Globe2 aria-hidden="true" className="size-4" />{selected.portal}</span>}
+                <span className="inline-flex items-center gap-1.5"><Moon aria-hidden="true" className="size-4" />{selected.nights} {selected.nights === 1 ? 'noche' : 'noches'}</span>
+                <span className="inline-flex items-center gap-1.5"><Users aria-hidden="true" className="size-4" />{guestCount} {guestCount === 1 ? 'huésped' : 'huéspedes'}</span>
+                <span className={`rounded px-2.5 py-1 text-xs font-semibold ${stateStyle[selected.status] || 'bg-secondary text-secondary-foreground'}`}>{stateLabel[selected.status] || selected.status_original}</span>
+              </div>
+
+              <section className="border-b border-border py-5" aria-labelledby="planning-property-title">
+                <h3 id="planning-property-title" className="mb-3 text-sm font-semibold">Alojamiento</h3>
+                <div className="flex items-start gap-3">
+                  <span className="flex size-10 shrink-0 items-center justify-center rounded-md bg-secondary text-muted-foreground"><House aria-hidden="true" className="size-5" /></span>
+                  <div className="min-w-0 flex-1"><p className="font-semibold underline decoration-border underline-offset-2">{selectedProperty?.name || selected.property_id}</p><p className="mt-0.5 text-sm text-muted-foreground">{[selectedProperty?.building, selectedProperty?.category, selectedProperty?.capacity ? `${selectedProperty.capacity} plazas` : null].filter(Boolean).join(' · ') || selected.property_id}</p><p className="text-xs text-muted-foreground">Código: {selected.property_id}</p></div>
+                </div>
+              </section>
+
+              <section className="border-b border-border py-5" aria-labelledby="planning-guest-title">
+                <h3 id="planning-guest-title" className="mb-3 text-sm font-semibold">Cliente</h3>
+                <div className="flex items-center gap-3"><span className="flex size-10 shrink-0 items-center justify-center rounded-md bg-brand-turquoise-light text-lg font-semibold text-brand-turquoise-ink">{selected.display_name.trim().charAt(0).toLocaleUpperCase('es-ES') || '?'}</span><div className="min-w-0"><p className="font-semibold">{selected.display_name}</p><p className="text-sm text-muted-foreground">Huésped de la reserva</p></div></div>
+              </section>
+
+              <details className="group my-5 rounded-md bg-secondary px-4 py-3">
+                <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-sm font-medium marker:hidden"><span>Ocupantes ({guestCount})</span><ChevronDown aria-hidden="true" className="size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" /></summary>
+                <dl className="mt-3 grid grid-cols-3 gap-2 border-t border-border pt-3 text-sm"><div><dt className="text-xs text-muted-foreground">Adultos</dt><dd className="mt-0.5 font-medium">{selected.adults}</dd></div><div><dt className="text-xs text-muted-foreground">Niños</dt><dd className="mt-0.5 font-medium">{selected.children}</dd></div><div><dt className="text-xs text-muted-foreground">Bebés</dt><dd className="mt-0.5 font-medium">{selected.infants}</dd></div></dl>
+              </details>
+
+              <section className="border-b border-border pb-5" aria-labelledby="planning-payments-title">
+                <h3 id="planning-payments-title" className="mb-3 text-sm font-semibold">Pagos</h3>
+                <div className="h-2 overflow-hidden rounded-full bg-secondary" role="progressbar" aria-label="Importe pagado" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(paidPercent)}><div className="h-full rounded-full bg-plan-prereserva transition-[width]" style={{ width: `${paidPercent}%` }} /></div>
+                <div className="mt-3 flex flex-wrap justify-between gap-x-4 gap-y-1 text-xs"><span className="text-muted-foreground">Pagado <strong className="ml-1 text-foreground">{money(selected.paid)}</strong></span><span className="text-muted-foreground">Por pagar <strong className="ml-1 text-foreground">{money(selected.pending)}</strong></span></div>
+                <dl className="mt-4 divide-y divide-border text-sm"><div className="flex justify-between gap-4 py-2"><dt className="text-muted-foreground">Neto</dt><dd className="font-medium">{money(selected.net)}</dd></div><div className="flex justify-between gap-4 py-2"><dt className="text-muted-foreground">Tasas</dt><dd className="font-medium">{money(selected.tax)}</dd></div><div className="flex justify-between gap-4 py-2"><dt className="text-muted-foreground">Creación de reserva</dt><dd className="text-right font-medium">{dateLabel(selected.created_on)}</dd></div><div className="flex justify-between gap-4 py-2"><dt className="text-muted-foreground">Estado original</dt><dd className="text-right font-medium">{selected.status_original}</dd></div></dl>
+              </section>
+            </div>
+          </div>
+          <footer className="flex shrink-0 items-center justify-between border-t border-border bg-card px-5 py-4 sm:px-7"><span className="text-sm font-semibold">Total</span><span className="text-base font-bold">{money(selected.total)}</span></footer>
         </section>
       </div>}
       <div className="grid gap-4 xl:grid-cols-2"><Card className="p-5"><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">NO BLOQUEAN</p><h2 className="mb-4 text-lg font-semibold">Peticiones de información ({data.inquiries.length})</h2>{data.inquiries.length ? <ul className="mb-5 max-h-60 list-disc space-y-2 overflow-auto pl-5 text-sm">{data.inquiries.map(item => <li key={item.locator}><button type="button" className="text-left text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => setSelected(item)} aria-label={`Abrir reserva ${item.locator}`}>{item.locator} · {item.property_id} · {item.start_date} → {item.end_date}</button></li>)}</ul> : <p className="mb-5 text-sm text-muted-foreground">Sin peticiones en el intervalo.</p>}<h2 className="mb-3 text-lg font-semibold">Canceladas ({data.cancellations.length})</h2>{data.cancellations.length ? <ul className="max-h-60 list-disc space-y-2 overflow-auto pl-5 text-sm">{data.cancellations.map(item => <li key={item.locator}><button type="button" className="text-left text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => setSelected(item)} aria-label={`Abrir reserva ${item.locator}`}>{item.locator} · {item.property_id} · {item.start_date} → {item.end_date}</button></li>)}</ul> : <p className="text-sm text-muted-foreground">Sin cancelaciones en el intervalo.</p>}</Card><Card className="p-5"><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">AUDITORÍA</p><h2 className="mb-4 text-lg font-semibold">Incidencias ({data.warnings.length})</h2>{data.warnings.length ? <ul className="max-h-72 list-disc space-y-2 overflow-auto pl-5 text-sm text-muted-foreground">{data.warnings.map((issue, index) => <li key={index}>{issueText(issue)}</li>)}</ul> : <p className="text-sm text-muted-foreground">Sin incidencias registradas.</p>}</Card></div>
