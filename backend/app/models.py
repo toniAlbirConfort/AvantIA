@@ -222,5 +222,6 @@ class ReservationSyncState(Base):
     last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_batch_id: Mapped[int | None] = mapped_column(ForeignKey("import_batches.id"))
     row_count: Mapped[int] = mapped_column(Integer, default=0)
+    interval_hours: Mapped[int | None] = mapped_column(Integer)
     last_error: Mapped[str | None] = mapped_column(Text)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)

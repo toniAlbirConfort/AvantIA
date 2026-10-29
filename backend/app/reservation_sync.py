@@ -32,11 +32,8 @@ class ReservationSyncError(Exception):
 
 def is_configured(settings: Settings | None = None) -> bool:
     settings = settings or get_settings()
-    return bool(
-        settings.avantio_export_url.strip()
-        and settings.avantio_username.strip()
-        and settings.avantio_password
-    )
+    # Authentication now comes from the dedicated, logged-in Windows Chrome profile.
+    return bool(settings.avantio_export_url.strip())
 
 
 def _utc(value: datetime) -> datetime:

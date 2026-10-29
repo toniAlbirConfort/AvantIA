@@ -64,6 +64,7 @@ services:
     environment:
       OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11435}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-dania:16k}
+      AVANTIO_IMPORT_DIR: /run/avantio-import
     command: ["python", "-m", "app.worker"]
     depends_on:
       api:
@@ -71,9 +72,8 @@ services:
     volumes:
       - csv_inbox:/data/imports
       - type: bind
-        source: "${AVANTIO_STORAGE_STATE_DIR:-./.avantio-auth}"
-        target: /run/avantio-auth
-        read_only: true
+        source: "${AVANTIO_IMPORT_DIR:-./.avantio-imports}"
+        target: /run/avantio-import
         bind:
           create_host_path: true
   gowa:

@@ -782,13 +782,14 @@ def integrations(db: Db, user: Operator) -> dict:
             "stale": age is None or age > settings.availability_max_age_hours,
         },
         "avantio": {
-            "configured": bool(
-                settings.avantio_export_url.strip()
-                and settings.avantio_username.strip()
-                and settings.avantio_password
-            ),
+            "configured": bool(settings.avantio_export_url.strip()),
+            "runner": "windows_chrome_cdp",
             "status": reservation_sync.status if reservation_sync else "idle",
-            "interval_hours": settings.avantio_sync_interval_hours,
+            "interval_hours": (
+                reservation_sync.interval_hours
+                if reservation_sync and reservation_sync.interval_hours
+                else settings.avantio_sync_interval_hours
+            ),
             "last_attempt_at": reservation_sync.last_attempt_at if reservation_sync else None,
             "last_success_at": reservation_sync.last_success_at if reservation_sync else None,
             "last_batch_id": reservation_sync.last_batch_id if reservation_sync else None,
