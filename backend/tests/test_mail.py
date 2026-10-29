@@ -25,8 +25,11 @@ def test_imap_read_only_booking_and_duplicate(db, monkeypatch):
     calls = []
 
     class FakeImap:
+        connection_number = 0
+
         def __init__(self, *args, **kwargs):
-            pass
+            type(self).connection_number += 1
+            self.connection_number = type(self).connection_number
 
         def login(self, user, password):
             calls.append("login")
@@ -36,12 +39,13 @@ def test_imap_read_only_booking_and_duplicate(db, monkeypatch):
             return "OK", [b"1"]
 
         def status(self, mailbox, fields):
-            return "OK", [b"INBOX (UIDVALIDITY 1 UIDNEXT 1)"]
+            next_uid = 2 if self.connection_number == 1 else 3
+            return "OK", [f"INBOX (UIDVALIDITY 1 UIDNEXT {next_uid})".encode()]
 
         def uid(self, action, *args):
             calls.append((action, args))
             if action == "SEARCH":
-                return "OK", [b"1"]
+                return "OK", [b"1" if self.connection_number == 1 else b"1 2"]
             if action == "FETCH":
                 return "OK", [(b"1 (BODY[])", message.as_bytes())]
             raise AssertionError(f"Unexpected IMAP action {action}")

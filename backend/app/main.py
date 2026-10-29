@@ -22,13 +22,19 @@ from sqlalchemy.orm import Session
 from app.auth import admin_user, authenticate, current_user, hasher, issue_token
 from app.availability import aware, import_csv, latest_batch
 from app.avantio import availability_provider
+from app.classification import (
+    apply_message_classification,
+    classification_review_clause,
+    effective_classification,
+    resolve_conversation_classification,
+)
 from app.config import READ_ONLY_MODE, get_settings
 from app.db import get_db
 from app.gowa import (
     GowaDeviceNotRegistered,
     GowaNotConfigured,
-    GowaSessionPhoneMismatch,
     GowaServiceUnavailable,
+    GowaSessionPhoneMismatch,
     delete_gowa_device_for_phone,
     get_gowa_status,
     gowa_device_id,
@@ -105,6 +111,14 @@ class UnknownResolution(BaseModel):
     note: str = Field(min_length=3, max_length=500)
 
 
+class MessageClassificationIn(BaseModel):
+    label: str = Field(pattern="^(demand|guest_service|non_demand)$")
+
+
+class ClassificationResolutionIn(BaseModel):
+    outcome: str = Field(pattern="^(handled|not_demand)$")
+
+
 def _user(user: User) -> dict:
     return {"id": user.id, "username": user.username, "role": user.role, "active": user.active}
 
@@ -156,6 +170,10 @@ def _conversation(conv: Conversation, db: Session, detail: bool = False) -> dict
         "status": conv.status,
         "priority": conv.priority,
         "assigned_user_id": conv.assigned_user_id,
+        "active_classification": conv.active_classification,
+        "classification_open": conv.classification_open,
+        "classification_resolved_at": conv.classification_resolved_at,
+        "classification_resolved_by_id": conv.classification_resolved_by_id,
         "analysis": _live_analysis(db, conv)[0] if detail else conv.analysis,
         "created_at": conv.created_at,
         "updated_at": conv.updated_at,
@@ -178,6 +196,25 @@ def _conversation(conv: Conversation, db: Session, detail: bool = False) -> dict
                 "source_url": item.source_url,
                 "provider_id": item.provider_id,
                 "created_at": item.created_at,
+                "classification": {
+                    "label": effective_classification(item),
+                    "predicted_label": item.classification_label,
+                    "confidence": item.classification_confidence,
+                    "reason": item.classification_reason,
+                    "needs_review": (
+                        item.classification_label is not None
+                        and item.classification_reviewed_at is None
+                        and (
+                            item.classification_label == "uncertain"
+                            or item.classification_confidence != "high"
+                        )
+                    ),
+                    "model": item.classification_model,
+                    "reviewed_by_id": item.classification_reviewed_by_id,
+                    "reviewed_at": item.classification_reviewed_at,
+                }
+                if item.direction == "inbound"
+                else None,
             }
             for item in messages
         ]
@@ -334,9 +371,29 @@ def _inbox_thread_items(conversations: list[Conversation], db: Session) -> list[
             )
         ).all()
     }
+    latest_inbound_ids = (
+        select(func.max(Message.id).label("id"))
+        .where(Message.conversation_id.in_(ids), Message.direction == "inbound")
+        .group_by(Message.conversation_id)
+        .subquery()
+    )
+    latest_inbound_messages = {
+        item.conversation_id: item
+        for item in db.scalars(
+            select(Message).join(latest_inbound_ids, Message.id == latest_inbound_ids.c.id)
+        ).all()
+    }
+    review_counts = dict(
+        db.execute(
+            select(Message.conversation_id, func.count(Message.id))
+            .where(Message.conversation_id.in_(ids), classification_review_clause())
+            .group_by(Message.conversation_id)
+        ).all()
+    )
     result = []
     for item in conversations:
         latest = latest_messages.get(item.id)
+        latest_inbound = latest_inbound_messages.get(item.id)
         preview = re.sub(r"\s+", " ", latest.body or "").strip() if latest else ""
         result.append(
             {
@@ -350,6 +407,23 @@ def _inbox_thread_items(conversations: list[Conversation], db: Session) -> list[
                 "status": item.status,
                 "priority": item.priority,
                 "assigned_user_id": item.assigned_user_id,
+                "active_classification": item.active_classification,
+                "classification_open": item.classification_open,
+                "classification_resolved_at": item.classification_resolved_at,
+                "classification_review_count": review_counts.get(item.id, 0),
+                "last_inbound_classification": effective_classification(latest_inbound)
+                if latest_inbound
+                else None,
+                "last_inbound_needs_review": (
+                    latest_inbound.classification_label is not None
+                    and latest_inbound.classification_reviewed_at is None
+                    and (
+                        latest_inbound.classification_label == "uncertain"
+                        or latest_inbound.classification_confidence != "high"
+                    )
+                )
+                if latest_inbound
+                else False,
                 "last_inbound_at": item.last_inbound_at,
                 "message_count": counts.get(item.id, 0),
                 "last_message_at": latest.created_at if latest else None,
@@ -371,6 +445,10 @@ def inbox(
     channel: str | None = None,
     priority: str | None = None,
     kind: str | None = None,
+    classification: str | None = Query(
+        default=None,
+        pattern="^(demand|guest_service|non_demand|review|unclassified)$",
+    ),
     sender: str | None = Query(default=None, max_length=255),
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
@@ -393,6 +471,21 @@ def inbox(
     ):
         if value:
             query = query.where(column == value)
+    if classification == "review":
+        query = query.where(
+            Conversation.classification_open.is_(True),
+            Conversation.id.in_(
+                select(Message.conversation_id)
+                .where(classification_review_clause())
+                .distinct()
+            ),
+        )
+    elif classification == "unclassified":
+        query = query.where(Conversation.active_classification.is_(None))
+    elif classification:
+        query = query.where(Conversation.active_classification == classification)
+        if classification in {"demand", "guest_service"}:
+            query = query.where(Conversation.classification_open.is_(True))
     if from_at:
         query = query.where(Conversation.last_inbound_at >= from_at)
     if to_at:
@@ -432,7 +525,9 @@ def inbox(
             total = len(conversations_page)
             conversations_page = conversations_page[offset : offset + limit]
         else:
-            total = db.scalar(select(func.count()).select_from(query.order_by(None).subquery())) or 0
+            total = (
+                db.scalar(select(func.count()).select_from(query.order_by(None).subquery())) or 0
+            )
             conversations_page = db.scalars(
                 query.order_by(desc(Conversation.last_inbound_at), desc(Conversation.id))
                 .offset(offset)
@@ -475,6 +570,102 @@ def inbox(
 @app.get("/api/conversations/{id}")
 def conversation(id: int, db: Db, user: Operator) -> dict:
     return _conversation(_get_conv(db, id), db, detail=True)
+
+
+@app.patch("/api/messages/{message_id}/classification")
+def correct_message_classification(
+    message_id: int, body: MessageClassificationIn, db: Db, user: Operator
+) -> dict:
+    message = db.get(Message, message_id)
+    if not message or message.direction != "inbound":
+        raise HTTPException(404, "Mensaje entrante no encontrado")
+    conv = _get_conv(db, message.conversation_id)
+    if conv.kind == "booking":
+        raise HTTPException(409, "Las notificaciones de Booking mantienen su flujo propio")
+
+    previous = effective_classification(message)
+    if message.classification_override != body.label:
+        message.classification_override = body.label
+        message.classification_reviewed_by_id = user.id
+        message.classification_reviewed_at = now()
+        apply_message_classification(conv, message, manual=True, actor_user_id=user.id)
+
+        if body.label != "demand":
+            draft = db.scalar(select(Draft).where(Draft.source_message_id == message.id))
+            if draft and draft.status == "pending":
+                draft.status = "superseded"
+                draft.error = None
+        else:
+            enqueue(
+                db,
+                key=f"analyze-correction:{message.id}:{now().isoformat()}",
+                kind="analyze",
+                payload={"message_id": message.id},
+            )
+
+        db.add(
+            AuditEvent(
+                actor_user_id=user.id,
+                conversation_id=conv.id,
+                action="message.classification_corrected",
+                detail={"message_id": message.id, "from": previous, "to": body.label},
+            )
+        )
+        db.commit()
+    return _conversation(conv, db, detail=True)
+
+
+@app.post("/api/conversations/{id}/resolve")
+def resolve_classification(
+    id: int, body: ClassificationResolutionIn, db: Db, user: Operator
+) -> dict:
+    conv = _get_conv(db, id)
+    if conv.kind == "booking":
+        raise HTTPException(409, "Las notificaciones de Booking mantienen su flujo propio")
+    if not conv.classification_open:
+        raise HTTPException(409, "La clasificación del hilo ya está resuelta")
+    if body.outcome == "not_demand" and conv.active_classification not in {"demand", "review"}:
+        raise HTTPException(409, "Solo una demanda o una revisión puede marcarse como no demanda")
+    if body.outcome == "handled" and conv.active_classification == "review":
+        raise HTTPException(
+            409, "Clasifica el mensaje dudoso antes de marcar el hilo como gestionado"
+        )
+
+    pending_reviews = select(func.count(Message.id)).where(
+        Message.conversation_id == conv.id,
+        classification_review_clause(),
+    )
+    if body.outcome == "not_demand" and conv.active_classification_message_id:
+        pending_reviews = pending_reviews.where(
+            Message.id != conv.active_classification_message_id
+        )
+    if (db.scalar(pending_reviews) or 0) > 0:
+        raise HTTPException(409, "Revisa primero los demás mensajes dudosos del hilo")
+
+    previous = conv.active_classification
+    if body.outcome == "not_demand" and conv.active_classification_message_id:
+        message = db.get(Message, conv.active_classification_message_id)
+        if message and message.direction == "inbound":
+            message.classification_override = "non_demand"
+            message.classification_reviewed_by_id = user.id
+            message.classification_reviewed_at = now()
+            draft = db.scalar(select(Draft).where(Draft.source_message_id == message.id))
+            if draft and draft.status == "pending":
+                draft.status = "superseded"
+                draft.error = None
+    resolve_conversation_classification(
+        conv, outcome=body.outcome, actor_user_id=user.id
+    )
+    db.add(
+        AuditEvent(
+            actor_user_id=user.id,
+            conversation_id=conv.id,
+            action="conversation.classification_resolved",
+            detail={"outcome": body.outcome, "classification": previous},
+        )
+    )
+    db.commit()
+    return _conversation(conv, db, detail=True)
 
 
 @app.post("/api/conversations/{conversation_id}/messages/{message_id}/translate")
@@ -903,13 +1094,18 @@ async def gowa_purge(body: GowaPurgeIn, admin: Admin, db: Db) -> JSONResponse:
         ) from exc
     except GowaServiceUnavailable as exc:
         db.rollback()
-        raise HTTPException(502, "No se pudo confirmar el borrado en GOWA; AvantIA conservó los datos") from exc
+        raise HTTPException(
+            502, "No se pudo confirmar el borrado en GOWA; AvantIA conservó los datos"
+        ) from exc
     except Exception as exc:
         db.rollback()
         if device_deleted:
             raise HTTPException(
                 500,
-                "GOWA se desvinculó, pero AvantIA no pudo confirmar el borrado local; contacta con un administrador",
+                (
+                    "GOWA se desvinculó, pero AvantIA no pudo confirmar el borrado local; "
+                    "contacta con un administrador"
+                ),
             ) from exc
         raise
 

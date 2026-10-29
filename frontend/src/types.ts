@@ -5,12 +5,25 @@ export type GowaStatus = {
 }
 export type GowaPairing = { qr_image: string; qr_duration: number }
 export type Draft = { id: number; text: string; status: string; approved_by_id: number | null; approved_at: string | null; sent_at: string | null; error: string | null }
-export type Message = { id: number; direction: string; body: string; html_body?: string | null; sender: string | null; recipient?: string | null; subject: string | null; source_url: string | null; provider_id: string; created_at: string }
+export type ClassificationLabel = 'demand' | 'guest_service' | 'non_demand' | 'uncertain' | 'review'
+export type MessageClassification = {
+  label: Exclude<ClassificationLabel, 'review'> | null
+  predicted_label: Exclude<ClassificationLabel, 'review'> | null
+  confidence: 'high' | 'medium' | 'low' | null
+  reason: string | null
+  needs_review: boolean
+  model: string | null
+  reviewed_by_id: number | null
+  reviewed_at: string | null
+}
+export type Message = { id: number; direction: string; body: string; html_body?: string | null; sender: string | null; recipient?: string | null; subject: string | null; source_url: string | null; provider_id: string; created_at: string; classification?: MessageClassification | null }
 export type EmailTranslation = { message_id: number; language: 'es'; body: string }
 export type Audit = { action: string; actor_user_id: number | null; detail: Record<string, unknown>; created_at: string }
 export type Conversation = {
   id: number; channel: string; kind: string; customer_name: string | null; customer_address: string | null;
   subject: string | null; status: string; priority: string; assigned_user_id: number | null;
+  active_classification: ClassificationLabel | null; classification_open: boolean;
+  classification_resolved_at: string | null; classification_resolved_by_id?: number | null;
   analysis: Record<string, unknown>; created_at: string; updated_at: string; last_inbound_at: string;
   draft: Draft | null; messages?: Message[]; drafts?: Draft[]; audit?: Audit[];
   booking_task?: { id: number; status: string; extracted: Record<string, unknown> } | null
@@ -18,7 +31,10 @@ export type Conversation = {
 export type InboxThread = {
   type: 'thread'; id: number; channel: string; kind: string; customer_name: string | null;
   customer_address: string | null; subject: string | null; status: string; priority: string;
-  assigned_user_id: number | null; last_inbound_at: string; message_count: number;
+  assigned_user_id: number | null; active_classification: ClassificationLabel | null;
+  classification_open: boolean; classification_resolved_at: string | null;
+  classification_review_count: number; last_inbound_classification: Exclude<ClassificationLabel, 'review'> | null;
+  last_inbound_needs_review: boolean; last_inbound_at: string; message_count: number;
   last_message_at: string | null; preview: string
 }
 export type InboxSenderGroup = {

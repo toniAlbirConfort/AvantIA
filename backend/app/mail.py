@@ -4,10 +4,10 @@ import email
 import imaplib
 import logging
 import re
-from html.parser import HTMLParser
 from datetime import UTC, datetime
 from email import policy
 from email.utils import parseaddr
+from html.parser import HTMLParser
 from urllib.parse import quote
 
 from sqlalchemy import select
