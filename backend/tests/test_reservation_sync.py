@@ -213,7 +213,7 @@ class FakePlaywrightManager:
         self.browser = browser
 
     async def launch(self, headless):
-        assert headless is True
+        assert headless is False
         return self.browser
 
     async def __aenter__(self):
