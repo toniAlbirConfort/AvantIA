@@ -87,7 +87,7 @@ if ($LASTEXITCODE -ne 0) {
     throw 'No se pudo compilar y recrear API y worker para montar la carpeta temporal de importación.'
 }
 
-$userId = "$env:USERDOMAIN\$env:USERNAME"
+$userId = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
 $action = New-ScheduledTaskAction -Execute 'PowerShell.exe' -Argument (
     '-NoLogo -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "' +
     (Join-Path $PSScriptRoot 'run-avantio-sync-task.ps1') + '"'
@@ -104,9 +104,9 @@ $settings = New-ScheduledTaskSettingsSet `
 if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
     Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
 }
-Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger `
-    -Principal $principal -Settings $settings -Force | Out-Null
-Start-ScheduledTask -TaskName $taskName
+$null = Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger `
+    -Principal $principal -Settings $settings -Force -ErrorAction Stop
+Start-ScheduledTask -TaskName $taskName -ErrorAction Stop
 
 Write-Host "Tarea interactiva instalada: $taskName"
 Write-Host "Intervalo configurado: cada $intervalHours horas (se vuelve a leer desde .env)."
