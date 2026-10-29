@@ -14,6 +14,7 @@ from typing import Annotated
 import httpx
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import desc, func, or_, select, text
 from sqlalchemy.orm import Session
@@ -23,6 +24,16 @@ from app.availability import aware, import_csv, latest_batch
 from app.avantio import availability_provider
 from app.config import READ_ONLY_MODE, get_settings
 from app.db import get_db
+from app.gowa import (
+    GowaDeviceNotRegistered,
+    GowaNotConfigured,
+    GowaServiceUnavailable,
+    get_gowa_status,
+    gowa_device_id,
+    gowa_is_configured,
+    reconnect_gowa,
+    start_gowa_pairing,
+)
 from app.ingest import enqueue, ingest
 from app.integrations import ollama_translate_email
 from app.models import (
@@ -754,16 +765,8 @@ def integrations(db: Db, user: Operator) -> dict:
     cursor = db.scalar(select(MailCursor).where(MailCursor.mailbox == settings.imap_mailbox))
     reservation_sync = db.get(ReservationSyncState, "avantio_reservations")
     age = (datetime.now(UTC) - aware(batch.created_at)).total_seconds() / 3600 if batch else None
-    return {
+    result = {
         "mode": {"read_only": READ_ONLY_MODE, "outbound_enabled": not READ_ONLY_MODE},
-        "whatsapp": {
-            "sending_enabled": not READ_ONLY_MODE,
-            "configured": bool(
-                settings.gowa_basic_auth
-                and settings.gowa_webhook_secret
-                and settings.gowa_device_id
-            )
-        },
         "imap": {
             "configured": bool(
                 settings.imap_host and settings.imap_user and settings.imap_password
@@ -800,6 +803,57 @@ def integrations(db: Db, user: Operator) -> dict:
             "last_error": reservation_sync.last_error if reservation_sync else None,
         },
     }
+    if user.role == "admin":
+        result["whatsapp"] = {
+            "sending_enabled": not READ_ONLY_MODE,
+            "configured": gowa_is_configured(settings),
+        }
+    return result
+
+
+@app.get("/api/integrations/gowa")
+async def gowa_status(admin: Admin) -> JSONResponse:
+    if not gowa_is_configured():
+        status = {
+            "configured": False,
+            "service_available": False,
+            "device_id": gowa_device_id(),
+            "registered": False,
+            "is_connected": False,
+            "is_logged_in": False,
+        }
+    else:
+        try:
+            status = await get_gowa_status()
+        except GowaNotConfigured as exc:
+            raise HTTPException(503, "Falta configurar GOWA en el servidor") from exc
+        except GowaServiceUnavailable as exc:
+            raise HTTPException(503, "No se puede consultar el servicio GOWA") from exc
+    return JSONResponse(status, headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/integrations/gowa/connect")
+async def gowa_connect(admin: Admin) -> JSONResponse:
+    try:
+        pairing = await start_gowa_pairing()
+    except GowaNotConfigured as exc:
+        raise HTTPException(503, "Falta configurar GOWA en el servidor") from exc
+    except GowaServiceUnavailable as exc:
+        raise HTTPException(502, "No se pudo iniciar el emparejamiento con GOWA") from exc
+    return JSONResponse(pairing, headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/integrations/gowa/reconnect")
+async def gowa_reconnect(admin: Admin) -> dict:
+    try:
+        await reconnect_gowa()
+    except GowaNotConfigured as exc:
+        raise HTTPException(503, "Falta configurar GOWA en el servidor") from exc
+    except GowaDeviceNotRegistered as exc:
+        raise HTTPException(409, "Primero vincula WhatsApp mediante el código QR") from exc
+    except GowaServiceUnavailable as exc:
+        raise HTTPException(502, "No se pudo solicitar la reconexión a GOWA") from exc
+    return {"status": "reconnecting"}
 
 
 @app.post("/webhooks/gowa")
@@ -814,7 +868,7 @@ async def gowa_webhook(request: Request, db: Db) -> dict:
         raise HTTPException(401, "Firma no válida")
     try:
         event = json.loads(raw)
-        if event["device_id"] != settings.gowa_device_id:
+        if event["device_id"] != gowa_device_id(settings):
             raise ValueError("Dispositivo no válido")
         if event["event"] != "message":
             return {"status": "ignored"}

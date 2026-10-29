@@ -36,7 +36,7 @@ El túnel conecta `127.0.0.1:11435` del equipo local con `127.0.0.1:11434` del s
 
 ## Producción
 
-Configurar `APP_DOMAIN`, `PUBLIC_BASE_URL=https://<dominio>` y DNS hacia el VPS. Ejecutar `docker compose -f compose.yaml -f compose.prod.yaml up --build -d`. Caddy gestiona los certificados HTTPS. PostgreSQL no publica puertos. GOWA solo publica su interfaz en `127.0.0.1:3002`; acceder mediante túnel SSH, vincular el número dedicado por QR y configurar `GOWA_DEVICE_ID` con el ID real del dispositivo. No eliminar el volumen `gowa_session`.
+Configurar `APP_DOMAIN`, `PUBLIC_BASE_URL=https://<dominio>` y DNS hacia el VPS. Ejecutar `docker compose -f compose.yaml -f compose.prod.yaml up --build -d`. Caddy gestiona los certificados HTTPS. PostgreSQL no publica puertos. GOWA solo publica su interfaz en `127.0.0.1:3002`. Para vincular el teléfono de atención, abrir **Integraciones → WhatsApp → Conectar con QR** en AvantIA y escanearlo desde **Dispositivos vinculados** en WhatsApp. `GOWA_DEVICE_ID` es opcional y por defecto usa `avantia`; si ya está definido en el servidor, se conserva. La sesión persiste en el volumen `gowa_session`: no eliminarlo.
 
 ### Despliegue automático al fusionar un PR
 
@@ -120,7 +120,7 @@ Para conectar el buzón, completar localmente `IMAP_HOST`, `IMAP_USER`, `IMAP_PA
 
 ## API principal
 
-`POST /api/login` entrega un token Bearer; el resto del panel requiere autenticación. `GET /api/conversations` filtra por estado, canal, prioridad y tipo. `GET /api/inbox` devuelve una página de hilos o grupos de remitentes (`group_by=thread|sender`), filtrable por `from`/`to` (instantes ISO 8601 con zona horaria), `q`, estado, canal, prioridad y tipo; usa `offset` y `limit` y responde con `items`, `total`, `offset` y `limit`. Para expandir un grupo se usa `group_by=thread&sender=<dirección normalizada>`. `GET /api/conversations/{id}` devuelve mensajes, análisis, borrador y auditoría. `PUT /api/conversations/{id}/draft` edita; `POST /api/conversations/{id}/approve` encola un único envío. `POST /api/imports` requiere administrador y recibe `multipart/form-data` con `file` y `mapping` JSON. `GET /api/integrations` muestra configuración y últimos estados. `POST /webhooks/gowa` verifica `X-Hub-Signature-256` antes de registrar el evento.
+`POST /api/login` entrega un token Bearer; el resto del panel requiere autenticación. `GET /api/conversations` filtra por estado, canal, prioridad y tipo. `GET /api/inbox` devuelve una página de hilos o grupos de remitentes (`group_by=thread|sender`), filtrable por `from`/`to` (instantes ISO 8601 con zona horaria), `q`, estado, canal, prioridad y tipo; usa `offset` y `limit` y responde con `items`, `total`, `offset` y `limit`. Para expandir un grupo se usa `group_by=thread&sender=<dirección normalizada>`. `GET /api/conversations/{id}` devuelve mensajes, análisis, borrador y auditoría. `PUT /api/conversations/{id}/draft` edita; `POST /api/conversations/{id}/approve` encola un único envío. `POST /api/imports` requiere administrador y recibe `multipart/form-data` con `file` y `mapping` JSON. `GET /api/integrations` muestra configuración y últimos estados. La gestión de GOWA requiere administrador: `GET /api/integrations/gowa`, `POST /api/integrations/gowa/connect` y `POST /api/integrations/gowa/reconnect`. `POST /webhooks/gowa` verifica `X-Hub-Signature-256` antes de registrar el evento.
 
 ## Copias y recuperación
 

@@ -1,4 +1,9 @@
 export type User = { id: number; username: string; role: string; active: boolean }
+export type GowaStatus = {
+  configured: boolean; service_available: boolean; device_id: string | null; registered: boolean;
+  is_connected: boolean; is_logged_in: boolean
+}
+export type GowaPairing = { qr_image: string; qr_duration: number }
 export type Draft = { id: number; text: string; status: string; approved_by_id: number | null; approved_at: string | null; sent_at: string | null; error: string | null }
 export type Message = { id: number; direction: string; body: string; html_body?: string | null; sender: string | null; recipient?: string | null; subject: string | null; source_url: string | null; provider_id: string; created_at: string }
 export type EmailTranslation = { message_id: number; language: 'es'; body: string }

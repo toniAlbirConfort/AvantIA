@@ -15,7 +15,7 @@ from app.db import get_db
 from app.models import User
 
 hasher = PasswordHasher()
-bearer = HTTPBearer()
+bearer = HTTPBearer(auto_error=False)
 
 
 def _signer() -> URLSafeTimedSerializer:
@@ -37,9 +37,11 @@ def verify_password(password: str, stored_hash: str) -> bool:
 
 
 def current_user(
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(bearer)],
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
     db: Annotated[Session, Depends(get_db)],
 ) -> User:
+    if credentials is None:
+        raise HTTPException(401, "Autenticación requerida")
     try:
         payload = _signer().loads(credentials.credentials, max_age=8 * 3600)
         user_id = int(payload["user_id"])
