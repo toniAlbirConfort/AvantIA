@@ -15,6 +15,7 @@ import { Select } from './components/ui/select'
 import { Skeleton } from './components/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './components/ui/table'
 import { Textarea } from './components/ui/textarea'
+import { BrandLogo, BrandMark } from './components/BrandLogo'
 
 type View = 'summary' | 'inbox' | 'bookings' | 'properties' | 'planning' | 'imports' | 'integrations' | 'users'
 const navigation: { id: View; label: string; icon: typeof LayoutDashboard }[] = [
@@ -132,7 +133,7 @@ function Login({ onLogin }: { onLogin: (user: User) => void }) {
   }
   return <main className="grid min-h-screen bg-background lg:grid-cols-2">
     <Card className="flex min-h-screen flex-col justify-center rounded-none border-0 px-7 py-12 shadow-none sm:px-12 lg:px-[clamp(3rem,8vw,7rem)]">
-      <div className="mb-8 grid size-12 place-items-center rounded-full border border-border text-2xl font-semibold text-primary">A<span className="sr-only">AvantIA</span></div>
+      <div className="mb-8"><BrandMark className="size-12" /><span className="sr-only">AvantIA</span></div>
       <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-primary">AVANTIA / ACCESO</p>
       <h1 className="mb-5 text-4xl font-semibold leading-tight text-foreground sm:text-5xl">Atención que<br />siempre llega.</h1>
       <p className="mb-9 max-w-md leading-7 text-muted-foreground">La hospitalidad empieza mucho antes de abrir la puerta. Aquí, cada consulta encuentra su lugar.</p>
@@ -372,11 +373,11 @@ export default function App() {
 
   return <div className="min-h-screen bg-background text-foreground md:flex">
     {mobileMenu && <button type="button" className="fixed inset-0 z-30 bg-background/80 md:hidden" onClick={() => setMobileMenu(false)} aria-label="Cerrar menú" />}
-    <aside className={`fixed inset-y-0 left-0 z-40 flex h-screen w-64 flex-col border-r border-border bg-card p-4 transition-transform motion-reduce:transition-none md:sticky md:top-0 md:z-10 md:translate-x-0 ${mobileMenu ? 'translate-x-0' : '-translate-x-full'}`}>
-      <Button variant="ghost" className="mb-6 min-h-16 justify-start gap-3 rounded-none border-b border-border px-2 pb-5 text-left" onClick={() => navigate('summary')} aria-label="Ir al resumen"><span className="grid size-10 place-items-center rounded-full border border-primary/50 text-2xl font-semibold text-primary">A</span><span><strong className="block tracking-wide">AVANTIA</strong><small className="block text-[0.65rem] text-muted-foreground">HOSPITALIDAD CONECTADA</small></span></Button>
-      <div className="mb-3 px-3 text-[0.65rem] font-semibold uppercase tracking-wide text-muted-foreground">ESPACIO DE TRABAJO</div>
-      <nav className="grid gap-1" aria-label="Principal">{navigation.filter(item => item.id !== 'users' || user.role === 'admin').map(item => <Button key={item.id} variant="ghost" className={`min-h-11 w-full justify-start gap-3 px-3 text-left ${view === item.id ? 'bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground' : 'text-muted-foreground'}`} onClick={() => navigate(item.id)}><item.icon size={18} strokeWidth={1.7} /><span>{item.label}</span>{item.id === 'inbox' && !!summary?.pending && <span className={`ml-auto rounded-full px-2 py-0.5 text-xs ${view === item.id ? 'bg-background text-primary' : 'bg-accent text-accent-foreground'}`}>{summary.pending}</span>}</Button>)}</nav>
-      <div className="mt-auto border-t border-border pt-4 text-xs leading-6 text-muted-foreground"><span className="mr-2 inline-block size-2 rounded-full bg-primary" />MODO SOLO LECTURA<br /><small className="pl-4">Correo intacto · salidas bloqueadas.</small></div>
+    <aside className={`fixed inset-y-0 left-0 z-40 flex h-screen w-64 flex-col border-r border-brand-charcoal bg-brand-charcoal p-4 text-white transition-transform motion-reduce:transition-none md:sticky md:top-0 md:z-10 md:translate-x-0 ${mobileMenu ? 'translate-x-0' : '-translate-x-full'}`}>
+      <Button variant="ghost" className="mb-6 min-h-16 justify-start gap-3 rounded-none border-b border-white/15 px-2 pb-5 text-left text-white hover:bg-white/10 hover:text-white" onClick={() => navigate('summary')} aria-label="Ir al resumen"><BrandLogo className="text-white" /></Button>
+      <div className="mb-3 px-3 text-[0.65rem] font-semibold uppercase tracking-wide text-white/65">ESPACIO DE TRABAJO</div>
+      <nav className="grid gap-1" aria-label="Principal">{navigation.filter(item => item.id !== 'users' || user.role === 'admin').map(item => <Button key={item.id} variant="ghost" className={`min-h-11 w-full justify-start gap-3 px-3 text-left ${view === item.id ? 'bg-brand-orange text-white hover:bg-brand-orange/90 hover:text-white' : 'text-white/75 hover:bg-white/10 hover:text-white'}`} onClick={() => navigate(item.id)}><item.icon size={18} strokeWidth={1.7} /><span>{item.label}</span>{item.id === 'inbox' && !!summary?.pending && <span className={`ml-auto rounded-full px-2 py-0.5 text-xs ${view === item.id ? 'bg-background text-primary' : 'bg-white/15 text-white'}`}>{summary.pending}</span>}</Button>)}</nav>
+      <div className="mt-auto border-t border-white/15 pt-4 text-xs leading-6 text-white/75"><span className="mr-2 inline-block size-2 rounded-full bg-brand-turquoise" />MODO SOLO LECTURA<br /><small className="pl-4">Correo intacto · salidas bloqueadas.</small></div>
     </aside>
     <div className="min-w-0 flex-1">
       <header className="sticky top-0 z-20 flex h-16 items-center justify-between gap-4 border-b border-border bg-card px-4 sm:px-6 lg:px-10">
