@@ -1,14 +1,22 @@
 import { useCallback, useEffect, useState } from 'react'
-import { CircleCheck, LoaderCircle, QrCode, RefreshCw, WifiOff } from 'lucide-react'
+import { CircleCheck, LoaderCircle, QrCode, RefreshCw, Trash2, WifiOff } from 'lucide-react'
 import { api } from './api'
 import type { GowaPairing, GowaStatus } from './types'
 import { Alert } from './components/ui/alert'
 import { Badge } from './components/ui/badge'
 import { Button } from './components/ui/button'
 import { Card } from './components/ui/card'
+import { Input } from './components/ui/input'
 import { Skeleton } from './components/ui/skeleton'
 
 type PairingQr = { image: string; expiresAt: number }
+type GowaPurgeResult = {
+  phone_number: string
+  conversations: number
+  messages: number
+  drafts: number
+  booking_tasks: number
+}
 
 function statusText(status: GowaStatus | null, error: string) {
   if (error && !status) return 'No disponible'
@@ -35,6 +43,9 @@ export function GowaIntegrationCard() {
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [purgeOpen, setPurgeOpen] = useState(false)
+  const [purgeConfirmation, setPurgeConfirmation] = useState('')
+  const [purgeResult, setPurgeResult] = useState<GowaPurgeResult | null>(null)
 
   const refreshStatus = useCallback(async () => {
     const next = await api<GowaStatus>('/api/integrations/gowa')
@@ -86,6 +97,7 @@ export function GowaIntegrationCard() {
   async function connect() {
     setBusy(true)
     setError('')
+    setPurgeResult(null)
     try {
       const pairing = await api<GowaPairing>('/api/integrations/gowa/connect', { method: 'POST' })
       setQr({ image: pairing.qr_image, expiresAt: Date.now() + pairing.qr_duration * 1000 })
@@ -107,6 +119,37 @@ export function GowaIntegrationCard() {
     } catch (err) {
       setError((err as Error).message || 'No se pudo solicitar la reconexión.')
       setPairingPending(false)
+    } finally { setBusy(false) }
+  }
+
+  async function purgeSession() {
+    if (!status?.phone_number || purgeConfirmation !== status.phone_number) return
+    setBusy(true)
+    setError('')
+    try {
+      const result = await api<GowaPurgeResult>('/api/integrations/gowa/purge', {
+        method: 'POST',
+        body: JSON.stringify({
+          phone_number: status.phone_number,
+          confirmation: `BORRAR ${status.phone_number}`,
+        }),
+      })
+      setPurgeResult(result)
+      setPurgeOpen(false)
+      setPurgeConfirmation('')
+      setQr(null)
+      setPairingPending(false)
+      setStatus(current => current ? {
+        ...current,
+        registered: false,
+        is_connected: false,
+        is_logged_in: false,
+        phone_number: null,
+      } : current)
+      try { await refreshStatus() }
+      catch { setError('Datos borrados; no se pudo actualizar el estado de GOWA.') }
+    } catch (err) {
+      setError((err as Error).message || 'No se pudo borrar la sesión WhatsApp.')
     } finally { setBusy(false) }
   }
 
@@ -144,6 +187,13 @@ export function GowaIntegrationCard() {
     {connected && <Alert variant="success" className="mb-4 flex items-center gap-2">
       <CircleCheck size={17} aria-hidden="true" /> WhatsApp está conectado y listo para recibir mensajes.
     </Alert>}
+    {status?.phone_number && <p className="mb-4 text-sm text-muted-foreground">
+      Sesión vinculada: <strong className="font-semibold text-foreground">{status.phone_number}</strong>
+    </p>}
+
+    {purgeResult && <Alert variant="success" className="mb-4">
+      Se borraron {purgeResult.messages} mensajes, {purgeResult.conversations} conversaciones, {purgeResult.drafts} borradores y {purgeResult.booking_tasks} tareas de {purgeResult.phone_number}; también se eliminó la sesión de GOWA. Para volver a usarla, vincula el teléfono con un QR nuevo.
+    </Alert>}
 
     {status?.is_logged_in && !connected && <Alert variant="warning" className="mb-4 flex items-center gap-2">
       <WifiOff size={17} aria-hidden="true" /> La sesión sigue vinculada, pero GOWA está desconectado.
@@ -174,7 +224,51 @@ export function GowaIntegrationCard() {
       <Button variant="outline" onClick={() => void loadStatus()} disabled={busy || loading}>
         <RefreshCw size={15} aria-hidden="true" /> Actualizar estado
       </Button>
+      {canManage && status?.phone_number && <Button
+        type="button"
+        variant="destructive"
+        onClick={() => {
+          setPurgeOpen(open => !open)
+          setPurgeConfirmation('')
+          setPurgeResult(null)
+        }}
+        disabled={busy || loading}
+      >
+        <Trash2 size={16} aria-hidden="true" /> Borrar datos y desvincular
+      </Button>}
     </div>
+
+    {purgeOpen && status?.phone_number && <section className="mt-4 grid gap-3 rounded-lg border border-error-ink/30 bg-error-bg p-4 text-error-ink" aria-labelledby="gowa-purge-title">
+      <div>
+        <h3 id="gowa-purge-title" className="font-semibold">Borrar datos y cerrar la sesión</h3>
+        <p className="mt-1 text-sm leading-5">
+          Se eliminarán todas las conversaciones y los datos derivados de esta sesión compartida en la base de datos activa de AvantIA, además del historial y la sesión de GOWA. Para volver a recibir mensajes tendrás que vincular el teléfono otra vez. No afecta al email ni a archivos de copia de seguridad.
+        </p>
+      </div>
+      <label htmlFor="gowa-purge-confirmation" className="grid gap-1 text-sm font-medium">
+        Escribe exactamente {status.phone_number} para confirmar
+        <Input
+          id="gowa-purge-confirmation"
+          autoComplete="off"
+          value={purgeConfirmation}
+          onChange={event => setPurgeConfirmation(event.target.value)}
+          aria-describedby="gowa-purge-help"
+          className="border-error-ink/30 bg-background text-foreground"
+        />
+      </label>
+      <p id="gowa-purge-help" className="text-xs leading-5">
+        Se borrarán mensajes, análisis, borradores, tareas y auditoría de los chats. Se conservará solo una constancia administrativa con recuentos, sin el número ni el contenido. Esta acción no se puede deshacer.
+      </p>
+      <div className="flex flex-wrap gap-2">
+        <Button type="button" variant="destructive" onClick={() => void purgeSession()} disabled={busy || purgeConfirmation !== status.phone_number}>
+          {busy ? <LoaderCircle size={16} className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <Trash2 size={16} aria-hidden="true" />}
+          Confirmar borrado y desvincular
+        </Button>
+        <Button type="button" variant="outline" onClick={() => { setPurgeOpen(false); setPurgeConfirmation('') }} disabled={busy}>
+          Cancelar
+        </Button>
+      </div>
+    </section>}
 
     <p className="mt-4 text-xs leading-5 text-muted-foreground">El modo de solo lectura sigue bloqueando los envíos desde AvantIA.</p>
   </Card>
