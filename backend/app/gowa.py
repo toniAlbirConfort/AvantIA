@@ -162,7 +162,17 @@ async def start_gowa_pairing(settings: Settings | None = None) -> dict:
             # Only fetch GOWA's QR static files from the configured GOWA host.
             # Never trust the host returned in qr_link or allow redirects.
             qr_path = urlsplit(qr_link).path
-            filename = qr_path.removeprefix("/statics/images/qrcode/")
+            static_prefix = next(
+                (
+                    prefix
+                    for prefix in ("/statics/qrcode/", "/statics/images/qrcode/")
+                    if qr_path.startswith(prefix)
+                ),
+                None,
+            )
+            if static_prefix is None:
+                raise GowaServiceUnavailable
+            filename = qr_path.removeprefix(static_prefix)
             if not re.fullmatch(r"[A-Za-z0-9_-]+\.png", filename):
                 raise GowaServiceUnavailable
             try:
