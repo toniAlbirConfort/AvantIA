@@ -143,6 +143,14 @@ async def _download(page, browser, destination: Path) -> None:
                 if candidate.is_file():
                     source = candidate
                     break
+            if source is None and download_dir is not None:
+                candidates = [
+                    path
+                    for path in download_dir.iterdir()
+                    if path.is_file() and path.suffix.lower() == ".csv"
+                ]
+                if len(candidates) == 1:
+                    source = candidates[0]
             if source is not None:
                 break
             await asyncio.sleep(0.1)
