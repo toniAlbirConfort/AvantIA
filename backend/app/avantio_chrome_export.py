@@ -64,6 +64,15 @@ async def _click_visible_label(page, label: str, roles: tuple[str, ...]) -> None
         candidate = locator.nth(index)
         if await candidate.is_visible():
             visible.append(candidate)
+    if label in ("Reservas", "Más acciones") and len(visible) > 1:
+        # These text-only controls can be duplicated by dashboard and row content.
+        candidates = []
+        for candidate in visible:
+            bounds = await candidate.bounding_box()
+            if bounds is not None:
+                candidates.append((bounds["y"], candidate))
+        if candidates:
+            visible = [min(candidates, key=lambda item: item[0])[1]]
     if len(visible) == 1:
         await visible[0].click()
         return
