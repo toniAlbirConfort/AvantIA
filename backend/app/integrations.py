@@ -8,6 +8,7 @@ from email.message import EmailMessage
 import httpx
 
 from app.config import READ_ONLY_MODE, get_settings
+from app.gowa import gowa_device_id
 
 
 async def ollama_json(
@@ -63,12 +64,13 @@ async def gowa_send(chat_id: str, text: str) -> str | None:
         raise RuntimeError("Modo de solo lectura: envío de WhatsApp bloqueado")
     settings = get_settings()
     username, sep, password = settings.gowa_basic_auth.partition(":")
-    if not sep or not username or not settings.gowa_device_id:
+    device_id = gowa_device_id(settings)
+    if not sep or not username or not device_id:
         raise RuntimeError("GOWA no configurado")
     async with httpx.AsyncClient(timeout=20, auth=(username, password)) as client:
         response = await client.post(
             settings.gowa_url.rstrip("/") + "/send/message",
-            headers={"X-Device-Id": settings.gowa_device_id},
+            headers={"X-Device-Id": device_id},
             json={"phone": chat_id, "message": text},
         )
         response.raise_for_status()

@@ -16,6 +16,7 @@ import { Skeleton } from './components/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './components/ui/table'
 import { Textarea } from './components/ui/textarea'
 import { BrandLogo, BrandMark } from './components/BrandLogo'
+import { GowaIntegrationCard } from './GowaIntegrationCard'
 
 type View = 'summary' | 'inbox' | 'bookings' | 'properties' | 'planning' | 'imports' | 'integrations' | 'users'
 const navigation: { id: View; label: string; icon: typeof LayoutDashboard }[] = [
@@ -25,8 +26,8 @@ const navigation: { id: View; label: string; icon: typeof LayoutDashboard }[] = 
   { id: 'bookings', label: 'Prerreservas', icon: CalendarDays },
   { id: 'properties', label: 'Alojamientos', icon: House },
   { id: 'imports', label: 'Importaciones', icon: Upload },
-  { id: 'integrations', label: 'Integraciones', icon: Cable },
   { id: 'users', label: 'Usuarios', icon: Users },
+  { id: 'integrations', label: 'Integraciones', icon: Cable },
 ]
 const fieldLabels: Record<string, string> = {
   property_id: 'ID alojamiento', property_name: 'Nombre', capacity: 'Capacidad',
@@ -447,7 +448,7 @@ export default function App() {
         </Card>}
         {view === 'planning' && <Planning />}
         {view === 'imports' && <div className="grid items-start gap-4 xl:grid-cols-2"><Card className="p-4 sm:p-6"><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">CATÁLOGO Y RESERVAS</p><h2 className="mb-3 text-xl font-semibold">Importación supervisada</h2><p className="mb-5 text-sm leading-6 text-muted-foreground">Valida la exportación, revisa cambios e incidencias y confirma la nueva instantánea. Los CSV originales no se conservan.</p><SourceImportForm onDone={refresh} admin={user.role === 'admin'} /></Card><Card className="p-4 sm:p-6"><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">INTERVALOS</p><h2 className="mb-3 text-xl font-semibold">Importar disponibilidad</h2><p className="mb-5 text-sm leading-6 text-muted-foreground">El archivo describe intervalos con salida exclusiva y estado disponible u ocupado. Una importación inválida conserva la última válida.</p><ImportForm onDone={refresh} admin={user.role === 'admin'} /></Card><Card className="p-4 sm:p-6 xl:col-span-2"><ImportHistory imports={imports} /></Card></div>}
-        {view === 'integrations' && <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{integrations ? Object.entries(integrations).filter(([name]) => name !== 'mode').map(([name, value]) => <IntegrationCard key={name} name={name} value={value} />) : <Empty>Cargando integraciones…</Empty>}</div>}
+        {view === 'integrations' && <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{integrations ? <>{Object.entries(integrations).filter(([name]) => name !== 'mode' && (name !== 'whatsapp' || user.role === 'admin')).map(([name, value]) => name === 'whatsapp' ? <GowaIntegrationCard key={name} /> : <IntegrationCard key={name} name={name} value={value} />)}</> : <Empty>Cargando integraciones…</Empty>}</div>}
         {view === 'users' && user.role === 'admin' && <div className="grid items-start gap-4 xl:grid-cols-2"><Card className="p-5 sm:p-6"><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">ACCESO</p><h2 className="mb-4 text-xl font-semibold">Operadores</h2>{users.map(item => <div className="flex items-center justify-between gap-3 border-t border-border py-3" key={item.id}><strong className="text-sm">{item.username}</strong><Badge value={item.role} /></div>)}</Card><UserForm onDone={refresh} /></div>}
       </main>
     </div>
