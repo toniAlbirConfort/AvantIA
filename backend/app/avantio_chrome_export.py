@@ -82,6 +82,7 @@ async def _open_menu(page) -> None:
         'button.sidebar-toggle',
         'button:has(.fa-bars)',
         '[role="button"]:has(.fa-bars)',
+        'div.tabBarraSuperior.flexBarraSuperior',
         '.fa-bars',
     )
     for selector in selectors:
