@@ -77,7 +77,12 @@ async def _request_json(client: httpx.AsyncClient, method: str, path: str, **kwa
 
 
 def _device_is_registered(payload: dict, device_id: str) -> bool:
-    devices = payload.get("results")
+    if "results" not in payload:
+        raise GowaServiceUnavailable
+    devices = payload["results"]
+    if devices is None and payload.get("code") in (None, "SUCCESS"):
+        # GOWA v9.0.0 serializes its empty device registry as `results: null`.
+        return False
     if not isinstance(devices, list):
         raise GowaServiceUnavailable
     return any(
