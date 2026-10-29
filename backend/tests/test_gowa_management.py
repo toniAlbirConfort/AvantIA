@@ -154,6 +154,27 @@ def test_gowa_status_reports_registered_but_disconnected_device(db, monkeypatch)
         app.dependency_overrides.clear()
 
 
+def test_gowa_status_accepts_empty_device_registry(db, monkeypatch):
+    _configure(db, monkeypatch)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/devices":
+            return httpx.Response(200, json={"code": "SUCCESS", "results": None})
+        return httpx.Response(404)
+
+    _mock_gowa(monkeypatch, handler)
+    try:
+        with TestClient(app) as client:
+            admin_auth, _ = _tokens(client)
+            response = client.get("/api/integrations/gowa", headers=admin_auth)
+            assert response.status_code == 200
+            assert response.json()["registered"] is False
+            assert response.json()["is_connected"] is False
+            assert response.json()["is_logged_in"] is False
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_gowa_connect_creates_device_and_proxies_qr_without_trusting_returned_host(db, monkeypatch):
     _configure(db, monkeypatch)
     requests = []
@@ -162,7 +183,7 @@ def test_gowa_connect_creates_device_and_proxies_qr_without_trusting_returned_ho
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
         if request.url.path == "/devices" and request.method == "GET":
-            return httpx.Response(200, json={"results": []})
+            return httpx.Response(200, json={"code": "SUCCESS", "results": None})
         if request.url.path == "/devices" and request.method == "POST":
             assert json.loads(request.content) == {"device_id": "custom-device"}
             return httpx.Response(200, json={"results": {"id": "custom-device"}})
