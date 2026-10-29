@@ -17,9 +17,9 @@ function money(value: string) { return new Intl.NumberFormat('es-ES', { style: '
 function dateLabel(value: string | null) { return value ? new Intl.DateTimeFormat('es-ES', { dateStyle: 'long', timeZone: 'UTC' }).format(new Date(`${value}T00:00:00Z`)) : '—' }
 const stateLabel: Record<string, string> = { confirmed: 'Confirmada', pre_reservation: 'Prerreserva', paid: 'Pagada', unavailable: 'No disponible', owner: 'De propietario', inquiry: 'Petición de información', cancelled: 'Cancelada' }
 const stateStyle: Record<string, string> = {
-  confirmed: 'bg-success-bg text-success-ink', paid: 'bg-primary text-primary-foreground',
-  pre_reservation: 'bg-info-bg text-info-ink', owner: 'bg-secondary text-secondary-foreground',
-  unavailable: 'bg-error-bg text-error-ink', inquiry: 'bg-warning-bg text-warning-ink',
+  confirmed: 'bg-brand-turquoise text-brand-blue-ink', paid: 'bg-brand-orange text-primary-foreground',
+  pre_reservation: 'bg-brand-blue-light text-brand-blue-ink', owner: 'bg-secondary text-secondary-foreground',
+  unavailable: 'bg-error-bg text-error-ink', inquiry: 'bg-brand-yellow text-brand-yellow-ink',
   cancelled: 'bg-muted text-muted-foreground',
 }
 
