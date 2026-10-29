@@ -40,7 +40,7 @@ export function Planning() {
   const [data, setData] = useState<PlanningData | null>(null)
   const [selected, setSelected] = useState<PlanningBar | null>(null)
   const [error, setError] = useState('')
-  const [legendOpen, setLegendOpen] = useState(() => window.matchMedia('(min-width: 768px)').matches)
+  const [legendOpen, setLegendOpen] = useState(false)
   useEffect(() => {
     if (!start || !end || !Number.isFinite(dayDiff(start, end)) || dayDiff(start, end) < 1 || dayDiff(start, end) > 92) { setError('Selecciona un intervalo de 1 a 92 días.'); return }
     let cancelled = false
