@@ -40,9 +40,16 @@ services:
       target: api
     restart: unless-stopped
     env_file: .env
+    volumes:
+      - type: bind
+        source: ./.deploy-trigger
+        target: /run/avantia-deploy
+        bind:
+          create_host_path: true
     environment:
       OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11435}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-dania:16k}
+      DEPLOY_SIGNAL_PATH: /run/avantia-deploy/request.json
     depends_on:
       bootstrap:
         condition: service_completed_successfully

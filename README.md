@@ -38,6 +38,19 @@ El túnel conecta `127.0.0.1:11435` del equipo local con `127.0.0.1:11434` del s
 
 Configurar `APP_DOMAIN`, `PUBLIC_BASE_URL=https://<dominio>` y DNS hacia el VPS. Ejecutar `docker compose -f compose.yaml -f compose.prod.yaml up --build -d`. Caddy gestiona los certificados HTTPS. PostgreSQL no publica puertos. GOWA solo publica su interfaz en `127.0.0.1:3002`; acceder mediante túnel SSH, vincular el número dedicado por QR y configurar `GOWA_DEVICE_ID` con el ID real del dispositivo. No eliminar el volumen `gowa_session`.
 
+### Despliegue automático al fusionar un PR
+
+La tarea de Windows `AvantIA Production Auto Deploy` conserva el checkout, actualiza `origin/main` con fast-forward y reconstruye los contenedores mediante Docker Compose. Además del sondeo de respaldo cada cinco minutos, la API recibe el evento de GitHub y despierta la tarea al fusionarse un pull request en `main`. La tarea debe estar instalada en la sesión interactiva que mantiene Docker Desktop abierto.
+
+Después de incorporar por primera vez este cambio en producción:
+
+1. En el `.env` del servidor, define `GITHUB_DEPLOY_WEBHOOK_SECRET` con un secreto aleatorio fuerte. No lo guardes en Git ni lo compartas por chat.
+2. Reinicia la tarea para que lea la nueva versión de `scripts/deploy-prod-watch.ps1` con `Stop-ScheduledTask -TaskName 'AvantIA Production Auto Deploy'` y `Start-ScheduledTask -TaskName 'AvantIA Production Auto Deploy'`.
+3. Recrea la API para cargar el secreto: `docker compose -f compose.yaml -f compose.prod.yaml up -d --force-recreate api`.
+4. En GitHub, abre **Settings → Webhooks → Add webhook** para `toniAlbirConfort/AvantIA`. Usa `https://<APP_DOMAIN>/webhooks/github/deploy`, `application/json`, el mismo secreto y selecciona el evento **Pull requests**. Mantén activada la verificación TLS.
+
+La API acepta únicamente entregas firmadas de este repositorio para un PR cerrado y fusionado cuya base sea `main`. El vigilante comprueba el checkout limpio y el avance fast-forward antes de ejecutar `docker compose -f compose.yaml -f compose.prod.yaml up --build -d`. Si el webhook no llega, el sondeo periódico sigue detectando `origin/main`.
+
 En producción, Compose configura el worker y la API para usar `http://host.docker.internal:11434` con el modelo `dania:16k`, accesible desde el contenedor worker del servidor. Se puede sobrescribir con `OLLAMA_URL` y `OLLAMA_MODEL` en el `.env` del servidor. `GOWA_INTERNAL_CHAT_ID` indica el grupo o chat interno de avisos. Si está vacío, las tareas siguen visibles en el panel, pero no hay aviso WhatsApp. `MAIL_MESSAGE_URL_TEMPLATE` es opcional: puede contener `{message_id}` para abrir el correo en el webmail corporativo. El ID original siempre queda registrado.
 
 El desplegador debe permitir tráfico entrante 80/443 y restringir el acceso SSH y al túnel GOWA. Crear usuarios individuales desde la sección Usuarios. Los tokens de sesión duran ocho horas.
