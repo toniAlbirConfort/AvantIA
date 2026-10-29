@@ -38,6 +38,18 @@ def _resolve_output(output: Path) -> Path:
 
 
 async def _click_visible_label(page, label: str, roles: tuple[str, ...]) -> None:
+    if label == "Más acciones":
+        locator = page.get_by_text(label, exact=True)
+        for _ in range(40):
+            visible = False
+            for index in range(await locator.count()):
+                if await locator.nth(index).is_visible():
+                    visible = True
+                    break
+            if visible:
+                break
+            await page.wait_for_timeout(250)
+
     for role in roles:
         locator = page.get_by_role(role, name=label, exact=True)
         visible = []
