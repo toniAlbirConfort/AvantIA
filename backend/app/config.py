@@ -30,6 +30,8 @@ class Settings(BaseSettings):
     gowa_webhook_secret: str = ""
     gowa_device_id: str = ""
     gowa_internal_chat_id: str = ""
+    github_deploy_webhook_secret: str = ""
+    deploy_signal_path: str = "/run/avantia-deploy/request.json"
     imap_host: str = ""
     imap_port: int = 993
     imap_user: str = ""
