@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import json
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
@@ -14,10 +15,10 @@ from app.db import get_db
 from app.delivery import send_approved
 from app.main import app
 from app.models import Conversation, Draft, Job, Message, User
-from app.processing import analyze_message
+from app.processing import CLASSIFY_SYSTEM, EXTRACT_SYSTEM, analyze_message
 
 
-def test_gowa_duplicate_requires_approval_before_send(db, monkeypatch):
+def test_gowa_duplicate_is_classified_without_any_real_send(db, monkeypatch):
     settings = get_settings()
     monkeypatch.setattr(settings, "app_secret", "unit-test-secret-with-more-than-32-characters")
     monkeypatch.setattr(settings, "gowa_webhook_secret", "test-webhook-secret")
@@ -33,8 +34,14 @@ def test_gowa_duplicate_requires_approval_before_send(db, monkeypatch):
     app.dependency_overrides[get_db] = lambda: db
     sent = []
 
-    async def fake_ollama(system, user):
-        if "extractor" in system:
+    async def fake_ollama(system, user, **kwargs):
+        if system == CLASSIFY_SYSTEM:
+            return {
+                "classification": "demand",
+                "confidence": "high",
+                "reason": "Consulta disponibilidad.",
+            }
+        if system == EXTRACT_SYSTEM:
             return {
                 "property_query": "A",
                 "arrival": "2026-11-10",
@@ -47,7 +54,7 @@ def test_gowa_duplicate_requires_approval_before_send(db, monkeypatch):
 
     async def fake_send(chat, text):
         sent.append((chat, text))
-        return "out-1"
+        raise AssertionError("El modo de solo lectura debe bloquear el envío")
 
     monkeypatch.setattr("app.processing.ollama_json", fake_ollama)
     monkeypatch.setattr("app.delivery.gowa_send", fake_send)
@@ -87,22 +94,22 @@ def test_gowa_duplicate_requires_approval_before_send(db, monkeypatch):
             conv = db.scalar(select(Conversation))
             assert conv.status == "pending"
             approved = client.post(f"/api/conversations/{conv.id}/approve", headers=auth)
-            assert approved.status_code == 200
+            assert approved.status_code == 423
             assert sent == []
             assert (
                 client.post(f"/api/conversations/{conv.id}/approve", headers=auth).status_code
-                == 409
+                == 423
             )
             draft = db.scalar(select(Draft))
-            assert db.scalar(select(Job).where(Job.key == f"send:{draft.id}")) is not None
-            asyncio.run(send_approved(db, draft.id))
-            assert len(sent) == 1
-            assert draft.status == "sent"
+            assert db.scalar(select(Job).where(Job.key == f"send:{draft.id}")) is None
+            with pytest.raises(RuntimeError, match="solo lectura"):
+                asyncio.run(send_approved(db, draft.id))
+            assert sent == []
     finally:
         app.dependency_overrides.clear()
 
 
-def test_delivery_failure_is_not_automatically_retried(db, monkeypatch):
+def test_read_only_mode_blocks_delivery_before_provider_call(db, monkeypatch):
     from app.models import now
 
     conv = Conversation(
@@ -114,17 +121,22 @@ def test_delivery_failure_is_not_automatically_retried(db, monkeypatch):
     db.add(draft)
     db.commit()
 
+    sent = []
+
     async def broken_send(chat, text):
+        sent.append((chat, text))
         raise TimeoutError("connection lost")
 
     monkeypatch.setattr("app.delivery.gowa_send", broken_send)
-    asyncio.run(send_approved(db, draft.id))
-    assert draft.status == "delivery_unknown"
-    asyncio.run(send_approved(db, draft.id))
+    monkeypatch.setattr("app.delivery.smtp_send", lambda **kwargs: sent.append(kwargs))
+    with pytest.raises(RuntimeError, match="solo lectura"):
+        asyncio.run(send_approved(db, draft.id))
+    assert draft.status == "queued"
+    assert sent == []
     assert db.query(Message).count() == 0
 
 
-def test_new_inbound_supersedes_approved_draft(db, monkeypatch):
+def test_read_only_mode_blocks_approved_draft_even_after_new_inbound(db, monkeypatch):
     from datetime import UTC, datetime, timedelta
 
     from app.models import now
@@ -150,8 +162,10 @@ def test_new_inbound_supersedes_approved_draft(db, monkeypatch):
         sent.append(text)
 
     monkeypatch.setattr("app.delivery.gowa_send", fake_send)
-    asyncio.run(send_approved(db, draft.id))
-    assert draft.status == "superseded"
+    monkeypatch.setattr("app.delivery.smtp_send", lambda **kwargs: sent.append(kwargs))
+    with pytest.raises(RuntimeError, match="solo lectura"):
+        asyncio.run(send_approved(db, draft.id))
+    assert draft.status == "queued"
     assert sent == []
 
 
@@ -206,11 +220,13 @@ def test_availability_change_requires_draft_review(db, monkeypatch):
             auth = {"Authorization": f"Bearer {login.json()['token']}"}
             assert (
                 client.post(f"/api/conversations/{conv.id}/approve", headers=auth).status_code
-                == 409
+                == 423
             )
             detail = client.get(f"/api/conversations/{conv.id}", headers=auth).json()
             assert detail["analysis"]["availability_changed"]
-            assert detail["analysis"]["availability"]["status"] == "available"
+            # This test imports only the calendar; without fresh property and reservation
+            # snapshots the current availability service correctly requires a manual check.
+            assert detail["analysis"]["availability"]["status"] == "manual_check"
             edited = client.put(
                 f"/api/conversations/{conv.id}/draft",
                 headers=auth,
@@ -219,7 +235,7 @@ def test_availability_change_requires_draft_review(db, monkeypatch):
             assert edited.status_code == 200
             assert (
                 client.post(f"/api/conversations/{conv.id}/approve", headers=auth).status_code
-                == 200
+                == 423
             )
     finally:
         app.dependency_overrides.clear()

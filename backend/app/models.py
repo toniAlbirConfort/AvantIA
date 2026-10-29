@@ -47,6 +47,13 @@ class Conversation(Base):
     status: Mapped[str] = mapped_column(String(30), default="pending", index=True)
     priority: Mapped[str] = mapped_column(String(20), default="normal")
     assigned_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    active_classification: Mapped[str | None] = mapped_column(String(24), index=True)
+    # Stored as an identifier without a foreign key because Message already points back
+    # to Conversation; a second FK would make SQLAlchemy's messages relationship ambiguous.
+    active_classification_message_id: Mapped[int | None] = mapped_column(Integer)
+    classification_open: Mapped[bool] = mapped_column(Boolean, default=False)
+    classification_resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    classification_resolved_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
     analysis: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
@@ -74,6 +81,14 @@ class Message(Base):
     reply_to_id: Mapped[str | None] = mapped_column(String(500))
     references: Mapped[str | None] = mapped_column(Text)
     source_url: Mapped[str | None] = mapped_column(Text)
+    classification_label: Mapped[str | None] = mapped_column(String(24), index=True)
+    classification_confidence: Mapped[str | None] = mapped_column(String(12))
+    classification_reason: Mapped[str | None] = mapped_column(String(300))
+    classification_data: Mapped[dict | None] = mapped_column(JSON)
+    classification_override: Mapped[str | None] = mapped_column(String(24))
+    classification_model: Mapped[str | None] = mapped_column(String(100))
+    classification_reviewed_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    classification_reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     conversation: Mapped[Conversation] = relationship(back_populates="messages")
 
