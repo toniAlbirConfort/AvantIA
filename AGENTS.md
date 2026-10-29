@@ -5,7 +5,7 @@
 - El servidor local de producción es `DESKTOP-4597Q79`, accesible por SSH como `informatica2@192.168.0.158`.
 - La carpeta contenedora en el servidor es `C:\PROYECTOS ANTIGRAVITY`; la raíz del clon de este repositorio es `C:\PROYECTOS ANTIGRAVITY\AvantIA`.
 - El remoto canónico es `https://github.com/toniAlbirConfort/AvantIA.git` y la rama de despliegue es `main` (`origin/main`).
-- El despliegue se automatiza con la tarea programada `AvantIA Production Auto Deploy`. Esta consulta `origin/main` cada cinco minutos mientras la cuenta que ejecuta Docker Desktop está conectada.
+- El despliegue se automatiza con la tarea programada `AvantIA Production Auto Deploy`. Un webhook firmado de GitHub despierta la tarea cuando se fusiona un PR en `main`; el sondeo de `origin/main` cada cinco minutos queda como respaldo. La tarea requiere que la cuenta que ejecuta Docker Desktop esté conectada.
 - La tarea debe ejecutarse en la sesión interactiva de esa cuenta, porque Docker Desktop y su almacén de credenciales están vinculados a ella. No se debe configurar como una tarea que se ejecute aunque el usuario no haya iniciado sesión.
 
 ## Flujo de cambios y despliegue
@@ -24,6 +24,7 @@
 
    La tarea comprueba `origin/main`, actualiza únicamente si la rama local `main` está limpia y puede avanzar en fast-forward, y aplica el cambio con Docker Compose. Registra su actividad en `%LOCALAPPDATA%\AvantIA\deploy-watch.log`. Si falla una compilación o el despliegue, lo vuelve a intentar en la siguiente comprobación.
    Si se actualiza `scripts/deploy-prod-watch.ps1`, después de incorporar el cambio en el servidor hay que reiniciar la tarea una vez para que cargue el nuevo script: `Stop-ScheduledTask -TaskName 'AvantIA Production Auto Deploy'` y luego `Start-ScheduledTask -TaskName 'AvantIA Production Auto Deploy'`.
+   Para configurar el webhook una vez que la nueva versión esté desplegada, establece un secreto aleatorio en `GITHUB_DEPLOY_WEBHOOK_SECRET` dentro del `.env` del servidor, recrea `api` y añade en GitHub (`Settings → Webhooks`) la URL `https://<APP_DOMAIN>/webhooks/github/deploy`, contenido `application/json`, el mismo secreto y el evento `Pull requests`. Conserva la verificación TLS. El endpoint solo acepta PR fusionados con base `main`.
 7. Para desplegar manualmente o diagnosticar la tarea, desde `C:\PROYECTOS ANTIGRAVITY\AvantIA` ejecuta:
 
    ```powershell
