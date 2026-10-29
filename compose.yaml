@@ -84,7 +84,7 @@ services:
         bind:
           create_host_path: true
   gowa:
-    image: ghcr.io/aldinokemal/go-whatsapp-web-multidevice:v9.0.0
+    image: ghcr.io/aldinokemal/go-whatsapp-web-multidevice:v9.6.0
     command: ["rest"]
     restart: unless-stopped
     environment:
