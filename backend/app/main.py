@@ -27,10 +27,13 @@ from app.db import get_db
 from app.gowa import (
     GowaDeviceNotRegistered,
     GowaNotConfigured,
+    GowaSessionPhoneMismatch,
     GowaServiceUnavailable,
+    delete_gowa_device_for_phone,
     get_gowa_status,
     gowa_device_id,
     gowa_is_configured,
+    normalize_phone_number,
     reconnect_gowa,
     start_gowa_pairing,
 )
@@ -56,6 +59,7 @@ from app.planning import (
     preview_import,
     properties_view,
 )
+from app.whatsapp_purge import purge_whatsapp_records
 
 app = FastAPI(title="AvantIA", version="0.1.0")
 app.add_middleware(
@@ -85,6 +89,11 @@ class UserIn(BaseModel):
 class DraftIn(BaseModel):
     text: str = Field(min_length=1, max_length=5000)
     expected_draft_id: int | None = None
+
+
+class GowaPurgeIn(BaseModel):
+    phone_number: str = Field(min_length=8, max_length=24)
+    confirmation: str = Field(min_length=8, max_length=40)
 
 
 class AssignmentIn(BaseModel):
@@ -854,6 +863,60 @@ async def gowa_reconnect(admin: Admin) -> dict:
     except GowaServiceUnavailable as exc:
         raise HTTPException(502, "No se pudo solicitar la reconexión a GOWA") from exc
     return {"status": "reconnecting"}
+
+
+@app.post("/api/integrations/gowa/purge")
+async def gowa_purge(body: GowaPurgeIn, admin: Admin, db: Db) -> JSONResponse:
+    phone_number = normalize_phone_number(body.phone_number)
+    if phone_number is None:
+        raise HTTPException(422, "Introduce un número de teléfono internacional válido")
+    if body.confirmation != f"BORRAR {phone_number}":
+        raise HTTPException(400, "Escribe BORRAR seguido del número de sesión para confirmar")
+
+    device_deleted = False
+    try:
+        counts = purge_whatsapp_records(db)
+        await delete_gowa_device_for_phone(phone_number)
+        device_deleted = True
+        # Catch webhook deliveries that were already in flight while GOWA removed the device.
+        late_counts = purge_whatsapp_records(db)
+        counts = {key: count + late_counts.get(key, 0) for key, count in counts.items()}
+        # Keep a minimal, non-identifying record that an admin performed a purge.
+        db.add(
+            AuditEvent(
+                actor_user_id=admin.id,
+                action="whatsapp.session.purged",
+                detail=counts,
+            )
+        )
+        db.commit()
+    except GowaNotConfigured as exc:
+        db.rollback()
+        raise HTTPException(503, "Falta configurar el servicio GOWA") from exc
+    except GowaDeviceNotRegistered as exc:
+        db.rollback()
+        raise HTTPException(409, "No hay una sesión WhatsApp activa para ese número") from exc
+    except GowaSessionPhoneMismatch as exc:
+        db.rollback()
+        raise HTTPException(
+            409, "El número no coincide con la sesión WhatsApp activa; no se borró ningún dato"
+        ) from exc
+    except GowaServiceUnavailable as exc:
+        db.rollback()
+        raise HTTPException(502, "No se pudo confirmar el borrado en GOWA; AvantIA conservó los datos") from exc
+    except Exception as exc:
+        db.rollback()
+        if device_deleted:
+            raise HTTPException(
+                500,
+                "GOWA se desvinculó, pero AvantIA no pudo confirmar el borrado local; contacta con un administrador",
+            ) from exc
+        raise
+
+    return JSONResponse(
+        {"status": "deleted", "phone_number": phone_number, **counts},
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.post("/webhooks/gowa")

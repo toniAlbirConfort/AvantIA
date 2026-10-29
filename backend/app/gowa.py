@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import base64
 import re
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 import httpx
 
@@ -22,6 +22,29 @@ class GowaDeviceNotRegistered(Exception):
 
 class GowaServiceUnavailable(Exception):
     pass
+
+
+class GowaSessionPhoneMismatch(Exception):
+    pass
+
+
+def normalize_phone_number(value: str | None) -> str | None:
+    if not isinstance(value, str):
+        return None
+    compact = re.sub(r"[\s().-]", "", value)
+    if not re.fullmatch(r"\+?[1-9]\d{7,14}", compact):
+        return None
+    return "+" + compact.lstrip("+")
+
+
+def _phone_number_from_jid(value: object) -> str | None:
+    if not isinstance(value, str) or "@" not in value:
+        return None
+    local_part, server = value.split("@", 1)
+    if server.lower() != "s.whatsapp.net":
+        return None
+    local_part = local_part.split(":", 1)[0]
+    return normalize_phone_number("+" + local_part)
 
 
 def gowa_device_id(settings: Settings | None = None) -> str:
@@ -133,14 +156,19 @@ async def get_gowa_status(settings: Settings | None = None) -> dict:
     results = payload.get("results")
     if not isinstance(results, dict):
         raise GowaServiceUnavailable
-    return {
+    is_logged_in = bool(results.get("is_logged_in"))
+    status = {
         "configured": True,
         "service_available": True,
         "device_id": device_id,
         "registered": True,
         "is_connected": bool(results.get("is_connected")),
-        "is_logged_in": bool(results.get("is_logged_in")),
+        "is_logged_in": is_logged_in,
     }
+    phone_number = _phone_number_from_jid(results.get("jid")) if is_logged_in else None
+    if phone_number:
+        status["phone_number"] = phone_number
+    return status
 
 
 async def start_gowa_pairing(settings: Settings | None = None) -> dict:
@@ -209,5 +237,40 @@ async def reconnect_gowa(settings: Settings | None = None) -> None:
             await _request_json(
                 client, "GET", "/app/reconnect", headers={"X-Device-Id": device_id}
             )
+    except httpx.HTTPError as exc:
+        raise GowaServiceUnavailable from exc
+
+
+async def delete_gowa_device_for_phone(
+    expected_phone_number: str, settings: Settings | None = None
+) -> None:
+    current = settings or get_settings()
+    expected = normalize_phone_number(expected_phone_number)
+    if expected is None:
+        raise GowaSessionPhoneMismatch
+
+    username, password, device_id = _credentials(current)
+    try:
+        async with _client(current, username, password) as client:
+            if not await _registered_devices(client, device_id):
+                raise GowaDeviceNotRegistered
+            payload = await _request_json(
+                client, "GET", "/app/status", headers={"X-Device-Id": device_id}
+            )
+            results = payload.get("results")
+            if not isinstance(results, dict) or not results.get("is_logged_in"):
+                raise GowaSessionPhoneMismatch
+            if _phone_number_from_jid(results.get("jid")) != expected:
+                raise GowaSessionPhoneMismatch
+
+            # GOWA v9 deletes the device slot, WhatsApp session, and its stored chat data.
+            try:
+                response = await client.delete(f"/devices/{quote(device_id, safe='')}")
+                response.raise_for_status()
+            except httpx.HTTPError as exc:
+                # A dropped response may follow a successful DELETE. Check the registry
+                # before reporting failure so the caller can finish its local purge.
+                if await _registered_devices(client, device_id):
+                    raise GowaServiceUnavailable from exc
     except httpx.HTTPError as exc:
         raise GowaServiceUnavailable from exc
