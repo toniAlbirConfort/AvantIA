@@ -75,9 +75,10 @@ if (-not (Test-Path -LiteralPath $pythonPath -PathType Leaf)) {
 & $pythonPath -m pip install --disable-pip-version-check --no-warn-script-location 'playwright==1.64.1'
 if ($LASTEXITCODE -ne 0) { throw 'No se pudo instalar Playwright en el entorno del servidor.' }
 
-$identity = "$env:USERDOMAIN\$env:USERNAME"
+$userSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$userAccessRule = "*${userSid}:(OI)(CI)F"
 & icacls.exe $importPath /inheritance:r /grant:r `
-    "${identity}:(OI)(CI)F" '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null
+    $userAccessRule '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'No se pudieron restringir los permisos de la carpeta temporal del CSV.' }
 
 $composeOutput = & docker compose -f (Join-Path $repoRoot 'compose.yaml') `
