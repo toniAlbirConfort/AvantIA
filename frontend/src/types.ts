@@ -53,3 +53,13 @@ export type ImportPreview = { dataset: string; checksum: string; rows: number; e
 export type Property = { id: string; name: string; capacity: number; active: boolean; category: string; building: string | null; city: string | null; address: string | null; status_original: string; source_row: number; batch_id: number }
 export type PlanningBar = { locator: string; property_id: string; status: string; status_original: string; start_date: string; end_date: string; created_on: string | null; nights: number; adults: number; children: number; infants: number; display_name: string; portal: string | null; total: string; net: string; tax: string; paid: string; pending: string }
 export type PlanningData = { start: string; end: string; property_batch: { id: number; filename: string; created_at: string; rows: number } | null; reservation_batch: { id: number; filename: string; created_at: string; rows: number } | null; reservation_coverage: (ReservationCoverage & { effective_rows: number }) | null; reservations_in_range: number; properties: { id: string; name: string; capacity: number; building: string | null; active: boolean; category: string }[]; bars: PlanningBar[]; inquiries: PlanningBar[]; cancellations: PlanningBar[]; warnings: ImportIssue[] }
+export type ReservationRecord = PlanningBar & { property_name: string }
+export type ReservationPropertyOption = { id: string; name: string }
+export type ReservationsResponse = {
+  items: ReservationRecord[]
+  total: number
+  offset: number
+  limit: number
+  has_snapshot: boolean
+  properties: ReservationPropertyOption[]
+}
