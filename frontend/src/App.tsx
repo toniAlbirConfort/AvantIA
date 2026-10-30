@@ -24,12 +24,12 @@ import { MessageClassificationControl } from './ClassificationControls'
 type View = 'reservations' | 'summary' | 'inbox' | 'bookings' | 'properties' | 'tariffs' | 'planning' | 'imports' | 'integrations' | 'users'
 const navigation: { id: View; label: string; icon: typeof LayoutDashboard }[] = [
   { id: 'reservations', label: 'Reservas', icon: CalendarDays },
-  { id: 'summary', label: 'Resumen', icon: LayoutDashboard },
   { id: 'planning', label: 'Planning', icon: CalendarRange },
+  { id: 'tariffs', label: 'Tarifas', icon: Tag },
   { id: 'inbox', label: 'Bandeja', icon: Inbox },
   { id: 'bookings', label: 'Prerreservas', icon: ClipboardList },
   { id: 'properties', label: 'Alojamientos', icon: House },
-  { id: 'tariffs', label: 'Tarifas', icon: Tag },
+  { id: 'summary', label: 'Resumen', icon: LayoutDashboard },
   { id: 'imports', label: 'Importaciones', icon: Upload },
   { id: 'users', label: 'Usuarios', icon: Users },
   { id: 'integrations', label: 'Integraciones', icon: Cable },
@@ -209,6 +209,22 @@ export default function App() {
   const senderRequestVersion = useRef(0)
   const inboxFilterVersion = useRef(0)
   const [mobileMenu, setMobileMenu] = useState(false)
+  const wasMobileMenuOpen = useRef(false)
+
+  useEffect(() => {
+    if (mobileMenu) document.getElementById('mobile-menu-close')?.focus()
+    else if (wasMobileMenuOpen.current) document.getElementById('mobile-menu-trigger')?.focus()
+    wasMobileMenuOpen.current = mobileMenu
+  }, [mobileMenu])
+
+  useEffect(() => {
+    if (!mobileMenu) return
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setMobileMenu(false)
+    }
+    window.addEventListener('keydown', closeOnEscape)
+    return () => window.removeEventListener('keydown', closeOnEscape)
+  }, [mobileMenu])
 
   useEffect(() => {
     if (!token()) return
@@ -370,7 +386,12 @@ export default function App() {
   }
   const section = navigation.find(item => item.id === view)?.label || 'Reservas'
   const visibleNavigation = navigation.filter(item => item.id !== 'users' || user.role === 'admin')
-  const renderNavigation = (compact = false) => visibleNavigation.map(item => <Button key={item.id} type="button" variant="ghost" aria-current={view === item.id ? 'page' : undefined} className={`min-h-10 shrink-0 gap-2 px-2.5 text-xs xl:px-3 xl:text-sm ${compact ? 'w-full justify-start text-left' : 'justify-center'} ${view === item.id ? 'bg-brand-orange text-white hover:bg-brand-orange/90 hover:text-white' : 'text-white/80 hover:bg-white/10 hover:text-white'}`} onClick={() => navigate(item.id)}><item.icon size={16} strokeWidth={1.8} /><span>{item.label}</span>{item.id === 'inbox' && !!summary?.pending && <span className={`rounded-full px-1.5 py-0.5 text-[0.65rem] ${view === item.id ? 'bg-background text-primary' : 'bg-white/15 text-white'}`}>{summary.pending}</span>}</Button>)
+  const renderNavigation = () => visibleNavigation.map(item => <Button key={item.id} type="button" variant="ghost" aria-current={view === item.id ? 'page' : undefined} className={`min-h-11 w-full justify-start gap-3 px-3 text-left text-sm ${view === item.id ? 'bg-brand-orange text-white hover:bg-brand-orange/90 hover:text-white' : 'text-white/80 hover:bg-white/10 hover:text-white'}`} onClick={() => navigate(item.id)}><item.icon size={17} strokeWidth={1.8} /><span className="min-w-0 flex-1 truncate">{item.label}</span>{item.id === 'inbox' && !!summary?.pending && <span className={`rounded-full px-1.5 py-0.5 text-[0.65rem] ${view === item.id ? 'bg-background text-primary' : 'bg-white/15 text-white'}`}>{summary.pending}</span>}</Button>)
+  const renderAccount = () => <div className="flex min-w-0 items-center gap-3">
+    <span className="grid size-9 shrink-0 place-items-center rounded bg-brand-turquoise text-sm font-semibold text-brand-charcoal">{user.username.slice(0, 1).toUpperCase()}</span>
+    <span className="min-w-0 flex-1"><span className="block truncate text-sm">{user.username}</span><small className="block text-xs text-white/65">{user.role === 'admin' ? 'Administradora' : 'Operador'}</small></span>
+    <Button type="button" variant="ghost" size="icon" className="shrink-0 text-white hover:bg-white/10 hover:text-white" onClick={() => { setToken(null); setUser(null) }} aria-label="Cerrar sesión"><LogOut size={17} /></Button>
+  </div>
   const readOnlyMode = integrations?.mode?.read_only !== false
   const propertyCategories = [...new Set(properties.map(item => item.category).filter(Boolean))]
     .sort((left, right) => left.localeCompare(right, 'es-ES'))
@@ -393,20 +414,30 @@ export default function App() {
   }
 
   return <div className="min-h-screen bg-background text-foreground">
-      <header className="sticky top-0 z-30 bg-brand-charcoal text-white shadow-sm">
-        <div className="flex h-16 items-center gap-3 px-3 sm:px-5 lg:gap-4 lg:px-7">
-          <Button type="button" variant="ghost" className="h-11 shrink-0 px-1.5 text-white hover:bg-white/10 hover:text-white" onClick={() => navigate('reservations')} aria-label="Ir a Reservas"><BrandLogo className="text-white" /></Button>
-          <nav className="hidden min-w-0 flex-1 items-center gap-0.5 overflow-x-auto lg:flex" aria-label="Principal">{renderNavigation()}</nav>
-          <Button type="button" variant="ghost" size="icon" className="text-white hover:bg-white/10 hover:text-white lg:hidden" onClick={() => setMobileMenu(open => !open)} aria-expanded={mobileMenu} aria-controls="mobile-primary-navigation" aria-label={mobileMenu ? 'Cerrar menú' : 'Abrir menú'}>{mobileMenu ? <X size={20} /> : <Menu size={20} />}</Button>
-          <div className="ml-auto flex min-w-0 shrink-0 items-center gap-2 sm:gap-3 lg:ml-0">
-            <span className="grid size-8 shrink-0 place-items-center rounded bg-brand-turquoise text-sm font-semibold text-brand-charcoal">{user.username.slice(0, 1).toUpperCase()}</span>
-            <span className="hidden min-w-0 xl:block"><span className="block max-w-28 truncate text-sm">{user.username}</span><small className="block text-xs text-white/65">{user.role === 'admin' ? 'Administradora' : 'Operador'}</small></span>
-            <Button type="button" variant="ghost" size="icon" className="shrink-0 text-white hover:bg-white/10 hover:text-white" onClick={() => { setToken(null); setUser(null) }} aria-label="Cerrar sesión"><LogOut size={17} /></Button>
-          </div>
+      <aside className="fixed inset-y-0 left-0 z-40 hidden w-64 flex-col bg-brand-charcoal text-white shadow-sm lg:flex" aria-label="Navegación lateral">
+        <div className="flex h-20 shrink-0 items-center border-b border-white/10 px-4">
+          <Button type="button" variant="ghost" className="h-12 min-w-0 px-1.5 text-white hover:bg-white/10 hover:text-white" onClick={() => navigate('reservations')} aria-label="Ir a Reservas"><BrandLogo className="text-white" /></Button>
         </div>
-        {mobileMenu && <nav id="mobile-primary-navigation" className="grid grid-cols-2 gap-1 border-t border-white/15 px-3 py-3 lg:hidden" aria-label="Principal">{renderNavigation(true)}</nav>}
-      </header>
-      <main className={`mx-auto w-full ${view === 'reservations' ? 'max-w-none px-4 py-5 sm:px-6 lg:px-8' : 'max-w-screen-2xl px-4 py-6 sm:px-6 lg:px-10 lg:py-9'}`}>
+        <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto px-3 py-4" aria-label="Principal">{renderNavigation()}</nav>
+        <div className="shrink-0 border-t border-white/10 p-4">{renderAccount()}</div>
+      </aside>
+      {mobileMenu && <>
+        <button type="button" className="fixed inset-0 z-40 bg-black/50 lg:hidden" aria-label="Cerrar menú de navegación" onClick={() => setMobileMenu(false)} />
+        <aside className="fixed inset-y-0 left-0 z-50 flex w-72 flex-col bg-brand-charcoal text-white shadow-xl lg:hidden" aria-label="Panel de navegación">
+          <div className="flex h-20 shrink-0 items-center justify-between gap-3 border-b border-white/10 px-4">
+            <Button type="button" variant="ghost" className="h-12 min-w-0 px-1.5 text-white hover:bg-white/10 hover:text-white" onClick={() => navigate('reservations')} aria-label="Ir a Reservas"><BrandLogo className="text-white" /></Button>
+            <Button id="mobile-menu-close" type="button" variant="ghost" size="icon" className="shrink-0 text-white hover:bg-white/10 hover:text-white" onClick={() => setMobileMenu(false)} aria-label="Cerrar menú"><X size={20} /></Button>
+          </div>
+          <nav id="mobile-primary-navigation" className="min-h-0 flex-1 space-y-1 overflow-y-auto px-3 py-4" aria-label="Principal">{renderNavigation()}</nav>
+          <div className="shrink-0 border-t border-white/10 p-4">{renderAccount()}</div>
+        </aside>
+      </>}
+      <div className="min-h-screen min-w-0 lg:ml-64">
+        <header className="sticky top-0 z-30 flex h-14 items-center gap-3 bg-brand-charcoal px-3 text-white shadow-sm lg:hidden">
+          <Button id="mobile-menu-trigger" type="button" variant="ghost" size="icon" className="text-white hover:bg-white/10 hover:text-white" onClick={() => setMobileMenu(true)} aria-expanded={mobileMenu} aria-controls={mobileMenu ? 'mobile-primary-navigation' : undefined} aria-label="Abrir menú de navegación"><Menu size={20} /></Button>
+          <span className="text-sm font-semibold">AvantIA</span>
+        </header>
+        <main className={`mx-auto w-full ${view === 'reservations' ? 'max-w-none px-4 py-5 sm:px-6 lg:px-8' : 'max-w-screen-2xl px-4 py-6 sm:px-6 lg:px-10 lg:py-9'}`}>
         {view !== 'reservations' && <div className="mb-6 flex flex-wrap items-end justify-between gap-4"><div><p className="mb-2 text-xs font-semibold uppercase tracking-wide text-primary">TU ESPACIO DE HOSPITALIDAD <span className="px-1 text-muted-foreground">/</span> {section.toUpperCase()}</p><h1 className="mb-2 text-3xl font-semibold leading-tight sm:text-4xl">{section}</h1><p className="max-w-3xl text-sm leading-6 text-muted-foreground">{view === 'summary' ? 'Cada conversación, en su sitio. La atención empieza aquí.' : view === 'inbox' ? 'Lee el contexto, revisa el borrador y decide cómo responder.' : view === 'bookings' ? 'Prerreservas que necesitan una mirada y seguimiento humano.' : view === 'imports' ? 'Fuentes y disponibilidad, siempre con su origen a la vista.' : view === 'planning' ? 'Una vista clara de las estancias y los huecos disponibles.' : view === 'tariffs' ? 'Consulta los importes por temporada y grupo tarifario.' : 'La información operativa de AvantIA, reunida con cuidado.'}</p></div><Button variant="outline" onClick={() => view === 'tariffs' ? setTariffRefreshVersion(version => version + 1) : void refresh()} disabled={busy}><RefreshCw size={15} /> {view === 'tariffs' ? 'Actualizar tarifas' : 'Actualizar'}</Button></div>}
         {readOnlyMode && view !== 'reservations' && <Alert variant="info" role="status" className="mb-5 flex flex-wrap items-center gap-x-4 gap-y-1"><strong className="text-xs">MODO DESARROLLO · SOLO LECTURA</strong><span>IMAP se consulta sin modificar correos. Los envíos de email y WhatsApp están bloqueados.</span></Alert>}
         {error && <Alert variant="destructive" className="mb-5 flex items-center justify-between gap-4"><span>{error}</span><Button variant="ghost" size="icon" onClick={() => setError('')} aria-label="Cerrar aviso"><X size={16} /></Button></Alert>}
@@ -488,7 +519,8 @@ export default function App() {
         {view === 'imports' && <div className="grid items-start gap-4 xl:grid-cols-2"><Card className="p-4 sm:p-6"><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">CATÁLOGO Y RESERVAS</p><h2 className="mb-3 text-xl font-semibold">Importación supervisada</h2><p className="mb-5 text-sm leading-6 text-muted-foreground">Valida la exportación, revisa cambios e incidencias y confirma la nueva instantánea. Los CSV originales no se conservan.</p><SourceImportForm onDone={refresh} admin={user.role === 'admin'} /></Card><Card className="p-4 sm:p-6"><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">INTERVALOS</p><h2 className="mb-3 text-xl font-semibold">Importar disponibilidad</h2><p className="mb-5 text-sm leading-6 text-muted-foreground">El archivo describe intervalos con salida exclusiva y estado disponible u ocupado. Una importación inválida conserva la última válida.</p><ImportForm onDone={refresh} admin={user.role === 'admin'} /></Card><Card className="p-4 sm:p-6 xl:col-span-2"><ImportHistory imports={imports} /></Card></div>}
         {view === 'integrations' && <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{integrations ? <>{Object.entries(integrations).filter(([name]) => name !== 'mode' && (name !== 'whatsapp' || user.role === 'admin')).map(([name, value]) => name === 'whatsapp' ? <GowaIntegrationCard key={name} /> : <IntegrationCard key={name} name={name} value={value} />)}</> : <Empty>Cargando integraciones…</Empty>}</div>}
         {view === 'users' && user.role === 'admin' && <div className="grid items-start gap-4 xl:grid-cols-2"><Card className="p-5 sm:p-6"><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">ACCESO</p><h2 className="mb-4 text-xl font-semibold">Operadores</h2>{users.map(item => <div className="flex items-center justify-between gap-3 border-t border-border py-3" key={item.id}><strong className="text-sm">{item.username}</strong><Badge value={item.role} /></div>)}</Card><UserForm onDone={refresh} /></div>}
-      </main>
+        </main>
+      </div>
   </div>
 }
 
