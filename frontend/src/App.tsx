@@ -2,8 +2,9 @@ import { DragEvent, FormEvent, useCallback, useEffect, useRef, useState } from '
 import { api, setToken, token } from './api'
 import { Planning } from './Planning'
 import { ImportHistory, SourceImportForm } from './SourceImports'
+import { Reservations } from './Reservations'
 import type { ClassificationLabel, Conversation, InboxResponse, InboxThread, ImportBatch, Message, Property, Summary, User } from './types'
-import { ArrowLeft, ArrowRight, CalendarDays, CalendarRange, Cable, ChevronDown, ChevronRight, House, Inbox, LayoutDashboard, LogOut, Menu, RefreshCw, Search, Upload, Users, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, CalendarDays, CalendarRange, Cable, ChevronDown, ClipboardList, House, Inbox, LayoutDashboard, LogOut, Menu, RefreshCw, Search, Upload, Users, X } from 'lucide-react'
 import { EmailPreviewDialog } from './EmailPreviewDialog'
 import { EmailMessageContent } from './EmailMessageContent'
 import { Badge as UiBadge } from './components/ui/badge'
@@ -19,12 +20,13 @@ import { BrandLogo, BrandMark } from './components/BrandLogo'
 import { GowaIntegrationCard } from './GowaIntegrationCard'
 import { MessageClassificationControl } from './ClassificationControls'
 
-type View = 'summary' | 'inbox' | 'bookings' | 'properties' | 'planning' | 'imports' | 'integrations' | 'users'
+type View = 'reservations' | 'summary' | 'inbox' | 'bookings' | 'properties' | 'planning' | 'imports' | 'integrations' | 'users'
 const navigation: { id: View; label: string; icon: typeof LayoutDashboard }[] = [
+  { id: 'reservations', label: 'Reservas', icon: CalendarDays },
   { id: 'summary', label: 'Resumen', icon: LayoutDashboard },
   { id: 'planning', label: 'Planning', icon: CalendarRange },
   { id: 'inbox', label: 'Bandeja', icon: Inbox },
-  { id: 'bookings', label: 'Prerreservas', icon: CalendarDays },
+  { id: 'bookings', label: 'Prerreservas', icon: ClipboardList },
   { id: 'properties', label: 'Alojamientos', icon: House },
   { id: 'imports', label: 'Importaciones', icon: Upload },
   { id: 'users', label: 'Usuarios', icon: Users },
@@ -165,7 +167,7 @@ export default function App() {
   const [user, setUser] = useState<User | null>(null)
   const [checking, setChecking] = useState(!!token())
   const path = window.location.pathname
-  const [view, setView] = useState<View>(path.startsWith('/inbox') ? 'inbox' : path.startsWith('/bookings') ? 'bookings' : navigation.find(item => path === `/${item.id}`)?.id || 'summary')
+  const [view, setView] = useState<View>(path.startsWith('/inbox') ? 'inbox' : path.startsWith('/bookings') ? 'bookings' : navigation.find(item => path === `/${item.id}`)?.id || 'reservations')
   const [selectedId, setSelectedId] = useState<number | null>(Number(path.split('/')[2]) || null)
   const [summary, setSummary] = useState<Summary | null>(null)
   const [items, setItems] = useState<Conversation[]>([])
@@ -363,7 +365,9 @@ export default function App() {
     setStatusFilter(''); setChannelFilter(''); setPriorityFilter('')
     setClassificationFilter('')
   }
-  const section = navigation.find(item => item.id === view)?.label || 'Resumen'
+  const section = navigation.find(item => item.id === view)?.label || 'Reservas'
+  const visibleNavigation = navigation.filter(item => item.id !== 'users' || user.role === 'admin')
+  const renderNavigation = (compact = false) => visibleNavigation.map(item => <Button key={item.id} type="button" variant="ghost" aria-current={view === item.id ? 'page' : undefined} className={`min-h-10 shrink-0 gap-2 px-2.5 text-xs xl:px-3 xl:text-sm ${compact ? 'w-full justify-start text-left' : 'justify-center'} ${view === item.id ? 'bg-brand-orange text-white hover:bg-brand-orange/90 hover:text-white' : 'text-white/80 hover:bg-white/10 hover:text-white'}`} onClick={() => navigate(item.id)}><item.icon size={16} strokeWidth={1.8} /><span>{item.label}</span>{item.id === 'inbox' && !!summary?.pending && <span className={`rounded-full px-1.5 py-0.5 text-[0.65rem] ${view === item.id ? 'bg-background text-primary' : 'bg-white/15 text-white'}`}>{summary.pending}</span>}</Button>)
   const readOnlyMode = integrations?.mode?.read_only !== false
   const propertyCategories = [...new Set(properties.map(item => item.category).filter(Boolean))]
     .sort((left, right) => left.localeCompare(right, 'es-ES'))
@@ -385,25 +389,27 @@ export default function App() {
     setPropertyCityFilter('')
   }
 
-  return <div className="min-h-screen bg-background text-foreground md:flex">
-    {mobileMenu && <button type="button" className="fixed inset-0 z-30 bg-background/80 md:hidden" onClick={() => setMobileMenu(false)} aria-label="Cerrar menú" />}
-    <aside className={`fixed inset-y-0 left-0 z-40 flex h-screen w-64 flex-col border-r border-brand-charcoal bg-brand-charcoal p-4 text-white transition-transform motion-reduce:transition-none md:sticky md:top-0 md:z-10 md:translate-x-0 ${mobileMenu ? 'translate-x-0' : '-translate-x-full'}`}>
-      <Button variant="ghost" className="mb-6 min-h-16 justify-start gap-3 rounded-none border-b border-white/15 px-2 pb-5 text-left text-white hover:bg-white/10 hover:text-white" onClick={() => navigate('summary')} aria-label="Ir al resumen"><BrandLogo className="text-white" /></Button>
-      <div className="mb-3 px-3 text-[0.65rem] font-semibold uppercase tracking-wide text-white/65">ESPACIO DE TRABAJO</div>
-      <nav className="grid gap-1" aria-label="Principal">{navigation.filter(item => item.id !== 'users' || user.role === 'admin').map(item => <Button key={item.id} variant="ghost" className={`min-h-11 w-full justify-start gap-3 px-3 text-left ${view === item.id ? 'bg-brand-orange text-white hover:bg-brand-orange/90 hover:text-white' : 'text-white/75 hover:bg-white/10 hover:text-white'}`} onClick={() => navigate(item.id)}><item.icon size={18} strokeWidth={1.7} /><span>{item.label}</span>{item.id === 'inbox' && !!summary?.pending && <span className={`ml-auto rounded-full px-2 py-0.5 text-xs ${view === item.id ? 'bg-background text-primary' : 'bg-white/15 text-white'}`}>{summary.pending}</span>}</Button>)}</nav>
-      <div className="mt-auto border-t border-white/15 pt-4 text-xs leading-6 text-white/75"><span className="mr-2 inline-block size-2 rounded-full bg-brand-turquoise" />MODO SOLO LECTURA<br /><small className="pl-4">Correo intacto · salidas bloqueadas.</small></div>
-    </aside>
-    <div className="min-w-0 flex-1">
-      <header className="sticky top-0 z-20 flex h-16 items-center justify-between gap-4 border-b border-border bg-card px-4 sm:px-6 lg:px-10">
-        <div className="flex min-w-0 items-center gap-3"><Button variant="ghost" size="icon" className="md:hidden" onClick={() => setMobileMenu(!mobileMenu)} aria-label="Abrir menú"><Menu size={20} /></Button><div className="flex items-center gap-2 truncate text-sm text-muted-foreground"><strong className="text-foreground">AvantIA</strong><ChevronRight size={14} /><span className="truncate">{section}</span></div></div>
-        <div className="flex shrink-0 items-center gap-3 text-sm"><span className="grid size-9 place-items-center rounded-full bg-accent font-semibold text-accent-foreground">{user.username.slice(0, 1).toUpperCase()}</span><span className="hidden sm:block">{user.username}<small className="block text-xs text-muted-foreground">{user.role === 'admin' ? 'Administradora' : 'Operador'}</small></span><Button variant="ghost" size="sm" className="gap-2" onClick={() => { setToken(null); setUser(null) }}><LogOut size={15} /><span className="hidden sm:inline">Salir</span></Button></div>
+  return <div className="min-h-screen bg-background text-foreground">
+      <header className="sticky top-0 z-30 bg-brand-charcoal text-white shadow-sm">
+        <div className="flex h-16 items-center gap-3 px-3 sm:px-5 lg:gap-4 lg:px-7">
+          <Button type="button" variant="ghost" className="h-11 shrink-0 px-1.5 text-white hover:bg-white/10 hover:text-white" onClick={() => navigate('reservations')} aria-label="Ir a Reservas"><BrandLogo className="text-white" /></Button>
+          <nav className="hidden min-w-0 flex-1 items-center gap-0.5 overflow-x-auto lg:flex" aria-label="Principal">{renderNavigation()}</nav>
+          <Button type="button" variant="ghost" size="icon" className="text-white hover:bg-white/10 hover:text-white lg:hidden" onClick={() => setMobileMenu(open => !open)} aria-expanded={mobileMenu} aria-controls="mobile-primary-navigation" aria-label={mobileMenu ? 'Cerrar menú' : 'Abrir menú'}>{mobileMenu ? <X size={20} /> : <Menu size={20} />}</Button>
+          <div className="ml-auto flex min-w-0 shrink-0 items-center gap-2 sm:gap-3 lg:ml-0">
+            <span className="grid size-8 shrink-0 place-items-center rounded bg-brand-turquoise text-sm font-semibold text-brand-charcoal">{user.username.slice(0, 1).toUpperCase()}</span>
+            <span className="hidden min-w-0 xl:block"><span className="block max-w-28 truncate text-sm">{user.username}</span><small className="block text-xs text-white/65">{user.role === 'admin' ? 'Administradora' : 'Operador'}</small></span>
+            <Button type="button" variant="ghost" size="icon" className="shrink-0 text-white hover:bg-white/10 hover:text-white" onClick={() => { setToken(null); setUser(null) }} aria-label="Cerrar sesión"><LogOut size={17} /></Button>
+          </div>
+        </div>
+        {mobileMenu && <nav id="mobile-primary-navigation" className="grid grid-cols-2 gap-1 border-t border-white/15 px-3 py-3 lg:hidden" aria-label="Principal">{renderNavigation(true)}</nav>}
       </header>
-      <main className="mx-auto w-full max-w-screen-2xl px-4 py-6 sm:px-6 lg:px-10 lg:py-9">
-        <div className="mb-6 flex flex-wrap items-end justify-between gap-4"><div><p className="mb-2 text-xs font-semibold uppercase tracking-wide text-primary">TU ESPACIO DE HOSPITALIDAD <span className="px-1 text-muted-foreground">/</span> {section.toUpperCase()}</p><h1 className="mb-2 text-3xl font-semibold leading-tight sm:text-4xl">{section}</h1><p className="max-w-3xl text-sm leading-6 text-muted-foreground">{view === 'summary' ? 'Cada conversación, en su sitio. La atención empieza aquí.' : view === 'inbox' ? 'Lee el contexto, revisa el borrador y decide cómo responder.' : view === 'bookings' ? 'Prerreservas que necesitan una mirada y seguimiento humano.' : view === 'imports' ? 'Fuentes y disponibilidad, siempre con su origen a la vista.' : view === 'planning' ? 'Una vista clara de las estancias y los huecos disponibles.' : 'La información operativa de AvantIA, reunida con cuidado.'}</p></div><Button variant="outline" onClick={() => void refresh()} disabled={busy}><RefreshCw size={15} /> Actualizar</Button></div>
-        {readOnlyMode && <Alert variant="info" role="status" className="mb-5 flex flex-wrap items-center gap-x-4 gap-y-1"><strong className="text-xs">MODO DESARROLLO · SOLO LECTURA</strong><span>IMAP se consulta sin modificar correos. Los envíos de email y WhatsApp están bloqueados.</span></Alert>}
+      <main className={`mx-auto w-full ${view === 'reservations' ? 'max-w-none px-4 py-5 sm:px-6 lg:px-8' : 'max-w-screen-2xl px-4 py-6 sm:px-6 lg:px-10 lg:py-9'}`}>
+        {view !== 'reservations' && <div className="mb-6 flex flex-wrap items-end justify-between gap-4"><div><p className="mb-2 text-xs font-semibold uppercase tracking-wide text-primary">TU ESPACIO DE HOSPITALIDAD <span className="px-1 text-muted-foreground">/</span> {section.toUpperCase()}</p><h1 className="mb-2 text-3xl font-semibold leading-tight sm:text-4xl">{section}</h1><p className="max-w-3xl text-sm leading-6 text-muted-foreground">{view === 'summary' ? 'Cada conversación, en su sitio. La atención empieza aquí.' : view === 'inbox' ? 'Lee el contexto, revisa el borrador y decide cómo responder.' : view === 'bookings' ? 'Prerreservas que necesitan una mirada y seguimiento humano.' : view === 'imports' ? 'Fuentes y disponibilidad, siempre con su origen a la vista.' : view === 'planning' ? 'Una vista clara de las estancias y los huecos disponibles.' : 'La información operativa de AvantIA, reunida con cuidado.'}</p></div><Button variant="outline" onClick={() => void refresh()} disabled={busy}><RefreshCw size={15} /> Actualizar</Button></div>}
+        {readOnlyMode && view !== 'reservations' && <Alert variant="info" role="status" className="mb-5 flex flex-wrap items-center gap-x-4 gap-y-1"><strong className="text-xs">MODO DESARROLLO · SOLO LECTURA</strong><span>IMAP se consulta sin modificar correos. Los envíos de email y WhatsApp están bloqueados.</span></Alert>}
         {error && <Alert variant="destructive" className="mb-5 flex items-center justify-between gap-4"><span>{error}</span><Button variant="ghost" size="icon" onClick={() => setError('')} aria-label="Cerrar aviso"><X size={16} /></Button></Alert>}
         <EmailPreviewDialog message={expandedEmail} fallbackSubject={detail?.subject} onClose={() => setExpandedEmail(null)} />
 
+        {view === 'reservations' && <Reservations onImport={() => navigate('imports')} />}
         {view === 'summary' && <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-12">
           {[{ title: 'PENDIENTES', value: summary?.pending ?? '—', description: 'Consultas por atender', action: 'Abrir bandeja →', onClick: () => navigate('inbox') }, { title: 'PRERRESERVAS', value: summary?.bookings ?? '—', description: 'Booking · revisión humana', action: 'Ver tareas →', onClick: () => navigate('bookings') }, { title: 'ENVÍOS INCIERTOS', value: summary?.delivery_unknown ?? '—', description: 'Comprobar antes de reenviar' }].map((metric, index) => <Card key={metric.title} className={`relative overflow-hidden p-5 sm:p-6 xl:col-span-4 ${index === 1 ? 'border-primary/30' : ''}`}><span className="text-xs font-semibold tracking-wide text-muted-foreground">{metric.title}</span><strong className="my-3 block text-5xl font-semibold tabular-nums text-foreground">{metric.value}</strong><small className="block text-sm text-muted-foreground">{metric.description}</small>{metric.action && <Button variant="link" className="mt-3 h-auto p-0" onClick={metric.onClick}>{metric.action}</Button>}</Card>)}
           <Card className="p-5 sm:p-6 xl:col-span-7"><div className="mb-4 flex items-start justify-between gap-3"><div><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">COLA ACTIVA</p><h2 className="text-xl font-semibold">Consultas recientes</h2></div><Button variant="link" size="sm" className="shrink-0 px-1" onClick={() => navigate('inbox')}>Ver todas →</Button></div>{items.length ? items.slice(0, 5).map(item => <Button variant="ghost" className="h-auto w-full justify-start gap-3 rounded-none border-t border-border px-1 py-3 text-left whitespace-normal" key={item.id} onClick={() => void select(item.id)}><span className="text-xs text-primary">#{item.id}</span><span className="min-w-0 flex-1 truncate text-sm">{item.customer_name || item.customer_address || 'Cliente'}<small className="block truncate text-xs text-muted-foreground">{item.subject || label(item.channel)}</small></span><Badge value={item.status} /><span className="hidden shrink-0 text-xs text-muted-foreground lg:inline">{date(item.last_inbound_at)}</span></Button>) : <Empty>Aún no hay consultas. Conecta un canal para empezar.</Empty>}</Card>
@@ -479,7 +485,6 @@ export default function App() {
         {view === 'integrations' && <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{integrations ? <>{Object.entries(integrations).filter(([name]) => name !== 'mode' && (name !== 'whatsapp' || user.role === 'admin')).map(([name, value]) => name === 'whatsapp' ? <GowaIntegrationCard key={name} /> : <IntegrationCard key={name} name={name} value={value} />)}</> : <Empty>Cargando integraciones…</Empty>}</div>}
         {view === 'users' && user.role === 'admin' && <div className="grid items-start gap-4 xl:grid-cols-2"><Card className="p-5 sm:p-6"><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">ACCESO</p><h2 className="mb-4 text-xl font-semibold">Operadores</h2>{users.map(item => <div className="flex items-center justify-between gap-3 border-t border-border py-3" key={item.id}><strong className="text-sm">{item.username}</strong><Badge value={item.role} /></div>)}</Card><UserForm onDone={refresh} /></div>}
       </main>
-    </div>
   </div>
 }
 
