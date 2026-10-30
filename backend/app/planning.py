@@ -493,6 +493,111 @@ def properties_view(db: Session, batch_id: int | None = None) -> list[dict]:
     ]
 
 
+def reservations_view(
+    db: Session,
+    *,
+    q: str = "",
+    status: str | None = None,
+    property_id: str | None = None,
+    stay_from: date | None = None,
+    stay_to: date | None = None,
+    offset: int = 0,
+    limit: int = 50,
+    sort_order: str = "desc",
+) -> dict:
+    if stay_from and stay_to and stay_from > stay_to:
+        raise ValueError("La fecha inicial de estancia debe ser anterior a la fecha final")
+    if status and status not in set(STATUS.values()):
+        raise ValueError("Estado de reserva no reconocido")
+    if sort_order not in {"asc", "desc"}:
+        raise ValueError("Orden de fecha de creación no válido")
+
+    reservation_batch = latest_source_batch(db, "reservations")
+    property_batch = latest_source_batch(db, "properties")
+    properties = (
+        []
+        if not property_batch
+        else list(
+            db.scalars(
+                select(PropertySnapshot)
+                .where(PropertySnapshot.batch_id == property_batch.id)
+                .order_by(PropertySnapshot.name, PropertySnapshot.property_id)
+            )
+        )
+    )
+    property_names = {item.property_id: item.name for item in properties}
+    property_options = [{"id": item.property_id, "name": item.name} for item in properties]
+
+    if not reservation_batch:
+        return {
+            "items": [], "total": 0, "offset": offset, "limit": limit,
+            "has_snapshot": False, "properties": property_options,
+        }
+
+    # Fold valid imports by locator so older non-cumulative snapshots still show
+    # the newest imported version of every reservation.
+    latest_by_locator: dict[str, ReservationSnapshot] = {}
+    source_rows = db.scalars(
+        select(ReservationSnapshot)
+        .join(ImportBatch, ReservationSnapshot.batch_id == ImportBatch.id)
+        .where(
+            ImportBatch.dataset == "reservations",
+            ImportBatch.status == "valid",
+            ImportBatch.id <= reservation_batch.id,
+        )
+        .order_by(ImportBatch.id, ReservationSnapshot.id)
+    )
+    for row in source_rows:
+        latest_by_locator[row.locator] = row
+
+    needle = "".join(
+        character
+        for character in unicodedata.normalize("NFKD", q.casefold())
+        if not unicodedata.combining(character)
+    )
+    items = []
+    fields = (
+        "locator", "property_id", "status", "status_original", "start_date", "end_date",
+        "created_on", "nights", "adults", "children", "infants", "display_name",
+        "portal", "total", "net", "tax", "paid", "pending",
+    )
+    for row in latest_by_locator.values():
+        if status and row.status != status:
+            continue
+        if property_id and row.property_id != property_id:
+            continue
+        if stay_from and row.end_date <= stay_from:
+            continue
+        if stay_to and row.start_date > stay_to:
+            continue
+        property_name = property_names.get(row.property_id, row.property_id)
+        if needle:
+            searchable = " ".join((row.locator, row.display_name, row.property_id, property_name))
+            folded = "".join(
+                character
+                for character in unicodedata.normalize("NFKD", searchable.casefold())
+                if not unicodedata.combining(character)
+            )
+            if needle not in folded:
+                continue
+        items.append({**{field: getattr(row, field) for field in fields}, "property_name": property_name})
+
+    items.sort(key=lambda item: item["locator"])
+    if sort_order == "desc":
+        items.sort(key=lambda item: item["created_on"] or date.min, reverse=True)
+    else:
+        items.sort(key=lambda item: item["created_on"] or date.max)
+    total = len(items)
+    return {
+        "items": items[offset : offset + limit],
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "has_snapshot": True,
+        "properties": property_options,
+    }
+
+
 def planning_view(
     db: Session,
     start: date,

@@ -9,7 +9,7 @@ import uuid
 from datetime import UTC, date, datetime
 from email.utils import parseaddr
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 import httpx
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
@@ -64,6 +64,7 @@ from app.planning import (
     planning_view,
     preview_import,
     properties_view,
+    reservations_view,
 )
 from app.whatsapp_purge import purge_whatsapp_records
 
@@ -954,6 +955,35 @@ def planning(
 ) -> dict:
     try:
         return planning_view(db, start, end, property_batch_id, reservation_batch_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/api/reservations")
+def reservations(
+    db: Db,
+    user: Operator,
+    q: str = Query(default="", max_length=150),
+    status: str | None = Query(default=None, max_length=30),
+    property_id: str | None = Query(default=None, max_length=100),
+    stay_from: date | None = None,
+    stay_to: date | None = None,
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=100),
+    sort_order: Literal["asc", "desc"] = "desc",
+) -> dict:
+    try:
+        return reservations_view(
+            db,
+            q=q,
+            status=status,
+            property_id=property_id,
+            stay_from=stay_from,
+            stay_to=stay_to,
+            offset=offset,
+            limit=limit,
+            sort_order=sort_order,
+        )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 
