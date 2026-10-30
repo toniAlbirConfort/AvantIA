@@ -54,6 +54,7 @@ from app.models import (
     MailCursor,
     Message,
     ReservationSyncState,
+    TariffSeason,
     User,
     now,
 )
@@ -946,6 +947,27 @@ def properties(db: Db, user: Operator, batch_id: int | None = None) -> list[dict
         return properties_view(db, batch_id)
     except ValueError as exc:
         raise HTTPException(404, str(exc)) from exc
+
+
+@app.get("/api/tariffs")
+def tariffs(db: Db, user: Operator) -> list[dict]:
+    rows = db.scalars(
+        select(TariffSeason).order_by(
+            TariffSeason.tariff_name, TariffSeason.start_date, TariffSeason.id
+        )
+    ).all()
+    groups: dict[str, dict] = {}
+    for row in rows:
+        group = groups.setdefault(row.tariff_name, {"name": row.tariff_name, "seasons": []})
+        group["seasons"].append(
+            {
+                "rate_plan": row.rate_plan,
+                "start_date": row.start_date.isoformat(),
+                "end_date": row.end_date.isoformat(),
+                "nightly_rate": f"{row.nightly_rate:.2f}",
+            }
+        )
+    return list(groups.values())
 
 
 @app.get("/api/planning")
