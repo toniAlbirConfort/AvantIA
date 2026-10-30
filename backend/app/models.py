@@ -259,3 +259,68 @@ class TariffSeason(Base):
     start_date: Mapped[date] = mapped_column(Date)
     end_date: Mapped[date] = mapped_column(Date)
     nightly_rate: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+
+
+class TariffGroupAssignment(Base):
+    __tablename__ = "tariff_group_assignments"
+
+    property_id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    tariff_name: Mapped[str] = mapped_column(String(180), index=True)
+    municipality: Mapped[str] = mapped_column(String(150))
+    province: Mapped[str | None] = mapped_column(String(150))
+    autonomous_community: Mapped[str | None] = mapped_column(String(150))
+    updated_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+
+class TariffHoliday(Base):
+    __tablename__ = "tariff_holidays"
+    __table_args__ = (
+        CheckConstraint(
+            "scope IN ('national', 'regional', 'municipal')", name="ck_tariff_holidays_scope"
+        ),
+        UniqueConstraint(
+            "holiday_date", "name", "scope", "region", "municipality",
+            name="uq_tariff_holidays_identity",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    holiday_date: Mapped[date] = mapped_column(Date, index=True)
+    name: Mapped[str] = mapped_column(String(180))
+    scope: Mapped[str] = mapped_column(String(20))
+    region: Mapped[str | None] = mapped_column(String(150))
+    municipality: Mapped[str | None] = mapped_column(String(150))
+    source: Mapped[str] = mapped_column(String(255), default="manual")
+    created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class TariffStudy(Base):
+    __tablename__ = "tariff_studies"
+    __table_args__ = (
+        CheckConstraint("period_end >= period_start", name="ck_tariff_studies_valid_range"),
+        CheckConstraint("guests >= 1", name="ck_tariff_studies_valid_guests"),
+        CheckConstraint("nights >= 1", name="ck_tariff_studies_valid_nights"),
+        CheckConstraint(
+            "status IN ('pending', 'running', 'completed', 'partial', 'failed')",
+            name="ck_tariff_studies_status",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(120))
+    period_start: Mapped[date] = mapped_column(Date)
+    period_end: Mapped[date] = mapped_column(Date)
+    guests: Mapped[int] = mapped_column(Integer)
+    nights: Mapped[int] = mapped_column(Integer)
+    tariff_names: Mapped[list] = mapped_column(JSON, default=list)
+    parameters: Mapped[dict] = mapped_column(JSON, default=dict)
+    result: Mapped[dict | None] = mapped_column(JSON)
+    status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
+    algorithm_version: Mapped[str] = mapped_column(String(20), default="1.0")
+    error: Mapped[str | None] = mapped_column(Text)
+    created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
