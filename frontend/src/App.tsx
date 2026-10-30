@@ -5,7 +5,7 @@ import { ImportHistory, SourceImportForm } from './SourceImports'
 import { Reservations } from './Reservations'
 import { Tariffs } from './Tariffs'
 import type { ClassificationLabel, Conversation, InboxResponse, InboxThread, ImportBatch, Message, Property, Summary, User } from './types'
-import { ArrowLeft, ArrowRight, CalendarDays, CalendarRange, Cable, ChevronDown, ClipboardList, House, Inbox, LayoutDashboard, LogOut, Menu, RefreshCw, Search, Tag, Upload, Users, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, CalendarDays, CalendarRange, Cable, ChevronDown, ClipboardList, FlaskConical, House, Inbox, LayoutDashboard, LogOut, Menu, RefreshCw, Search, Tag, Upload, Users, X } from 'lucide-react'
 import { EmailPreviewDialog } from './EmailPreviewDialog'
 import { EmailMessageContent } from './EmailMessageContent'
 import { Badge as UiBadge } from './components/ui/badge'
@@ -20,12 +20,14 @@ import { Textarea } from './components/ui/textarea'
 import { BrandLogo, BrandMark } from './components/BrandLogo'
 import { GowaIntegrationCard } from './GowaIntegrationCard'
 import { MessageClassificationControl } from './ClassificationControls'
+import { TariffLab } from './TariffLab'
 
-type View = 'reservations' | 'summary' | 'inbox' | 'bookings' | 'properties' | 'tariffs' | 'planning' | 'imports' | 'integrations' | 'users'
+type View = 'reservations' | 'summary' | 'inbox' | 'bookings' | 'properties' | 'tariffs' | 'tariff-lab' | 'planning' | 'imports' | 'integrations' | 'users'
 const navigation: { id: View; label: string; icon: typeof LayoutDashboard }[] = [
   { id: 'reservations', label: 'Reservas', icon: CalendarDays },
   { id: 'planning', label: 'Planning', icon: CalendarRange },
   { id: 'tariffs', label: 'Tarifas', icon: Tag },
+  { id: 'tariff-lab', label: 'Laboratorio de tarifas', icon: FlaskConical },
   { id: 'inbox', label: 'Bandeja', icon: Inbox },
   { id: 'bookings', label: 'Prerreservas', icon: ClipboardList },
   { id: 'properties', label: 'Alojamientos', icon: House },
@@ -438,7 +440,7 @@ export default function App() {
           <span className="text-sm font-semibold">AvantIA</span>
         </header>
         <main className={`mx-auto w-full ${view === 'reservations' ? 'max-w-none px-4 py-5 sm:px-6 lg:px-8' : 'max-w-screen-2xl px-4 py-6 sm:px-6 lg:px-10 lg:py-9'}`}>
-        {view !== 'reservations' && <div className="mb-6 flex flex-wrap items-end justify-between gap-4"><div><p className="mb-2 text-xs font-semibold uppercase tracking-wide text-primary">TU ESPACIO DE HOSPITALIDAD <span className="px-1 text-muted-foreground">/</span> {section.toUpperCase()}</p><h1 className="mb-2 text-3xl font-semibold leading-tight sm:text-4xl">{section}</h1><p className="max-w-3xl text-sm leading-6 text-muted-foreground">{view === 'summary' ? 'Cada conversación, en su sitio. La atención empieza aquí.' : view === 'inbox' ? 'Lee el contexto, revisa el borrador y decide cómo responder.' : view === 'bookings' ? 'Prerreservas que necesitan una mirada y seguimiento humano.' : view === 'imports' ? 'Fuentes y disponibilidad, siempre con su origen a la vista.' : view === 'planning' ? 'Una vista clara de las estancias y los huecos disponibles.' : view === 'tariffs' ? 'Consulta los importes por temporada y grupo tarifario.' : 'La información operativa de AvantIA, reunida con cuidado.'}</p></div><Button variant="outline" onClick={() => view === 'tariffs' ? setTariffRefreshVersion(version => version + 1) : void refresh()} disabled={busy}><RefreshCw size={15} /> {view === 'tariffs' ? 'Actualizar tarifas' : 'Actualizar'}</Button></div>}
+        {view !== 'reservations' && <div className="mb-6 flex flex-wrap items-end justify-between gap-4"><div><p className="mb-2 text-xs font-semibold uppercase tracking-wide text-primary">TU ESPACIO DE HOSPITALIDAD <span className="px-1 text-muted-foreground">/</span> {section.toUpperCase()}</p><h1 className="mb-2 text-3xl font-semibold leading-tight sm:text-4xl">{section}</h1><p className="max-w-3xl text-sm leading-6 text-muted-foreground">{view === 'summary' ? 'Cada conversación, en su sitio. La atención empieza aquí.' : view === 'inbox' ? 'Lee el contexto, revisa el borrador y decide cómo responder.' : view === 'bookings' ? 'Prerreservas que necesitan una mirada y seguimiento humano.' : view === 'imports' ? 'Fuentes y disponibilidad, siempre con su origen a la vista.' : view === 'planning' ? 'Una vista clara de las estancias y los huecos disponibles.' : view === 'tariffs' ? 'Consulta los importes por temporada y grupo tarifario.' : view === 'tariff-lab' ? 'Contrasta el histórico, los precios de mercado y los festivos antes de preparar una propuesta.' : 'La información operativa de AvantIA, reunida con cuidado.'}</p></div><Button variant="outline" onClick={() => view === 'tariffs' || view === 'tariff-lab' ? setTariffRefreshVersion(version => version + 1) : void refresh()} disabled={busy}><RefreshCw size={15} /> {view === 'tariffs' || view === 'tariff-lab' ? 'Actualizar tarifas' : 'Actualizar'}</Button></div>}
         {readOnlyMode && view !== 'reservations' && <Alert variant="info" role="status" className="mb-5 flex flex-wrap items-center gap-x-4 gap-y-1"><strong className="text-xs">MODO DESARROLLO · SOLO LECTURA</strong><span>IMAP se consulta sin modificar correos. Los envíos de email y WhatsApp están bloqueados.</span></Alert>}
         {error && <Alert variant="destructive" className="mb-5 flex items-center justify-between gap-4"><span>{error}</span><Button variant="ghost" size="icon" onClick={() => setError('')} aria-label="Cerrar aviso"><X size={16} /></Button></Alert>}
         <EmailPreviewDialog message={expandedEmail} fallbackSubject={detail?.subject} onClose={() => setExpandedEmail(null)} />
@@ -516,6 +518,7 @@ export default function App() {
         </Card>}
         {view === 'planning' && <Planning />}
         {view === 'tariffs' && <Tariffs refreshVersion={tariffRefreshVersion} />}
+        {view === 'tariff-lab' && <TariffLab role={user.role} refreshVersion={tariffRefreshVersion} />}
         {view === 'imports' && <div className="grid items-start gap-4 xl:grid-cols-2"><Card className="p-4 sm:p-6"><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">CATÁLOGO Y RESERVAS</p><h2 className="mb-3 text-xl font-semibold">Importación supervisada</h2><p className="mb-5 text-sm leading-6 text-muted-foreground">Valida la exportación, revisa cambios e incidencias y confirma la nueva instantánea. Los CSV originales no se conservan.</p><SourceImportForm onDone={refresh} admin={user.role === 'admin'} /></Card><Card className="p-4 sm:p-6"><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">INTERVALOS</p><h2 className="mb-3 text-xl font-semibold">Importar disponibilidad</h2><p className="mb-5 text-sm leading-6 text-muted-foreground">El archivo describe intervalos con salida exclusiva y estado disponible u ocupado. Una importación inválida conserva la última válida.</p><ImportForm onDone={refresh} admin={user.role === 'admin'} /></Card><Card className="p-4 sm:p-6 xl:col-span-2"><ImportHistory imports={imports} /></Card></div>}
         {view === 'integrations' && <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{integrations ? <>{Object.entries(integrations).filter(([name]) => name !== 'mode' && (name !== 'whatsapp' || user.role === 'admin')).map(([name, value]) => name === 'whatsapp' ? <GowaIntegrationCard key={name} /> : <IntegrationCard key={name} name={name} value={value} />)}</> : <Empty>Cargando integraciones…</Empty>}</div>}
         {view === 'users' && user.role === 'admin' && <div className="grid items-start gap-4 xl:grid-cols-2"><Card className="p-5 sm:p-6"><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">ACCESO</p><h2 className="mb-4 text-xl font-semibold">Operadores</h2>{users.map(item => <div className="flex items-center justify-between gap-3 border-t border-border py-3" key={item.id}><strong className="text-sm">{item.username}</strong><Badge value={item.role} /></div>)}</Card><UserForm onDone={refresh} /></div>}

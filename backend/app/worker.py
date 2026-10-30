@@ -13,8 +13,9 @@ from app.config import get_settings
 from app.db import SessionLocal
 from app.delivery import send_approved
 from app.mail import poll_mail
-from app.models import Conversation, Draft, Job
+from app.models import Conversation, Draft, Job, TariffStudy
 from app.processing import alert_conversation, analyze_message, schedule_overdue
+from app.tariff_lab import run_study
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -43,6 +44,8 @@ async def run_job() -> bool:
                 await alert_conversation(
                     db, int(job.payload["conversation_id"]), str(job.payload["reason"])
                 )
+            elif job.kind == "tariff_study":
+                await run_study(db, int(job.payload["study_id"]))
             else:
                 raise ValueError("Unknown job kind")
             job.status = "done"
@@ -53,6 +56,11 @@ async def run_job() -> bool:
             db.rollback()
             job = db.get(Job, job.id)
             job.error = f"{type(exc).__name__}: {str(exc)[:300]}"
+            if job.kind == "tariff_study":
+                study = db.get(TariffStudy, int(job.payload["study_id"]))
+                if study:
+                    study.status = "failed" if job.attempts >= 5 else "pending"
+                    study.error = job.error
             if job.kind == "send" or job.attempts >= 5:
                 job.status = "failed"
             else:
@@ -101,6 +109,11 @@ def recover_stale_jobs() -> None:
                         conv.status = "delivery_unknown"
                 job.status = "failed"
             else:
+                if job.kind == "tariff_study":
+                    study = db.get(TariffStudy, int(job.payload["study_id"]))
+                    if study:
+                        study.status = "pending"
+                        study.error = "El worker se interrumpió; el estudio se reintentará"
                 job.status = "pending"
                 job.run_at = datetime.now(UTC)
         db.commit()

@@ -14,7 +14,7 @@ from typing import Annotated, Literal
 import httpx
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import desc, func, or_, select, text
 from sqlalchemy.orm import Session
@@ -55,6 +55,7 @@ from app.models import (
     Message,
     ReservationSyncState,
     TariffSeason,
+    TariffStudy,
     User,
     now,
 )
@@ -66,6 +67,21 @@ from app.planning import (
     preview_import,
     properties_view,
     reservations_view,
+)
+from app.tariff_lab import (
+    MarketProviderUnavailable,
+    TariffLabError,
+    add_holiday,
+    create_study,
+    holiday_view,
+    list_property_mappings,
+    list_studies,
+    remove_holiday,
+    save_property_mappings,
+    study_report_pdf,
+    study_view,
+    tariff_readiness,
+    tariffs_csv,
 )
 from app.whatsapp_purge import purge_whatsapp_records
 
@@ -119,6 +135,37 @@ class MessageClassificationIn(BaseModel):
 
 class ClassificationResolutionIn(BaseModel):
     outcome: str = Field(pattern="^(handled|not_demand)$")
+
+
+class TariffPropertyMappingIn(BaseModel):
+    property_id: str = Field(min_length=1, max_length=100)
+    tariff_name: str = Field(min_length=1, max_length=180)
+    municipality: str = Field(min_length=1, max_length=150)
+    province: str | None = Field(default=None, max_length=150)
+    autonomous_community: str | None = Field(default=None, max_length=150)
+
+
+class TariffPropertyMappingsIn(BaseModel):
+    items: list[TariffPropertyMappingIn] = Field(max_length=10000)
+
+
+class TariffHolidayIn(BaseModel):
+    holiday_date: date
+    name: str = Field(min_length=1, max_length=180)
+    scope: Literal["national", "regional", "municipal"]
+    region: str | None = Field(default=None, max_length=150)
+    municipality: str | None = Field(default=None, max_length=150)
+    source: str = Field(default="manual", max_length=255)
+
+
+class TariffStudyIn(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    period_start: date
+    period_end: date
+    guests: int = Field(ge=1, le=20)
+    nights: int = Field(ge=1, le=90)
+    tariff_names: list[str] = Field(min_length=1, max_length=4)
+    target_occupancy: float | None = Field(default=None, ge=0, le=1)
 
 
 def _user(user: User) -> dict:
@@ -968,6 +1015,126 @@ def tariffs(db: Db, user: Operator) -> list[dict]:
             }
         )
     return list(groups.values())
+
+
+@app.get("/api/tariff-lab/readiness")
+def tariff_lab_readiness(db: Db, user: Operator) -> dict:
+    return tariff_readiness(db)
+
+
+@app.get("/api/tariff-lab/property-groups")
+def tariff_property_groups(db: Db, user: Operator) -> list[dict]:
+    return list_property_mappings(db)
+
+
+@app.put("/api/tariff-lab/property-groups")
+def update_tariff_property_groups(
+    data: TariffPropertyMappingsIn, db: Db, admin: Admin,
+) -> list[dict]:
+    try:
+        result = save_property_mappings(
+            db, [item.model_dump() for item in data.items], admin.id
+        )
+    except TariffLabError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    db.add(AuditEvent(
+        actor_user_id=admin.id,
+        action="tariff_lab.property_groups_updated",
+        detail={"count": len(data.items)},
+    ))
+    db.commit()
+    return result
+
+
+@app.get("/api/tariff-lab/holidays")
+def tariff_holidays(db: Db, user: Operator) -> list[dict]:
+    return holiday_view(db)
+
+
+@app.post("/api/tariff-lab/holidays", status_code=201)
+def create_tariff_holiday(data: TariffHolidayIn, db: Db, admin: Admin) -> dict:
+    try:
+        result = add_holiday(db, data.model_dump(), admin.id)
+    except TariffLabError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    db.add(AuditEvent(
+        actor_user_id=admin.id,
+        action="tariff_lab.holiday_added",
+        detail={"holiday_id": result["id"], "scope": result["scope"]},
+    ))
+    db.commit()
+    return result
+
+
+@app.delete("/api/tariff-lab/holidays/{holiday_id}")
+def delete_tariff_holiday(holiday_id: int, db: Db, admin: Admin) -> dict:
+    if not remove_holiday(db, holiday_id):
+        raise HTTPException(404, "Festivo no encontrado")
+    db.add(AuditEvent(
+        actor_user_id=admin.id,
+        action="tariff_lab.holiday_removed",
+        detail={"holiday_id": holiday_id},
+    ))
+    db.commit()
+    return {"deleted": True}
+
+
+@app.get("/api/tariff-lab/studies")
+def tariff_studies(db: Db, user: Operator) -> list[dict]:
+    return list_studies(db)
+
+
+@app.post("/api/tariff-lab/studies", status_code=202)
+def create_tariff_study(data: TariffStudyIn, db: Db, admin: Admin) -> dict:
+    try:
+        study = create_study(db, data.model_dump(), admin.id)
+    except MarketProviderUnavailable as exc:
+        raise HTTPException(503, str(exc)) from exc
+    except TariffLabError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    db.add(AuditEvent(
+        actor_user_id=admin.id,
+        action="tariff_lab.study_created",
+        detail={"study_id": study.id, "tariff_names": study.tariff_names},
+    ))
+    db.commit()
+    return study_view(study)
+
+
+@app.get("/api/tariff-lab/studies/{study_id}")
+def get_tariff_study(study_id: int, db: Db, user: Operator) -> dict:
+    study = db.get(TariffStudy, study_id)
+    if study is None:
+        raise HTTPException(404, "Estudio de tarifas no encontrado")
+    return study_view(study)
+
+
+@app.get("/api/tariff-lab/studies/{study_id}/tariffs.csv")
+def download_tariff_study_csv(study_id: int, db: Db, user: Operator) -> Response:
+    study = db.get(TariffStudy, study_id)
+    if study is None:
+        raise HTTPException(404, "Estudio de tarifas no encontrado")
+    if study.status not in {"completed", "partial"} or not study.result:
+        raise HTTPException(409, "El estudio todavía no tiene una propuesta descargable")
+    return Response(
+        content=tariffs_csv(study),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="tariff-study-{study.id}.csv"'},
+    )
+
+
+@app.get("/api/tariff-lab/studies/{study_id}/report.pdf")
+def download_tariff_study_report(study_id: int, db: Db, user: Operator) -> Response:
+    study = db.get(TariffStudy, study_id)
+    if study is None:
+        raise HTTPException(404, "Estudio de tarifas no encontrado")
+    if study.status not in {"completed", "partial"} or not study.result:
+        raise HTTPException(409, "El estudio todavía no tiene un informe disponible")
+    return Response(
+        content=study_report_pdf(study),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="tariff-study-{study.id}.pdf"'},
+    )
 
 
 @app.get("/api/planning")
