@@ -6,6 +6,7 @@ from decimal import Decimal
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     ForeignKey,
@@ -240,3 +241,21 @@ class ReservationSyncState(Base):
     interval_hours: Mapped[int | None] = mapped_column(Integer)
     last_error: Mapped[str | None] = mapped_column(Text)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+
+class TariffSeason(Base):
+    __tablename__ = "tariff_seasons"
+    __table_args__ = (
+        UniqueConstraint(
+            "tariff_name", "rate_plan", "start_date", name="uq_tariff_seasons_name_plan_start"
+        ),
+        CheckConstraint("end_date >= start_date", name="ck_tariff_seasons_valid_range"),
+        CheckConstraint("nightly_rate >= 0", name="ck_tariff_seasons_nonnegative_rate"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tariff_name: Mapped[str] = mapped_column(String(180), index=True)
+    rate_plan: Mapped[str] = mapped_column(String(20))
+    start_date: Mapped[date] = mapped_column(Date)
+    end_date: Mapped[date] = mapped_column(Date)
+    nightly_rate: Mapped[Decimal] = mapped_column(Numeric(10, 2))
