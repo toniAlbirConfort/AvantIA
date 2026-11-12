@@ -157,6 +157,19 @@ Después, ejecutar las migraciones y arrancar API, worker y frontend. Guardar po
 
 `app/avantio.py` define el contrato de consulta y sincronización. El proveedor activo es `csv`. La implementación de `AvantioProvider` queda expresamente pendiente del contrato y credenciales reales; no se activa con `AVAILABILITY_SOURCE=avantio` hasta completarla y probarla. El resto de conversaciones, tareas y aprobaciones no depende del origen de disponibilidad.
 
+## Flujo de trabajo
+
+`main` es la única rama permanente y siempre debe quedar limpia, integrada y desplegable. No se trabaja sobre ella: cada tarea tiene su propia rama `codex/<tipo>/<slug>`, creada desde `origin/main` y desarrollada en un worktree aparte, de modo que el checkout principal se mantiene en `main`.
+
+```powershell
+.\scripts\new-task-worktree.ps1 -Type feat -Slug resumen-reservas    # abre rama + worktree
+# ... commits en ..\AvantIA-worktrees\resumen-reservas ...
+.\scripts\finish-task-worktree.ps1 -Slug resumen-reservas            # rebase, verifica, fusiona, limpia
+.\scripts\clean-merged-branches.ps1                                  # revisa ramas vivas
+```
+
+Las reglas completas están en `AGENTS.md`.
+
 ## Verificación
 
 Backend: `cd backend && pip install -e '.[dev]' && pytest`. Frontend: `cd frontend && npm install && npm run build`. Infraestructura: `docker compose -f compose.yaml -f compose.prod.yaml config`, levantar un entorno de prueba, comprobar `/health`, recibir un webhook firmado, importar un CSV y completar una aprobación con destinatarios de prueba.
