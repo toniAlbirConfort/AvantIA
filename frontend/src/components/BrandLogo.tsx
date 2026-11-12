@@ -4,7 +4,7 @@ type BrandLogoProps = {
 
 export function BrandMark({ className = 'size-10' }: BrandLogoProps) {
   return <img
-    src="/brand-mark.svg"
+    src="/brand-mark.svg?v=2"
     className={className}
     alt=""
     aria-hidden="true"
