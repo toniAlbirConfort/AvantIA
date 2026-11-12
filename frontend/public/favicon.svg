@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <title>AvantIA</title>
+  <rect width="64" height="64" rx="15" fill="#0A192F"/>
+  <path d="M12 54 27.9 17.5c1.6-3.8 6.6-3.8 8.2 0L52 54" stroke="#F15F41" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M21 39h22" stroke="#F15F41" stroke-width="5.5" stroke-linecap="round"/>
+  <path d="M27.5 54v-7a4.5 4.5 0 0 1 9 0v7" stroke="#00CCCC" stroke-width="4.5" stroke-linecap="round"/>
+</svg>
