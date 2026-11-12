@@ -16,7 +16,7 @@ import sys
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.annotations import INTENTS, Prediction, score
+from app.annotations import INTENTS, Prediction, contact_prediction, score
 from app.config import get_settings
 from app.integrations import ollama_json
 from app.models import Message, MessageAnnotation
@@ -37,10 +37,11 @@ def _annotations(db: Session, split: str) -> list[MessageAnnotation]:
 
 
 def stored_report(db: Session, split: str) -> dict:
-    rows = [
-        (item, Prediction(item.predicted_label, item.predicted_data))
-        for item in _annotations(db, split)
-    ]
+    rows = []
+    for item in _annotations(db, split):
+        message = db.get(Message, item.message_id)
+        contact = contact_prediction(message) if message else None
+        rows.append((item, Prediction(item.predicted_label, item.predicted_data, contact)))
     return {"mode": "stored", "split": split, **score(rows)}
 
 
@@ -64,7 +65,7 @@ async def live_report(db: Session, split: str, model_name: str | None) -> dict:
         except Exception:
             errors += 1
             label, data = None, None
-        rows.append((annotation, Prediction(label, data)))
+        rows.append((annotation, Prediction(label, data, contact_prediction(message))))
     return {
         "mode": "live",
         "split": split,
