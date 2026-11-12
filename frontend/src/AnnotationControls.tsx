@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from './api'
-import type { AnnotationExpected, AnnotationIntent, AnnotationSummary, Message } from './types'
+import type { AnnotationExpected, AnnotationIntent, AnnotationSummary, ContactInfo, Message } from './types'
 import { Badge } from './components/ui/badge'
 import { Button } from './components/ui/button'
 import { Input } from './components/ui/input'
@@ -31,41 +31,47 @@ function useIntents() {
   return intents
 }
 
-function initialExpected(message: Message): AnnotationExpected {
-  const source = message.annotation?.expected || message.classification?.extracted || {}
+function initialExpected(message: Message, contact: ContactInfo | null): AnnotationExpected {
+  const saved = message.annotation?.expected
+  const source = saved || message.classification?.extracted || {}
   return {
     arrival: source.arrival || null,
     departure: source.departure || null,
     guests: source.guests || null,
     property_query: source.property_query || null,
+    contact_email: saved ? saved.contact_email || null : contact?.emails[0] || null,
+    contact_phone: saved ? saved.contact_phone || null : contact?.phones[0] || null,
+    wants_price: saved ? saved.wants_price ?? null : contact ? contact.wants_price : null,
   }
 }
 
 export function MessageAnnotationControl({
   message,
+  contact = null,
   disabled,
   onSave,
 }: {
   message: Message
+  contact?: ContactInfo | null
   disabled: boolean
   onSave: (body: { intent: string; expected: AnnotationExpected | null; note: string | null }) => void
 }) {
   const intents = useIntents()
   const annotation = message.annotation
   const [intent, setIntent] = useState(annotation?.intent || '')
-  const [expected, setExpected] = useState<AnnotationExpected>(() => initialExpected(message))
+  const [expected, setExpected] = useState<AnnotationExpected>(() => initialExpected(message, contact))
   const [note, setNote] = useState(annotation?.note || '')
   const [error, setError] = useState('')
 
   useEffect(() => {
     setIntent(message.annotation?.intent || '')
-    setExpected(initialExpected(message))
+    setExpected(initialExpected(message, contact))
     setNote(message.annotation?.note || '')
     setError('')
   }, [message.id, message.annotation?.updated_at])
 
   const selected = intents.find(item => item.intent === intent)
-  const fromModel = !annotation?.expected && !!message.classification?.extracted
+  const fromModel = !annotation?.expected && (!!message.classification?.extracted || !!contact)
   const set = (field: keyof AnnotationExpected, value: string) => {
     setError('')
     setExpected(current => ({
@@ -109,6 +115,15 @@ export function MessageAnnotationControl({
         <label className="grid gap-1 text-xs font-medium">Salida<Input className="h-9" type="date" value={expected.departure || ''} disabled={disabled} onChange={event => set('departure', event.target.value)} /></label>
         <label className="grid gap-1 text-xs font-medium">Personas<Input className="h-9" type="number" min={1} max={100} step={1} value={expected.guests ?? ''} disabled={disabled} onChange={event => set('guests', event.target.value)} /></label>
         <label className="grid gap-1 text-xs font-medium">Alojamiento<Input className="h-9" maxLength={150} placeholder="Si lo nombra" value={expected.property_query || ''} disabled={disabled} onChange={event => set('property_query', event.target.value)} /></label>
+      </div>
+      <div className="grid gap-2 sm:grid-cols-3">
+        <label className="grid gap-1 text-xs font-medium">Email del cliente<Input className="h-9" type="email" maxLength={255} placeholder="A quién responder" value={expected.contact_email || ''} disabled={disabled} onChange={event => set('contact_email', event.target.value)} /></label>
+        <label className="grid gap-1 text-xs font-medium">Teléfono del cliente<Input className="h-9" type="tel" maxLength={40} placeholder="+34…" value={expected.contact_phone || ''} disabled={disabled} onChange={event => set('contact_phone', event.target.value)} /></label>
+        <label className="grid gap-1 text-xs font-medium">Qué pide<Select className="h-9" value={expected.wants_price === true ? 'price' : expected.wants_price === false ? 'availability' : ''} disabled={disabled} onChange={event => { setError(''); setExpected(current => ({ ...current, wants_price: event.target.value === 'price' ? true : event.target.value === 'availability' ? false : null })) }}>
+          <option value="">Sin indicar</option>
+          <option value="price">Precio u oferta</option>
+          <option value="availability">Solo disponibilidad</option>
+        </Select></label>
       </div>
     </div>}
     <label className="grid gap-1 text-xs font-medium">

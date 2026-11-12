@@ -17,7 +17,8 @@ export type MessageClassification = {
   reviewed_at: string | null
   extracted?: { arrival?: string | null; departure?: string | null; guests?: number | null; property_query?: string | null } | null
 }
-export type AnnotationExpected = { arrival: string | null; departure: string | null; guests: number | null; property_query: string | null }
+export type AnnotationExpected = { arrival: string | null; departure: string | null; guests: number | null; property_query: string | null; contact_email?: string | null; contact_phone?: string | null; wants_price?: boolean | null }
+export type ContactInfo = { source: 'relayed' | 'direct' | 'internal'; relayed_by: string | null; name: string | null; emails: string[]; phones: string[]; wants_price: boolean; message_id?: number; verified?: boolean }
 export type MessageAnnotation = {
   intent: string
   label: 'demand' | 'guest_service' | 'non_demand'
@@ -46,6 +47,7 @@ export type Conversation = {
   analysis: Record<string, unknown>; created_at: string; updated_at: string; last_inbound_at: string;
   draft: Draft | null; messages?: Message[]; drafts?: Draft[]; audit?: Audit[];
   booking_task?: { id: number; status: string; extracted: Record<string, unknown> } | null
+  contact?: ContactInfo | null
 }
 export type InboxThread = {
   type: 'thread'; id: number; channel: string; kind: string; customer_name: string | null;
@@ -54,7 +56,7 @@ export type InboxThread = {
   classification_open: boolean; classification_resolved_at: string | null;
   classification_review_count: number; last_inbound_classification: Exclude<ClassificationLabel, 'review'> | null;
   last_inbound_needs_review: boolean; last_inbound_at: string; message_count: number;
-  last_message_at: string | null; preview: string
+  last_message_at: string | null; preview: string; contact?: ContactInfo | null
 }
 export type InboxSenderGroup = {
   type: 'sender'; sender: string; display_name: string; address: string; channel: 'email';
