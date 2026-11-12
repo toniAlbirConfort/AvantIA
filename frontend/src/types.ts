@@ -15,8 +15,27 @@ export type MessageClassification = {
   model: string | null
   reviewed_by_id: number | null
   reviewed_at: string | null
+  extracted?: { arrival?: string | null; departure?: string | null; guests?: number | null; property_query?: string | null } | null
 }
-export type Message = { id: number; direction: string; body: string; html_body?: string | null; sender: string | null; recipient?: string | null; subject: string | null; source_url: string | null; provider_id: string; created_at: string; classification?: MessageClassification | null }
+export type AnnotationExpected = { arrival: string | null; departure: string | null; guests: number | null; property_query: string | null }
+export type MessageAnnotation = {
+  intent: string
+  label: 'demand' | 'guest_service' | 'non_demand'
+  expected: AnnotationExpected | null
+  complete: boolean
+  note: string | null
+  split: 'eval' | 'examples'
+  annotated_by_id: number | null
+  updated_at: string
+}
+export type AnnotationIntent = { intent: string; label: 'demand' | 'guest_service' | 'non_demand'; name: string; needs_availability: boolean }
+export type AnnotationScore = {
+  annotated: number; with_prediction: number; label_accuracy: number | null; label_correct: number
+  confusion: Record<string, number>; by_intent: Record<string, { total: number; correct: number }>
+  extraction_messages: number; extraction: Record<string, { total: number; correct: number }>
+}
+export type AnnotationSummary = { total: number; by_intent: Record<string, number>; by_split: Record<string, number>; complete_availability: number; stored_model: AnnotationScore }
+export type Message = { id: number; direction: string; body: string; html_body?: string | null; sender: string | null; recipient?: string | null; subject: string | null; source_url: string | null; provider_id: string; created_at: string; classification?: MessageClassification | null; annotation?: MessageAnnotation | null }
 export type EmailTranslation = { message_id: number; language: 'es'; body: string }
 export type Audit = { action: string; actor_user_id: number | null; detail: Record<string, unknown>; created_at: string }
 export type Conversation = {

@@ -19,6 +19,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy import desc, func, or_, select, text
 from sqlalchemy.orm import Session
 
+from app.annotations import INTENTS, intent_catalog, save_annotation, serialize
+from app.annotations import summary as annotations_summary
 from app.auth import admin_user, authenticate, current_user, hasher, issue_token
 from app.availability import aware, import_csv, latest_batch
 from app.avantio import availability_provider
@@ -53,6 +55,7 @@ from app.models import (
     ImportBatch,
     MailCursor,
     Message,
+    MessageAnnotation,
     ReservationSyncState,
     TariffSeason,
     TariffStudy,
@@ -131,6 +134,19 @@ class UnknownResolution(BaseModel):
 
 class MessageClassificationIn(BaseModel):
     label: str = Field(pattern="^(demand|guest_service|non_demand)$")
+
+
+class MessageAnnotationExpectedIn(BaseModel):
+    arrival: str | None = None
+    departure: str | None = None
+    guests: int | None = None
+    property_query: str | None = Field(default=None, max_length=150)
+
+
+class MessageAnnotationIn(BaseModel):
+    intent: str = Field(max_length=40)
+    expected: MessageAnnotationExpectedIn | None = None
+    note: str | None = Field(default=None, max_length=300)
 
 
 class ClassificationResolutionIn(BaseModel):
@@ -233,6 +249,14 @@ def _conversation(conv: Conversation, db: Session, detail: bool = False) -> dict
         messages = db.scalars(
             select(Message).where(Message.conversation_id == conv.id).order_by(Message.id)
         ).all()
+        annotations = {
+            item.message_id: item
+            for item in db.scalars(
+                select(MessageAnnotation).where(
+                    MessageAnnotation.message_id.in_([item.id for item in messages])
+                )
+            ).all()
+        }
         data["messages"] = [
             {
                 "id": item.id,
@@ -261,7 +285,11 @@ def _conversation(conv: Conversation, db: Session, detail: bool = False) -> dict
                     "model": item.classification_model,
                     "reviewed_by_id": item.classification_reviewed_by_id,
                     "reviewed_at": item.classification_reviewed_at,
+                    "extracted": item.classification_data,
                 }
+                if item.direction == "inbound"
+                else None,
+                "annotation": serialize(annotations.get(item.id))
                 if item.direction == "inbound"
                 else None,
             }
@@ -631,15 +659,22 @@ def correct_message_classification(
     conv = _get_conv(db, message.conversation_id)
     if conv.kind == "booking":
         raise HTTPException(409, "Las notificaciones de Booking mantienen su flujo propio")
+    _apply_manual_label(db, conv, message, body.label, user)
+    db.commit()
+    return _conversation(conv, db, detail=True)
 
+
+def _apply_manual_label(
+    db: Session, conv: Conversation, message: Message, label: str, user: User
+) -> None:
     previous = effective_classification(message)
-    if message.classification_override != body.label:
-        message.classification_override = body.label
+    if message.classification_override != label:
+        message.classification_override = label
         message.classification_reviewed_by_id = user.id
         message.classification_reviewed_at = now()
         apply_message_classification(conv, message, manual=True, actor_user_id=user.id)
 
-        if body.label != "demand":
+        if label != "demand":
             draft = db.scalar(select(Draft).where(Draft.source_message_id == message.id))
             if draft and draft.status == "pending":
                 draft.status = "superseded"
@@ -657,10 +692,53 @@ def correct_message_classification(
                 actor_user_id=user.id,
                 conversation_id=conv.id,
                 action="message.classification_corrected",
-                detail={"message_id": message.id, "from": previous, "to": body.label},
+                detail={"message_id": message.id, "from": previous, "to": label},
             )
         )
-        db.commit()
+
+
+@app.get("/api/annotations/intents")
+def annotation_intents(user: Operator) -> list[dict]:
+    return intent_catalog()
+
+
+@app.get("/api/annotations/summary")
+def annotation_summary(db: Db, user: Operator) -> dict:
+    return annotations_summary(db)
+
+
+@app.put("/api/messages/{message_id}/annotation")
+def annotate_message(message_id: int, body: MessageAnnotationIn, db: Db, user: Operator) -> dict:
+    message = db.get(Message, message_id)
+    if not message or message.direction != "inbound":
+        raise HTTPException(404, "Mensaje entrante no encontrado")
+    if body.intent not in INTENTS:
+        raise HTTPException(422, "Intención desconocida")
+    conv = _get_conv(db, message.conversation_id)
+    try:
+        save_annotation(
+            db,
+            message,
+            intent=body.intent,
+            expected=body.expected.model_dump() if body.expected else None,
+            note=body.note,
+            user_id=user.id,
+        )
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(422, str(exc)) from None
+    # Booking notifications keep their own queue; the annotation is still kept as ground truth.
+    if conv.kind != "booking":
+        _apply_manual_label(db, conv, message, INTENTS[body.intent].label, user)
+    db.add(
+        AuditEvent(
+            actor_user_id=user.id,
+            conversation_id=conv.id,
+            action="message.annotated",
+            detail={"message_id": message.id, "intent": body.intent},
+        )
+    )
+    db.commit()
     return _conversation(conv, db, detail=True)
 
 
