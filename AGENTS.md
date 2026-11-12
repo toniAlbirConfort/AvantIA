@@ -25,6 +25,7 @@
 9. La integración en `main` se hace con `git merge --no-ff`, para que cada tarea quede como un punto identificable del historial y se pueda revertir completa. No uses commits directos sobre `main` ni squash que oculte el origen del cambio.
 10. Tras integrar y publicar, **elimina la rama y su worktree**, en local y en `origin`. Una rama que ya está en `main` no debe seguir viva: acumularlas hace imposible distinguir el trabajo pendiente del ya integrado.
 11. Las ramas que queden obsoletas (su trabajo se rehízo o se superó por cambios posteriores en `main`) se descartan explícitamente, sin fusionar. Fusionar una rama desfasada puede revertir trabajo posterior.
+12. `main` es la referencia completa del proyecto: debe contener todo el trabajo realizado hasta el último cambio. Una rama solo se borra cuando su contenido ya está en `main` o cuando se descarta de forma consciente por obsoleta, y en ese segundo caso se archiva antes. Nunca se borra una rama con trabajo vivo sin respaldo.
 
 ### Abrir una tarea
 
@@ -62,6 +63,26 @@ Para revisar qué ramas siguen vivas y cuáles ya están integradas en `main`:
 ```
 
 Por defecto solo informa. Compara con `origin/main` por contenido, así que también detecta ramas integradas mediante squash o commits directos, que `git branch --merged` no reconoce. Para borrarlas en local y en `origin`, añade `-Delete`.
+
+### Copia de seguridad y recuperación
+
+Antes de borrar nada, `clean-merged-branches.ps1 -Delete` crea en `..\AvantIA-backups` un `bundle` con **todas** las referencias del repositorio y un inventario `rama → commit` con la misma marca de tiempo. Si falla la copia, no se borra ninguna rama. Para recuperar una rama del respaldo:
+
+```powershell
+git fetch "..\AvantIA-backups\ramas-<marca>.bundle" <rama>:<rama>
+```
+
+Las ramas que se descartan por obsoletas no son recuperables desde `main`, porque su trabajo nunca llegó allí. Antes de borrarlas, archívalas con una etiqueta publicada en `origin`, que mantiene los commits accesibles en GitHub de forma permanente:
+
+```powershell
+git tag archivo/<rama> origin/<rama>
+git push origin archivo/<rama>
+git push origin --delete <rama>
+```
+
+Para volver a trabajar sobre una rama archivada: `git switch -c <rama> archivo/<rama>`. Antes de reutilizarla, compara su contenido con `main` (`git diff origin/main archivo/<rama>`): si se archivó fue porque `main` ya había avanzado por otro camino.
+
+Para comprobar en cualquier momento que `main` no se ha dejado trabajo por el camino, el informe de `clean-merged-branches.ps1` debe mostrar cero ramas con trabajo pendiente, salvo las tareas en curso con worktree abierto.
 
 ## Despliegue de producción
 

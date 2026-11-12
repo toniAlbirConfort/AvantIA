@@ -5,7 +5,9 @@
     Compara cada rama con origin/main por contenido (git cherry), no por historial,
     así que detecta también las ramas integradas mediante squash o commits directos,
     que 'git branch --merged' no reconoce.
-    Sin -Delete solo informa.
+    Sin -Delete solo informa. Con -Delete crea antes un bundle con todas las
+    referencias del repositorio en ..\AvantIA-backups, para poder recuperar
+    cualquier rama borrada.
 .EXAMPLE
     .\scripts\clean-merged-branches.ps1
 .EXAMPLE
@@ -14,7 +16,8 @@
 [CmdletBinding()]
 param(
     [switch]$Delete,
-    [switch]$Yes
+    [switch]$Yes,
+    [string]$BackupRoot
 )
 
 $ErrorActionPreference = 'Stop'
@@ -114,6 +117,26 @@ if (-not $Yes) {
     }
 }
 
+$repoRoot = (& $git rev-parse --show-toplevel) -replace '/', '\'
+if (-not $BackupRoot) {
+    $BackupRoot = Join-Path (Split-Path -Parent $repoRoot) 'AvantIA-backups'
+}
+if (-not (Test-Path -LiteralPath $BackupRoot)) {
+    New-Item -ItemType Directory -Path $BackupRoot | Out-Null
+}
+$stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+$bundlePath = Join-Path $BackupRoot "ramas-$stamp.bundle"
+$manifestPath = Join-Path $BackupRoot "ramas-$stamp.txt"
+
+Write-Host ''
+Write-Host 'Creando copia de seguridad de todas las referencias...'
+& $git for-each-ref --format='%(objectname) %(refname)' | Set-Content -LiteralPath $manifestPath -Encoding utf8
+& $git bundle create $bundlePath --all
+if ($LASTEXITCODE -ne 0) { throw 'No se pudo crear el bundle de respaldo. No se ha eliminado ninguna rama.' }
+Write-Host "Respaldo: $bundlePath"
+Write-Host "Inventario: $manifestPath"
+Write-Host ''
+
 foreach ($branch in $integrated) {
     if ($branch.Local) {
         & $git branch -D $branch.Nombre | Out-Null
@@ -128,4 +151,5 @@ foreach ($branch in $integrated) {
 
 & $git fetch origin --prune | Out-Null
 Write-Host ''
-Write-Host 'Limpieza terminada.'
+Write-Host 'Limpieza terminada. main conserva todo el trabajo integrado.'
+Write-Host "Para recuperar una rama del respaldo: git fetch `"$bundlePath`" <rama>:<rama>"
