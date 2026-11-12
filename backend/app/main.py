@@ -31,6 +31,7 @@ from app.classification import (
     resolve_conversation_classification,
 )
 from app.config import READ_ONLY_MODE, get_settings
+from app.contacts import conversation_contact
 from app.db import get_db
 from app.gowa import (
     GowaDeviceNotRegistered,
@@ -141,6 +142,9 @@ class MessageAnnotationExpectedIn(BaseModel):
     departure: str | None = None
     guests: int | None = None
     property_query: str | None = Field(default=None, max_length=150)
+    contact_email: str | None = Field(default=None, max_length=255)
+    contact_phone: str | None = Field(default=None, max_length=40)
+    wants_price: bool | None = None
 
 
 class MessageAnnotationIn(BaseModel):
@@ -257,6 +261,7 @@ def _conversation(conv: Conversation, db: Session, detail: bool = False) -> dict
                 )
             ).all()
         }
+        data["contact"] = conversation_contact(list(messages), annotations)
         data["messages"] = [
             {
                 "id": item.id,
@@ -488,6 +493,7 @@ def _inbox_thread_items(conversations: list[Conversation], db: Session) -> list[
                 "classification_open": item.classification_open,
                 "classification_resolved_at": item.classification_resolved_at,
                 "classification_review_count": review_counts.get(item.id, 0),
+                "contact": conversation_contact([latest_inbound]) if latest_inbound else None,
                 "last_inbound_classification": effective_classification(latest_inbound)
                 if latest_inbound
                 else None,

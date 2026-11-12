@@ -15,7 +15,8 @@ from datetime import date
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import MessageAnnotation, now
+from app.contacts import EMAIL_RE, message_contact, normalize_phone, same_phone
+from app.models import Message, MessageAnnotation, now
 
 
 @dataclass(frozen=True)
@@ -43,6 +44,7 @@ INTENTS: dict[str, Intent] = {
 }
 
 EXPECTED_FIELDS = ("arrival", "departure", "guests", "property_query")
+CONTACT_FIELDS = ("contact_email", "contact_phone", "wants_price")
 # One message in five is kept aside to measure the model; the rest can serve as examples.
 EVAL_SHARE = 5
 
@@ -69,11 +71,25 @@ def clean_expected(intent: str, expected: dict | None) -> dict | None:
     property_query = expected.get("property_query")
     if not isinstance(property_query, str) or not property_query.strip():
         property_query = None
+    contact_email = (expected.get("contact_email") or "").strip().lower() or None
+    if contact_email and not EMAIL_RE.fullmatch(contact_email):
+        raise ValueError("El email del cliente no es válido")
+    contact_phone = expected.get("contact_phone")
+    if contact_phone:
+        contact_phone = normalize_phone(str(contact_phone))
+        if not contact_phone:
+            raise ValueError("El teléfono debe llevar prefijo (+34…) o ser un número español")
+    wants_price = expected.get("wants_price")
+    if wants_price is not None and not isinstance(wants_price, bool):
+        raise ValueError("Indica si el cliente pide precio")
     return {
         "arrival": arrival.isoformat() if arrival else None,
         "departure": departure.isoformat() if departure else None,
         "guests": guests,
         "property_query": property_query.strip()[:150] if property_query else None,
+        "contact_email": contact_email,
+        "contact_phone": contact_phone or None,
+        "wants_price": wants_price,
     }
 
 
@@ -156,10 +172,24 @@ def intent_catalog() -> list[dict]:
     ]
 
 
+OPTIONAL_FIELDS = {"property_query", "contact_email", "contact_phone", "wants_price"}
+
+
 @dataclass
 class Prediction:
     label: str | None
     data: dict | None
+    contact: dict | None = None
+
+
+def contact_prediction(message) -> dict:
+    """What the deterministic detector finds, in the same shape as the annotation."""
+    contact = message_contact(message) or {}
+    return {
+        "contact_email": (contact.get("emails") or [None])[0],
+        "contact_phone": (contact.get("phones") or [None])[0],
+        "wants_price": contact.get("wants_price"),
+    }
 
 
 def score(rows: list[tuple[MessageAnnotation, Prediction]]) -> dict:
@@ -173,16 +203,16 @@ def score(rows: list[tuple[MessageAnnotation, Prediction]]) -> dict:
         item["total"] += 1
         item["correct"] += int(a.label == p.label)
 
-    fields = {field: {"total": 0, "correct": 0} for field in EXPECTED_FIELDS}
+    fields = {field: {"total": 0, "correct": 0} for field in EXPECTED_FIELDS + CONTACT_FIELDS}
     extraction_rows = 0
     for annotation, prediction in rows:
         if not INTENTS[annotation.intent].needs_availability or not annotation.expected:
             continue
         extraction_rows += 1
-        predicted = prediction.data or {}
-        for field in EXPECTED_FIELDS:
+        predicted = {**(prediction.data or {}), **(prediction.contact or {})}
+        for field in EXPECTED_FIELDS + CONTACT_FIELDS:
             expected_value = annotation.expected.get(field)
-            if field == "property_query" and expected_value is None:
+            if field in OPTIONAL_FIELDS and expected_value is None:
                 continue
             fields[field]["total"] += 1
             fields[field]["correct"] += int(_same(field, expected_value, predicted.get(field)))
@@ -199,6 +229,10 @@ def score(rows: list[tuple[MessageAnnotation, Prediction]]) -> dict:
 
 
 def _same(field: str, expected, predicted) -> bool:
+    if field == "contact_phone":
+        return same_phone(expected, predicted)
+    if field == "contact_email":
+        return isinstance(predicted, str) and expected.casefold() == predicted.casefold()
     if field == "property_query":
         if not expected or not isinstance(predicted, str):
             return False
@@ -209,8 +243,24 @@ def _same(field: str, expected, predicted) -> bool:
 
 def summary(db: Session) -> dict:
     annotations = db.scalars(select(MessageAnnotation)).all()
+    messages = {
+        item.id: item
+        for item in db.scalars(
+            select(Message).where(Message.id.in_([item.message_id for item in annotations]))
+        ).all()
+    }
     stored = [
-        (item, Prediction(item.predicted_label, item.predicted_data)) for item in annotations
+        (
+            item,
+            Prediction(
+                item.predicted_label,
+                item.predicted_data,
+                contact_prediction(messages[item.message_id])
+                if item.message_id in messages
+                else None,
+            ),
+        )
+        for item in annotations
     ]
     return {
         "total": len(annotations),

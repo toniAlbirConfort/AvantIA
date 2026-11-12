@@ -79,9 +79,11 @@ def test_expected_data_is_validated_and_ignored_when_not_needed():
         "availability_request",
         {"arrival": "2027-02-20", "departure": "2027-03-12", "guests": 2, "property_query": " "},
     ) == {"arrival": "2027-02-20", "departure": "2027-03-12", "guests": 2,
-          "property_query": None}
+          "property_query": None, "contact_email": None, "contact_phone": None,
+          "wants_price": None}
     assert clean_expected("availability_request", {}) == {
-        "arrival": None, "departure": None, "guests": None, "property_query": None
+        "arrival": None, "departure": None, "guests": None, "property_query": None,
+        "contact_email": None, "contact_phone": None, "wants_price": None,
     }
     with pytest.raises(ValueError):
         clean_expected("availability_request", {"arrival": "2027-03-12",

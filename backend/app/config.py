@@ -47,6 +47,9 @@ class Settings(BaseSettings):
     smtp_from: str = ""
     smtp_starttls: bool = True
     booking_sender_domains: str = "booking.com"
+    # Remitentes de la propia empresa: si escriben con datos de un cliente, son leads reenviados.
+    internal_sender_domains: str = "albirconfort.es,albirconfort.com,albirconfort-holidays.com"
+    internal_phone_numbers: str = ""
     admin_username: str = ""
     admin_password: str = ""
     avantio_export_url: str = ""
