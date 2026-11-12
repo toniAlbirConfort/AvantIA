@@ -94,6 +94,26 @@ class Message(Base):
     conversation: Mapped[Conversation] = relationship(back_populates="messages")
 
 
+class MessageAnnotation(Base):
+    """Human ground truth for one inbound message, used to evaluate and guide the model."""
+
+    __tablename__ = "message_annotations"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    message_id: Mapped[int] = mapped_column(ForeignKey("messages.id"), unique=True)
+    intent: Mapped[str] = mapped_column(String(40), index=True)
+    label: Mapped[str] = mapped_column(String(24))
+    expected: Mapped[dict | None] = mapped_column(JSON)
+    note: Mapped[str | None] = mapped_column(String(300))
+    split: Mapped[str] = mapped_column(String(12), index=True)
+    predicted_label: Mapped[str | None] = mapped_column(String(24))
+    predicted_confidence: Mapped[str | None] = mapped_column(String(12))
+    predicted_data: Mapped[dict | None] = mapped_column(JSON)
+    predicted_model: Mapped[str | None] = mapped_column(String(100))
+    annotated_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
 class Draft(Base):
     __tablename__ = "drafts"
     id: Mapped[int] = mapped_column(primary_key=True)
