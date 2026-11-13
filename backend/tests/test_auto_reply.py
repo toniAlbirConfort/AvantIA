@@ -477,6 +477,42 @@ def test_reply_says_when_the_team_answers(local, lang, expected):
     assert expected in auto_reply.compose(lang, received=received)
 
 
+@pytest.mark.parametrize(
+    ("data", "sender", "expected"),
+    [
+        ({"language": "nb", "language_detected": True}, "x@online.no", "nb"),
+        ({"language": "de", "language_detected": True}, "x@example.test", "de"),
+        ({"language": "other", "language_detected": True}, "x@example.nl", "en"),
+        # The model gave no language: Spanish only for a Spanish address.
+        ({"language": "es", "language_detected": False}, "x@online.no", "en"),
+        ({"language": "es", "language_detected": False}, "x@telefonica.es", "es"),
+        (None, "x@gmail.com", "en"),
+        # Data stored before language_detected existed keeps the detected language.
+        ({"language": "es"}, "x@gmail.com", "es"),
+    ],
+)
+def test_language_choice(data, sender, expected):
+    assert auto_reply.language(Message(sender=sender, classification_data=data)) == expected
+
+
+def test_extraction_marks_whether_language_was_detected():
+    from app.processing import _safe_analysis
+
+    assert _safe_analysis({"customer_language": "nb"})["language"] == "nb"
+    assert _safe_analysis({"customer_language": "nb"})["language_detected"] is True
+    missing = _safe_analysis({})
+    assert missing["language"] == "es"  # Drafts keep their Spanish default.
+    assert missing["language_detected"] is False
+
+
+def test_norwegian_reply(auto_reply_settings):
+    received = datetime(2026, 11, 13, 21, 0, tzinfo=MADRID).astimezone(UTC)
+    text = auto_reply.compose("nb", name="Dag", received=received)
+    assert text.startswith("Hei Dag,")
+    assert "Mandag fra kl. 08.00 vil en av oss" in text
+    assert text.rstrip().endswith("Reservasjonsteamet i Albir Confort")
+
+
 def test_message_is_personal_and_not_marked_automatic(auto_reply_settings):
     text = auto_reply.compose("es", name="Ana", received=NIGHT)
     assert text.startswith("Hola Ana,\n\nMuchas gracias por escribirnos")

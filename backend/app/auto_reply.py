@@ -146,6 +146,20 @@ TEMPLATES = {
         "days": ("segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira"),
         "zone": " (hora de Espanha)",
     },
+    # Norwegian (bokmål). Norway shares Spain's time zone, so no zone note.
+    "nb": {
+        "greeting": ("Hei {name},", "Hei,"),
+        "body": (
+            "Tusen takk for at du tok kontakt, og for din interesse for Albir Confort.\n\n"
+            "Kontoret vårt er stengt akkurat nå, men vi har mottatt meldingen din. {when} vil "
+            "en av oss i reservasjonsteamet se på henvendelsen din og svare deg personlig."
+        ),
+        "site": "I mellomtiden kan du se leilighetene våre på {site}.",
+        "closing": "Med vennlig hilsen\nReservasjonsteamet i Albir Confort",
+        "when": ("I dag fra kl. {hour}", "I morgen fra kl. {hour}", "{day} fra kl. {hour}"),
+        "days": ("Mandag", "Tirsdag", "Onsdag", "Torsdag", "Fredag"),
+        "zone": "",
+    },
 }
 # Words that sit where a first name would in a From header but are not names.
 NOT_NAMES = {
@@ -197,10 +211,20 @@ def is_out_of_hours(moment: datetime) -> bool:
 
 
 def language(message: Message) -> str:
-    value = (message.classification_data or {}).get("language")
+    """The template language: the one the model detected, English for any other language.
+
+    When the model gave no language (it failed or answered something unusable), Spanish only
+    for a Spanish address (.es) and English for everyone else, so that a foreign customer
+    never gets a reply in Spanish by accident.
+    """
+    data = message.classification_data or {}
+    value = data.get("language")
+    if data.get("language_detected") is False or value is None:
+        domain = recipient(message).rsplit("@", 1)[-1]
+        return "es" if domain.endswith(".es") else "en"
     if value in TEMPLATES:
         return value
-    return "en" if value == "other" else "es"
+    return "en"
 
 
 def _fold(value: str) -> str:
@@ -275,6 +299,8 @@ def _when(lang: str, received: datetime) -> str:
     hour = f"{opens.hour}:{opens.minute:02d}"
     if lang == "fr":
         hour = f"{opens.hour}h{opens.minute:02d}" if opens.minute else f"{opens.hour}h"
+    elif lang == "nb":
+        hour = f"{opens.hour:02d}.{opens.minute:02d}"
     today, tomorrow, other = template["when"]
     pattern = today if days == 0 else tomorrow if days == 1 else other
     return pattern.format(hour=hour, day=template["days"][opens.weekday()]) + template["zone"]
