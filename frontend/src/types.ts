@@ -43,6 +43,13 @@ export type AutoReply = {
   mode: 'shadow' | 'sending' | 'sent' | 'failed'; language: string; subject: string; text: string;
   error: string | null; created_at: string
 }
+export type RegistrationStatus = 'pending' | 'registered' | 'excluded' | 'alerted'
+export type RegistrationCheck = {
+  id: number; conversation_id: number; message_id: number; customer_email: string | null; customer_name: string | null;
+  received_at: string; due_at: string; status: RegistrationStatus; reason: string | null; locator: string | null;
+  mode: string | null; checked_at: string | null; alerted_at: string | null; resolved_at: string | null;
+  resolved_by_id: number | null; note: string | null
+}
 export type Audit = { action: string; actor_user_id: number | null; detail: Record<string, unknown>; created_at: string }
 export type Conversation = {
   id: number; channel: string; kind: string; customer_name: string | null; customer_address: string | null;
@@ -52,6 +59,7 @@ export type Conversation = {
   analysis: Record<string, unknown>; created_at: string; updated_at: string; last_inbound_at: string;
   draft: Draft | null; messages?: Message[]; drafts?: Draft[]; audit?: Audit[];
   auto_replies?: AutoReply[]
+  registration?: RegistrationCheck | null
   booking_task?: { id: number; status: string; extracted: Record<string, unknown> } | null
   contact?: ContactInfo | null
   reply?: ReplyDefaults | null
@@ -67,6 +75,7 @@ export type InboxThread = {
   classification_review_count: number; last_inbound_classification: Exclude<ClassificationLabel, 'review'> | null;
   last_inbound_needs_review: boolean; last_inbound_at: string; message_count: number;
   last_message_at: string | null; preview: string; contact?: ContactInfo | null
+  registration_status?: RegistrationStatus | null
 }
 export type InboxSenderGroup = {
   type: 'sender'; sender: string; display_name: string; address: string; channel: 'email';
