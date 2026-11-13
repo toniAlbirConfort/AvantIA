@@ -33,6 +33,10 @@ function isToday(value: string | null) {
   return day.getFullYear() === today.getFullYear() && day.getMonth() === today.getMonth() && day.getDate() === today.getDate()
 }
 
+function reportKeyFromPath() {
+  return window.location.pathname.match(/^\/reports\/((?:report|study)-\d+)\/?$/)?.[1] || null
+}
+
 function SourceBadge({ source }: { source: ReportItem['source'] }) {
   return <Badge className={sourceTones[source]}>{source === 'claude' ? <Sparkles size={12} aria-hidden="true" /> : <FlaskConical size={12} aria-hidden="true" />}{sourceLabels[source]}</Badge>
 }
@@ -145,9 +149,37 @@ export function Reports({ role, refreshVersion, onOpenTariffLab }: { role: strin
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const [showDetail, setShowDetail] = useState(false)
   const [uploading, setUploading] = useState(false)
-  const [reading, setReading] = useState<ReportItem | null>(null)
-  const closeReading = useCallback(() => setReading(null), [])
+  // The URL is the source of truth: /reports/<key> opens that report (documents in reading mode),
+  // so the browser's back button closes it.
+  const [routeKey, setRouteKey] = useState<string | null>(reportKeyFromPath)
   const admin = role === 'admin'
+
+  useEffect(() => {
+    const onPopState = () => setRouteKey(reportKeyFromPath())
+    window.addEventListener('popstate', onPopState)
+    return () => window.removeEventListener('popstate', onPopState)
+  }, [])
+  useEffect(() => {
+    if (!routeKey) { setShowDetail(false); return }
+    if (items.some(item => item.key === routeKey)) { setSelectedKey(routeKey); setShowDetail(true) }
+    else if (!loading) {
+      // The link points to a report that no longer exists: fall back to the list.
+      window.history.replaceState(null, '', '/reports'); setRouteKey(null)
+      setError('Ese informe ya no existe.')
+    }
+  }, [routeKey, items, loading])
+
+  function openItem(item: ReportItem) {
+    setSelectedKey(item.key)
+    window.history.pushState({ avantiaReport: true }, '', `/reports/${item.key}`)
+    setRouteKey(item.key)
+  }
+  const closeItem = useCallback(() => {
+    if ((window.history.state as { avantiaReport?: boolean } | null)?.avantiaReport) { window.history.back(); return }
+    window.history.replaceState(null, '', '/reports')
+    setRouteKey(null)
+  }, [])
+  const reading = items.find(item => item.key === routeKey && item.kind === 'document') || null
 
   const load = useCallback(async (focusKey?: string) => {
     setLoading(true); setError('')
@@ -164,14 +196,18 @@ export function Reports({ role, refreshVersion, onOpenTariffLab }: { role: strin
 
   async function remove(item: ReportItem) {
     setError('')
-    try { await api(`/api/reports/${item.id}`, { method: 'DELETE' }); setShowDetail(false); await load() }
+    try {
+      await api(`/api/reports/${item.id}`, { method: 'DELETE' })
+      window.history.replaceState(null, '', '/reports'); setRouteKey(null)
+      await load()
+    }
     catch (err) { setError((err as Error).message) }
   }
 
   return <div className="grid gap-4">
-    {reading && <ReadingMode item={reading} onClose={closeReading} />}
+    {reading && <ReadingMode item={reading} onClose={closeItem} />}
     {error && <Alert variant="destructive" role="alert">{error}</Alert>}
-    {uploading && <UploadForm onCancel={() => setUploading(false)} onDone={key => { setUploading(false); setShowDetail(true); void load(key) }} />}
+    {uploading && <UploadForm onCancel={() => setUploading(false)} onDone={key => { setUploading(false); void load(key); window.history.pushState({ avantiaReport: true }, '', `/reports/${key}`); setRouteKey(key) }} />}
     <div className="grid items-start gap-4 lg:grid-cols-[minmax(20rem,4fr)_minmax(0,8fr)]">
       <section className={`min-w-0 overflow-hidden rounded-xl border border-border bg-card ${showDetail ? 'hidden lg:block' : ''}`} aria-label="Listado de informes">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border p-4">
@@ -185,7 +221,7 @@ export function Reports({ role, refreshVersion, onOpenTariffLab }: { role: strin
           {loading && !items.length
             ? <div className="grid gap-3 p-4"><Skeleton className="h-16 w-full" /><Skeleton className="h-16 w-full" /></div>
             : visible.length
-              ? visible.map(item => <button key={item.key} type="button" onClick={() => { setSelectedKey(item.key); setShowDetail(true); if (item.kind === 'document') setReading(item) }} aria-current={selectedKey === item.key ? 'true' : undefined} className={`grid w-full gap-1.5 border-b border-border px-4 py-3.5 text-left hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring ${selectedKey === item.key ? 'border-l-4 border-l-primary bg-accent pl-3' : ''}`}>
+              ? visible.map(item => <button key={item.key} type="button" onClick={() => openItem(item)} aria-current={selectedKey === item.key ? 'true' : undefined} className={`grid w-full gap-1.5 border-b border-border px-4 py-3.5 text-left hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring ${selectedKey === item.key ? 'border-l-4 border-l-primary bg-accent pl-3' : ''}`}>
                 <span className="flex items-center justify-between gap-3"><SourceBadge source={item.source} /><small className="shrink-0 text-xs text-muted-foreground">{isToday(item.created_at) ? <strong className="font-semibold text-primary">Hoy</strong> : dateLabel(item.created_at)}</small></span>
                 <strong className="text-sm leading-5">{item.title}</strong>
                 {item.description && <span className="line-clamp-2 text-sm leading-5 text-muted-foreground">{item.description}</span>}
@@ -197,13 +233,13 @@ export function Reports({ role, refreshVersion, onOpenTariffLab }: { role: strin
         {selected ? <>
           <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border p-4 sm:px-6">
             <div className="min-w-0">
-              <Button variant="outline" size="sm" className="mb-3 lg:hidden" onClick={() => setShowDetail(false)}><ArrowLeft size={16} /> Informes</Button>
+              <Button variant="outline" size="sm" className="mb-3 lg:hidden" onClick={closeItem}><ArrowLeft size={16} /> Informes</Button>
               <div className="mb-2 flex flex-wrap items-center gap-2"><SourceBadge source={selected.source} /><span className="text-xs text-muted-foreground">{dateLabel(selected.created_at)}{selected.created_by ? ` · ${selected.created_by}` : ''}</span></div>
               <h2 className="text-xl font-semibold leading-tight">{selected.title}</h2>
               {selected.description && <p className="mt-1 max-w-3xl text-sm leading-6 text-muted-foreground">{selected.description}</p>}
             </div>
             <div className="flex flex-wrap gap-2">
-              {selected.kind === 'document' && <Button size="sm" onClick={() => setReading(selected)}><BookOpen size={15} /> Modo lectura</Button>}
+              {selected.kind === 'document' && <Button size="sm" onClick={() => openItem(selected)}><BookOpen size={15} /> Modo lectura</Button>}
               {selected.original_url && <Button asChild variant="outline" size="sm"><a href={selected.original_url} target="_blank" rel="noreferrer"><ExternalLink size={15} /> Original</a></Button>}
               {admin && selected.kind === 'document' && <Button variant="ghost" size="sm" onClick={() => { if (window.confirm(`¿Borrar el informe «${selected.title}»? No se puede deshacer.`)) void remove(selected) }}><Trash2 size={15} /> Borrar</Button>}
             </div>

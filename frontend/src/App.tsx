@@ -49,6 +49,11 @@ const fieldLabels: Record<string, string> = {
   start_date: 'Entrada / inicio', end_date: 'Salida / fin', status: 'Estado',
 }
 
+function viewFromPath(path: string): View {
+  const segment = path.split('/')[1] || ''
+  return navigation.find(item => item.id === segment)?.id || 'reservations'
+}
+
 function date(value?: string | null) {
   return value ? new Intl.DateTimeFormat('es-ES', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : '—'
 }
@@ -179,7 +184,7 @@ export default function App() {
   const [user, setUser] = useState<User | null>(null)
   const [checking, setChecking] = useState(!!token())
   const path = window.location.pathname
-  const [view, setView] = useState<View>(path.startsWith('/inbox') ? 'inbox' : path.startsWith('/bookings') ? 'bookings' : navigation.find(item => path === `/${item.id}`)?.id || 'reservations')
+  const [view, setView] = useState<View>(viewFromPath(path))
   const [selectedId, setSelectedId] = useState<number | null>(Number(path.split('/')[2]) || null)
   const [summary, setSummary] = useState<Summary | null>(null)
   const [items, setItems] = useState<Conversation[]>([])
@@ -354,6 +359,20 @@ export default function App() {
     const timer = window.setTimeout(() => setSearchQuery(searchText.trim()), 250)
     return () => clearTimeout(timer)
   }, [searchText])
+
+  useEffect(() => {
+    // Browser back/forward: show the view (and conversation) the URL points to.
+    function onPopState() {
+      const current = window.location.pathname
+      const next = viewFromPath(current)
+      setView(next); setMobileMenu(false); setError(''); setComposerOpen(false)
+      const id = next === 'inbox' || next === 'bookings' ? Number(current.split('/')[2]) || null : null
+      setSelectedId(id); setDetail(null)
+      if (id) api<Conversation>(`/api/conversations/${id}`).then(setDetail).catch(err => setError((err as Error).message))
+    }
+    window.addEventListener('popstate', onPopState)
+    return () => window.removeEventListener('popstate', onPopState)
+  }, [])
 
   function navigate(next: View, id?: number) {
     setView(next); setMobileMenu(false); setError('')
