@@ -423,3 +423,17 @@ def test_parser_accepts_non_blocking_request_states(db):
         reservation("PD", "A", "Peticiones desestimadas", start, end),
     ]), "reservations")
     assert [row["status"] for row in rows] == ["abandoned_cart", "owner_cancelled", "dismissed"]
+
+
+def test_warnings_skip_history_and_placeholder_amounts(db):
+    future = date.today() + timedelta(days=10)
+    past = date.today() - timedelta(days=400)
+    commit(db, "properties", properties())
+    batch = commit(db, "reservations", reservations([
+        reservation("OLD", "B", "Pagada", past, past + timedelta(days=3), paid=110, pending=0),
+        reservation("CAN", "A", "Cancelada", future, future + timedelta(days=2), pending=0),
+        reservation("INQ", "B", "Petición Información", future, future + timedelta(days=2)),
+        reservation("PAY", "A", "Pagada", future, future + timedelta(days=2), paid=0, pending=50),
+    ]))
+    found = {(issue["code"], issue.get("locator")) for issue in batch.warnings}
+    assert found == {("inactive_property", "INQ"), ("balance_mismatch", "PAY")}
