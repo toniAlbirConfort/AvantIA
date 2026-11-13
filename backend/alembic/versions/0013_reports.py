@@ -26,7 +26,7 @@ INITIAL_REPORTS = (
         ),
         "source": "claude",
         "file": "2026-11-13-competencia-albir.html",
-        "original_url": "https://claude.ai/artifact/JSBP7TDSBHiqQpQR7rhyAU",
+        "original_url": None,
         "created_at": datetime(2026, 11, 13, 12, 0, tzinfo=UTC),
     },
 )
