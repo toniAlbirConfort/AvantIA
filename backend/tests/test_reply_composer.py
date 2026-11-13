@@ -175,3 +175,48 @@ def test_email_delivery_sends_html_cc_subject_and_quotes_original(db, monkeypatc
     assert mail["text"].startswith("Sí, hay sitio.") and "> ¿Hay sitio?" in mail["text"]
     outbound = db.query(Message).filter(Message.direction == "outbound").one()
     assert outbound.html_body == "<p><b>Sí</b>, hay sitio.</p>"
+
+
+PNG_1PX = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+)
+
+
+def test_embedded_images_are_sent_as_inline_attachments(monkeypatch):
+    from app.integrations import build_email
+
+    monkeypatch.setattr(get_settings(), "smtp_from", "reservas@example.test")
+    image = f'<img src="data:image/png;base64,{PNG_1PX}" width="120">'
+    message = build_email(
+        to="cliente@example.test",
+        subject="Re: Consulta",
+        text="Hola",
+        message_id="<x@example.test>",
+        html_body=f"<p>Hola</p><div data-signature=\"1\">{image}{image}</div>",
+    )
+    html_part = message.get_body(preferencelist=("html",))
+    html = html_part.get_content()
+    assert "data:image" not in html
+    assert html.count('src="cid:img-') == 2
+    attachments = [part for part in message.walk() if part.get_content_maintype() == "image"]
+    assert len(attachments) == 1  # identical images are attached once
+    assert attachments[0]["Content-ID"].strip("<>") in html
+    assert attachments[0].get_content_disposition() == "inline"
+    assert message.get_body(preferencelist=("plain",)).get_content().strip() == "Hola"
+
+
+def test_signature_can_be_only_an_image(db, monkeypatch):
+    try:
+        with _client(db, monkeypatch, "ana") as client:
+            auth = _auth(client, "ana")
+            saved = client.put(
+                "/api/signatures",
+                headers=auth,
+                json={"mailbox": "*", "html_body": f'<img src="data:image/png;base64,{PNG_1PX}">'},
+            )
+            assert saved.status_code == 200
+            assert saved.json()["signatures"][0]["html_body"].startswith(
+                '<img src="data:image/png;base64,'
+            )
+    finally:
+        app.dependency_overrides.clear()

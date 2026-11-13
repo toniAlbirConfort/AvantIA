@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
 import json
+import re
 import smtplib
 import ssl
 from email.message import EmailMessage
@@ -94,6 +98,49 @@ def smtp_send(
     settings = get_settings()
     if not settings.smtp_host or not settings.smtp_from:
         raise RuntimeError("SMTP no configurado")
+    message = build_email(
+        to=to, subject=subject, text=text, message_id=message_id, cc=cc,
+        html_body=html_body, in_reply_to=in_reply_to, references=references,
+    )
+    _deliver(message)
+
+
+DATA_IMAGE = re.compile(
+    r"""src=(["'])data:image/(png|jpe?g|gif|webp);base64,([A-Za-z0-9+/=\s]+)\1""", re.I
+)
+
+
+def _inline_images(html_body: str) -> tuple[str, list[tuple[str, str, bytes]]]:
+    """Swap embedded data: images for cid: references. Gmail and Outlook drop data: URLs."""
+    images: dict[str, tuple[str, str, bytes]] = {}
+
+    def replace(match: re.Match) -> str:
+        raw = re.sub(r"\s+", "", match.group(3))
+        digest = hashlib.sha256(raw.encode()).hexdigest()[:24]
+        if digest not in images:
+            try:
+                data = base64.b64decode(raw, validate=True)
+            except (binascii.Error, ValueError):
+                return 'src=""'
+            subtype = match.group(2).lower().replace("jpg", "jpeg")
+            images[digest] = (f"img-{digest}@avantia", subtype, data)
+        return f'src="cid:{images[digest][0]}"'
+
+    return DATA_IMAGE.sub(replace, html_body), list(images.values())
+
+
+def build_email(
+    *,
+    to: str,
+    subject: str,
+    text: str,
+    message_id: str,
+    cc: list[str] | None = None,
+    html_body: str | None = None,
+    in_reply_to: str | None = None,
+    references: str | None = None,
+) -> EmailMessage:
+    settings = get_settings()
     message = EmailMessage()
     message["From"] = settings.smtp_from
     message["To"] = to
@@ -107,11 +154,24 @@ def smtp_send(
         message["References"] = references
     message.set_content(text)
     if html_body:
+        html_body, images = _inline_images(html_body)
         message.add_alternative(
             '<!doctype html><html><body style="font-family: Arial, Helvetica, sans-serif; '
             f'font-size: 14px">{html_body}</body></html>',
             subtype="html",
         )
+        html_part = message.get_payload()[-1]
+        for content_id, subtype, data in images:
+            html_part.add_related(
+                data, maintype="image", subtype=subtype, cid=f"<{content_id}>",
+                filename=f"imagen.{'jpg' if subtype == 'jpeg' else subtype}",
+                disposition="inline",
+            )
+    return message
+
+
+def _deliver(message: EmailMessage) -> None:
+    settings = get_settings()
     if settings.smtp_starttls:
         with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=30) as smtp:
             smtp.starttls(context=ssl.create_default_context())

@@ -127,7 +127,7 @@ class UserIn(BaseModel):
 
 class DraftIn(BaseModel):
     text: str = Field(min_length=1, max_length=20000)
-    html_body: str | None = Field(default=None, max_length=400_000)
+    html_body: str | None = Field(default=None, max_length=3_000_000)
     subject: str | None = Field(default=None, max_length=500)
     cc: str | None = Field(default=None, max_length=1000)
     expected_draft_id: int | None = None
@@ -135,7 +135,7 @@ class DraftIn(BaseModel):
 
 class SignatureIn(BaseModel):
     mailbox: str = Field(min_length=1, max_length=255)
-    html_body: str = Field(max_length=400_000)
+    html_body: str = Field(max_length=3_000_000)
 
 
 class GowaPurgeIn(BaseModel):

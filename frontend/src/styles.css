@@ -165,5 +165,6 @@
 .rich-editor ol { list-style: decimal; }
 .rich-editor a { color: #2563eb; text-decoration: underline; }
 .rich-editor blockquote { margin: 0.4em 0 0.4em 0.8ex; border-left: 2px solid #cbd5e1; padding-left: 1ex; color: #475569; }
-.rich-editor img { max-width: 100%; height: auto; }
+.rich-editor img { max-width: 100%; height: auto; cursor: pointer; }
+.rich-editor img:hover { outline: 2px solid #93c5fd; }
 .rich-editor [data-signature] { color: #334155; }
