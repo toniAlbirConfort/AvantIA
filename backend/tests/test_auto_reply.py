@@ -427,16 +427,33 @@ def test_from_header_variants(auto_reply_settings):
 @pytest.mark.parametrize(
     ("sender", "expected"),
     [
-        ("Ana <ana@example.test>", "Ana"),
-        ("ANA GARCÍA <ana@example.test>", "Ana"),
+        # The address confirms the name.
+        ("ANA GARCÍA <ana.garcia@example.test>", "Ana"),
+        ("José Pérez <jperez@example.test>", "José"),
         ("'Dag Tessem' <dtessem@online.no>", "Dag"),
         ('"Tessem, Dag" <dtessem@online.no>', "Dag"),
-        ("Jean-Luc Picard <jl@example.test>", "Jean-Luc"),
+        ("Helen Rooney <hrooney571@gmail.com>", "Helen"),
+        ("Jean-Luc Picard <jean-luc.picard@example.test>", "Jean-Luc"),
+        # Not clear: no name, a company, a nickname or an address that says otherwise.
+        ("Katarzyna Szymczak <kasia80.szymczak@gmail.com>", "Katarzyna"),
+        ("Sølvi Sommervoll <solvisom@ntebb.no>", "Sølvi"),
+        ("Ana <ana@example.test>", None),
+        ("Aisling Killeen Dickson <simondickson@icloud.com>", None),
+        ("Extranet Sidetours <extranet@sidetours.com>", None),
+        ("Product Muchosol <product@muchosol.com>", None),
+        ("Gmail KARBAR Grup <karbarsolucionesindustriales@gmail.com>", None),
+        ("Vrbo Integrations <integrationsupport@expediagroup.com>", None),
+        ("Ana Garcia <contacto@example.test>", None),
+        ("Viajes Sol <info@viajessol.com>", None),
+        ("Mibtrysil <mibtrysil@gmail.com>", None),
+        ("Familia Garcia <familiagarcia@example.test>", None),
         ("\"'ana.smc ana.smc'\" <ana.smc@telefonica.net>", None),
         ("Info <info@example.test>", None),
+        ("Reservas Hotel Sol <reservas@hotelsol.es>", None),
         ("ana@example.test", None),
         ("hrooney571@gmail.com <hrooney571@gmail.com>", None),
         ("J <j@example.test>", None),
+        ("Ana Maria de la Cruz Lopez <ana@example.test>", None),
     ],
 )
 def test_first_name(sender, expected):

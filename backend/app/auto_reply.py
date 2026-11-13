@@ -18,6 +18,7 @@ from __future__ import annotations
 import base64
 import html
 import re
+import unicodedata
 from dataclasses import dataclass
 from datetime import UTC, datetime, time, timedelta
 from email.utils import parseaddr
@@ -150,7 +151,17 @@ TEMPLATES = {
 NOT_NAMES = {
     "info", "reservas", "reservations", "booking", "bookings", "admin", "contact", "contacto",
     "hello", "hola", "office", "oficina", "team", "equipo", "sales", "ventas", "mail", "email",
+    "familia", "family", "famille", "familie", "famiglia", "hotel", "hostal", "viajes",
+    "travel", "travels", "tours", "agencia", "agency", "apartamentos", "apartments", "holidays",
+    "vacaciones", "rentals", "service", "services", "servicio", "support", "soporte", "noreply",
+    "extranet", "product", "products", "integrations", "integration", "gmail", "hotmail",
+    "outlook", "yahoo", "icloud", "grup", "group", "grupo", "marketing", "news", "newsletter",
+    "customer", "customers", "cliente", "clientes", "real", "estate", "inmobiliaria",
 }
+# Letters that Unicode does not split into base letter + accent, as people type them in emails.
+LETTERS_WITHOUT_ACCENT_FORM = str.maketrans(
+    {"ø": "o", "æ": "ae", "œ": "oe", "ð": "d", "þ": "th", "ł": "l", "đ": "d", "ß": "ss"}
+)
 NAME_RE = re.compile(r"[^\W\d_]+(?:[-'’][^\W\d_]+)*")
 
 
@@ -192,16 +203,53 @@ def language(message: Message) -> str:
     return "en" if value == "other" else "es"
 
 
+def _fold(value: str) -> str:
+    """Lowercase without accents or separators, to compare a name with an email address."""
+    value = value.lower().translate(LETTERS_WITHOUT_ACCENT_FORM)
+    decomposed = unicodedata.normalize("NFKD", value)
+    return re.sub(r"[^a-z]", "", "".join(c for c in decomposed if not unicodedata.combining(c)))
+
+
 def first_name(message: Message) -> str | None:
-    """The customer's first name from the From header, only when it clearly is one."""
-    display = parseaddr(message.sender or "")[0].strip().strip("\"'")
-    if not display or "@" in display:
+    """The customer's first name, only when it is clear; otherwise the greeting has no name.
+
+    Clear means: the From display name is a first name and surname (two to four words, only
+    letters, no generic words such as "Info", "Familia" or "Hotel"), and the email address
+    itself confirms it, because its local part contains the first name or a surname
+    ("Dag Tessem" <dtessem@...>, "Ana García" <ana.garcia@...>). A single word, a company or
+    a name the address does not back up ("Viajes Sol" <info@...>) gets no name.
+    """
+    display, address = parseaddr(message.sender or "")
+    display = display.strip().strip("\"'").strip()
+    if not display or "@" in display or "@" not in address:
         return None
     if "," in display:  # "Surname, Name"
-        display = display.split(",", 1)[1].strip()
+        surname, given = display.split(",", 1)
+        display = f"{given.strip()} {surname.strip()}"
     words = display.split()
-    token = words[0] if words else ""
-    if len(token) < 2 or not NAME_RE.fullmatch(token) or token.lower() in NOT_NAMES:
+    # A first name and at least one surname: a single word is too often a username copy
+    # ("Mibtrysil" <mibtrysil@...>) or not a person at all.
+    if not 2 <= len(words) <= 4:
+        return None
+    if any(not NAME_RE.fullmatch(word) or word.lower() in NOT_NAMES for word in words):
+        return None
+    token = words[0]
+    given = _fold(token)
+    if len(given) < 2:
+        return None
+    local_part, domain = address.rsplit("@", 1)
+    local = _fold(local_part)
+    # A word of the name in the domain means a company ("Product Muchosol" <...@muchosol.com>).
+    domain_name = _fold(domain.lower().split(".")[0]) if "." in domain else ""
+    if domain_name and any(len(_fold(w)) >= 4 and _fold(w) in domain_name for w in words):
+        return None
+    # The address has to back up the first name itself: it contains it ("hilde.straume"),
+    # or it is the initial plus a surname ("dtessem" for Dag Tessem).
+    surnames = [_fold(word) for word in words[1:] if len(_fold(word)) >= 3]
+    confirmed = (len(given) >= 3 and given in local) or (
+        local.startswith(given[0]) and any(surname in local for surname in surnames)
+    )
+    if not confirmed:
         return None
     return token.capitalize() if token.isupper() or token.islower() else token
 
