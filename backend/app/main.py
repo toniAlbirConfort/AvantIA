@@ -54,6 +54,7 @@ from app.gowa import (
     delete_gowa_device_for_phone,
     get_gowa_status,
     gowa_device_id,
+    gowa_event_matches_device,
     gowa_is_configured,
     normalize_phone_number,
     reconnect_gowa,
@@ -1684,7 +1685,7 @@ async def gowa_webhook(request: Request, db: Db) -> dict:
         raise HTTPException(401, "Firma no válida")
     try:
         event = json.loads(raw)
-        if event["device_id"] != gowa_device_id(settings):
+        if not isinstance(event, dict) or not gowa_event_matches_device(event, settings):
             raise ValueError("Dispositivo no válido")
         if event["event"] != "message":
             return {"status": "ignored"}
