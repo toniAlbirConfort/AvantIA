@@ -86,3 +86,29 @@ export type ReservationsResponse = {
   has_snapshot: boolean
   properties: ReservationPropertyOption[]
 }
+export type AnalysisWindowMetrics = { nights: number; revenue: number; occupancy: number | null; adr: number | null; revpar: number | null }
+export type AnalysisYear = AnalysisWindowMetrics & {
+  year: number; arrivals: number; median_stay: number | null; median_lead_days: number | null
+  cancellation_rate: number | null; long_stay_share: number | null; inquiries: number; bookings_created: number
+}
+export type AnalysisMonth = AnalysisWindowMetrics & { month: number; state: 'closed' | 'partial' | 'forward' }
+export type AnalysisPaceWindow = { on_books: number; occupancy: number | null; final: number | null }
+export type AnalysisSegmentRow = {
+  key: string; units?: number; nights_change: number | null
+  values: Record<string, { nights: number; adr: number | null; share: number | null; occupancy: number | null }>
+}
+export type AnalysisInsight = { severity: 'warning' | 'info' | 'positive'; title: string; detail: string }
+export type ReservationAnalysis =
+  | { has_data: false; missing: ('reservations' | 'properties')[] }
+  | {
+    has_data: true; as_of: string; units: number; years: number[]; window: { start: string; end: string }
+    yearly: AnalysisYear[]; monthly: { year: number; months: AnalysisMonth[] }[]
+    pace: { year: number; as_of: string; rest_of_year: AnalysisPaceWindow; next_year: AnalysisPaceWindow }[]
+    segments: Record<'group' | 'channel' | 'stay' | 'guests' | 'lead', AnalysisSegmentRow[]>
+    orphan_gaps: { gaps: number; nights: number }
+    data_quality: {
+      stale_inquiries: number; unpaid_past_stays: number; unpaid_past_amount: number
+      confirmed_past_stays: number; over_capacity: number; zero_value_sold: number
+    }
+    insights: AnalysisInsight[]
+  }
