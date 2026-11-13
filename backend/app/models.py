@@ -421,6 +421,59 @@ class TariffStudy(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class TariffMarketObservation(Base):
+    """A competitor price captured by hand (for example from Booking) for one SA group."""
+
+    __tablename__ = "tariff_market_observations"
+    __table_args__ = (
+        CheckConstraint("nights >= 1", name="ck_tariff_market_observations_nights"),
+        CheckConstraint("guests >= 1", name="ck_tariff_market_observations_guests"),
+        CheckConstraint("nightly_rate > 0", name="ck_tariff_market_observations_rate"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tariff_name: Mapped[str] = mapped_column(String(180), index=True)
+    competitor: Mapped[str] = mapped_column(String(180))
+    unit_label: Mapped[str | None] = mapped_column(String(120))
+    stay_date: Mapped[date] = mapped_column(Date, index=True)
+    nights: Mapped[int] = mapped_column(Integer)
+    guests: Mapped[int] = mapped_column(Integer)
+    nightly_rate: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+    source: Mapped[str] = mapped_column(String(255))
+    observed_on: Mapped[date] = mapped_column(Date)
+    notes: Mapped[str | None] = mapped_column(Text)
+    created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class TariffProjection(Base):
+    """A yearly SA projection: next year's seasons derived from the current ones."""
+
+    __tablename__ = "tariff_projections"
+    __table_args__ = (
+        CheckConstraint("target_year > base_year", name="ck_tariff_projections_years"),
+        CheckConstraint("status IN ('draft', 'applied')", name="ck_tariff_projections_status"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(120))
+    base_year: Mapped[int] = mapped_column(Integer)
+    target_year: Mapped[int] = mapped_column(Integer)
+    tariff_names: Mapped[list] = mapped_column(JSON, default=list)
+    parameters: Mapped[dict] = mapped_column(JSON, default=dict)
+    result: Mapped[dict] = mapped_column(JSON, default=dict)
+    overrides: Mapped[dict] = mapped_column(JSON, default=dict)
+    move_easter: Mapped[bool] = mapped_column(Boolean, default=True)
+    notes: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(20), default="draft", index=True)
+    algorithm_version: Mapped[str] = mapped_column(String(20))
+    created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    applied_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class Report(Base):
     """An HTML report stored in the app, such as a market study prepared with Claude."""
 

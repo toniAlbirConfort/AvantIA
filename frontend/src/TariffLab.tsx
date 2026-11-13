@@ -6,6 +6,7 @@ import { Card } from './components/ui/card'
 import { Input } from './components/ui/input'
 import { Select } from './components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './components/ui/table'
+import { TariffProjections } from './TariffProjections'
 
 type ReadinessCheck = { key: string; ready: boolean; count?: number; name?: string | null; unmapped?: { id: string; name: string; city: string | null }[] }
 type Readiness = {
@@ -204,7 +205,7 @@ export function TariffLab({ role, refreshVersion }: { role: string; refreshVersi
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">PROPUESTAS REVISABLES</p>
           <h2 className="text-xl font-semibold">Preparación del laboratorio</h2>
-          <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">Las propuestas quedan como borradores descargables. El laboratorio no actualiza las tarifas vigentes ni publica cambios en Avantio.</p>
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">Las propuestas quedan como borradores. Solo una proyección de año aplicada por un administrador guarda temporadas nuevas en Tarifas; el laboratorio nunca publica cambios en Avantio.</p>
         </div>
         <Button type="button" variant="outline" onClick={() => void load()}>Actualizar estado</Button>
       </div>
@@ -266,6 +267,8 @@ export function TariffLab({ role, refreshVersion }: { role: string; refreshVersi
         </Table>
       </div>
     </Card>}
+
+    <TariffProjections admin={admin} groups={readiness?.groups || []} refreshVersion={refreshVersion} />
 
     {admin && <Card className="grid gap-4 p-4 sm:p-6">
       <div><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">NUEVO ESTUDIO</p>

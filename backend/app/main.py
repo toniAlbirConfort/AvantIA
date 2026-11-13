@@ -77,6 +77,8 @@ from app.models import (
     RegistrationCheck,
     Report,
     ReservationSyncState,
+    TariffMarketObservation,
+    TariffProjection,
     TariffSeason,
     TariffStudy,
     User,
@@ -121,6 +123,18 @@ from app.tariff_lab import (
     study_view,
     tariff_readiness,
     tariffs_csv,
+)
+from app.tariff_projection import (
+    add_observations,
+    apply_projection,
+    create_projection,
+    delete_projection,
+    list_observations,
+    list_projections,
+    observation_view,
+    projection_csv,
+    projection_view,
+    update_projection,
 )
 from app.whatsapp_purge import purge_whatsapp_records
 
@@ -242,6 +256,38 @@ class TariffStudyIn(BaseModel):
     nights: int = Field(ge=1, le=90)
     tariff_names: list[str] = Field(min_length=1, max_length=4)
     target_occupancy: float | None = Field(default=None, ge=0, le=1)
+
+
+class TariffProjectionIn(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    base_year: int = Field(ge=2000, le=2100)
+    target_year: int = Field(ge=2001, le=2101)
+    tariff_names: list[str] = Field(min_length=1, max_length=50)
+    parameters: dict[str, float | int | str | None] = Field(default_factory=dict)
+
+
+class TariffProjectionOverrideIn(BaseModel):
+    rate: float = Field(gt=0, le=10000)
+    reason: str | None = Field(default=None, max_length=300)
+
+
+class TariffProjectionUpdateIn(BaseModel):
+    move_easter: bool | None = None
+    notes: str | None = Field(default=None, max_length=4000)
+    overrides: dict[str, TariffProjectionOverrideIn | None] | None = None
+
+
+class TariffMarketObservationIn(BaseModel):
+    tariff_names: list[str] = Field(min_length=1, max_length=50)
+    competitor: str = Field(min_length=1, max_length=180)
+    unit_label: str | None = Field(default=None, max_length=120)
+    stay_date: date
+    nights: int = Field(ge=1, le=90)
+    guests: int = Field(ge=1, le=20)
+    nightly_rate: float = Field(gt=0, le=10000)
+    source: str = Field(default="manual", max_length=255)
+    observed_on: date
+    notes: str | None = Field(default=None, max_length=1000)
 
 
 def _user(user: User) -> dict:
@@ -1384,6 +1430,150 @@ def download_tariff_study_report(study_id: int, db: Db, user: Operator) -> Respo
         content=study_report_pdf(study),
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="tariff-study-{study.id}.pdf"'},
+    )
+
+
+@app.get("/api/tariff-lab/market-observations")
+def tariff_market_observations(db: Db, user: Operator) -> list[dict]:
+    return list_observations(db)
+
+
+@app.post("/api/tariff-lab/market-observations", status_code=201)
+def create_tariff_market_observations(
+    data: TariffMarketObservationIn, db: Db, admin: Admin
+) -> list[dict]:
+    try:
+        rows = add_observations(db, data.model_dump(), admin.id)
+    except TariffLabError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    db.add(AuditEvent(
+        actor_user_id=admin.id,
+        action="tariff_lab.market_observation_added",
+        detail={"ids": [row.id for row in rows], "competitor": data.competitor},
+    ))
+    db.commit()
+    return [observation_view(row) for row in rows]
+
+
+@app.delete("/api/tariff-lab/market-observations/{observation_id}")
+def delete_tariff_market_observation(observation_id: int, db: Db, admin: Admin) -> dict:
+    row = db.get(TariffMarketObservation, observation_id)
+    if row is None:
+        raise HTTPException(404, "Precio de competencia no encontrado")
+    db.delete(row)
+    db.add(AuditEvent(
+        actor_user_id=admin.id,
+        action="tariff_lab.market_observation_removed",
+        detail={"id": observation_id, "competitor": row.competitor},
+    ))
+    db.commit()
+    return {"deleted": True}
+
+
+def _projection_or_404(db: Session, projection_id: int) -> TariffProjection:
+    projection = db.get(TariffProjection, projection_id)
+    if projection is None:
+        raise HTTPException(404, "Proyección de tarifas no encontrada")
+    return projection
+
+
+@app.get("/api/tariff-lab/projections")
+def tariff_projections(db: Db, user: Operator) -> list[dict]:
+    return list_projections(db)
+
+
+@app.post("/api/tariff-lab/projections", status_code=201)
+def create_tariff_projection(data: TariffProjectionIn, db: Db, admin: Admin) -> dict:
+    try:
+        projection = create_projection(db, data.model_dump(), admin.id)
+    except TariffLabError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    db.add(AuditEvent(
+        actor_user_id=admin.id,
+        action="tariff_lab.projection_created",
+        detail={
+            "projection_id": projection.id,
+            "base_year": projection.base_year,
+            "target_year": projection.target_year,
+        },
+    ))
+    db.commit()
+    return projection_view(projection)
+
+
+@app.get("/api/tariff-lab/projections/{projection_id}")
+def get_tariff_projection(projection_id: int, db: Db, user: Operator) -> dict:
+    return projection_view(_projection_or_404(db, projection_id))
+
+
+@app.patch("/api/tariff-lab/projections/{projection_id}")
+def patch_tariff_projection(
+    projection_id: int, data: TariffProjectionUpdateIn, db: Db, admin: Admin
+) -> dict:
+    projection = _projection_or_404(db, projection_id)
+    payload = data.model_dump(exclude_unset=True)
+    try:
+        update_projection(projection, payload)
+    except TariffLabError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    db.add(AuditEvent(
+        actor_user_id=admin.id,
+        action="tariff_lab.projection_updated",
+        detail={"projection_id": projection.id, "fields": sorted(payload)},
+    ))
+    db.commit()
+    return projection_view(projection)
+
+
+@app.post("/api/tariff-lab/projections/{projection_id}/apply")
+def apply_tariff_projection(projection_id: int, db: Db, admin: Admin) -> dict:
+    projection = _projection_or_404(db, projection_id)
+    try:
+        count = apply_projection(db, projection, admin.id)
+    except TariffLabError as exc:
+        db.rollback()
+        raise HTTPException(409, str(exc)) from exc
+    db.add(AuditEvent(
+        actor_user_id=admin.id,
+        action="tariff_lab.projection_applied",
+        detail={
+            "projection_id": projection.id,
+            "target_year": projection.target_year,
+            "seasons": count,
+        },
+    ))
+    db.commit()
+    return projection_view(projection)
+
+
+@app.delete("/api/tariff-lab/projections/{projection_id}")
+def delete_tariff_projection(projection_id: int, db: Db, admin: Admin) -> dict:
+    projection = _projection_or_404(db, projection_id)
+    try:
+        delete_projection(db, projection)
+    except TariffLabError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    db.add(AuditEvent(
+        actor_user_id=admin.id,
+        action="tariff_lab.projection_deleted",
+        detail={"projection_id": projection_id},
+    ))
+    db.commit()
+    return {"deleted": True}
+
+
+@app.get("/api/tariff-lab/projections/{projection_id}/tariffs.csv")
+def download_tariff_projection_csv(projection_id: int, db: Db, user: Operator) -> Response:
+    projection = _projection_or_404(db, projection_id)
+    return Response(
+        content=projection_csv(projection),
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="tarifas-sa-{projection.target_year}-'
+                f'proyeccion-{projection.id}.csv"'
+            )
+        },
     )
 
 
