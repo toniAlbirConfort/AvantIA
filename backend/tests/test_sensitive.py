@@ -29,6 +29,12 @@ from app.sensitive import iban_valid, redact_payment_data
         ("IBAN.GB82 WEST 1234 5698 7654 32.SWIFT", "IBAN.[IBAN ••••5432].SWIFT"),
         ("cuenta ES9121000418450200051332 gracias", "cuenta [IBAN ••••1332] gracias"),
         ("ES91 2100 0418 4502 0005 1332 CODIGO switch", "[IBAN ••••1332] CODIGO switch"),
+        (
+            "My Master Card nr. 4111 1111 1111 1111 and 09/28.",
+            "My Master Card nr. [tarjeta ••••1111] and [caducidad].",
+        ),
+        ("<p>card: 4111 1111 1111 1111</p>", "<p>card: [tarjeta ••••1111]</p>"),
+        ("tarjeta: 4111111111111111, gracias", "tarjeta: [tarjeta ••••1111], gracias"),
     ],
 )
 def test_masks_payment_data(text, expected):
@@ -46,6 +52,17 @@ def test_masks_payment_data(text, expected):
         "ES12 no es un IBAN y AB12CDEF tampoco",
         "pedido 1234 5678 9012",
         "",
+        # Luhn-valid digits that are not cards: identifiers inside HTML, URLs and hashes.
+        '<div id="m_-4111111111111111m_4010551272012">',
+        '<div id="m_4111111111111111contenedorFirma">',
+        "66d5aa9b88e239ff6b7e4777b4111111111111111d50a8e5d2b95baf",
+        "https://mcusercontent.com/4111111111111111f3b92311f924/images/a.png",
+        "manage/preferences?u=4111111111111111&id=1",
+        '<img width="253.4111111111111111" height="auto">',
+        "/images/4111111111111111.png",
+        # Avantio and Booking locators.
+        "Reservasjonsnummer: 10000004-1419339900",
+        "Nº Localizador A169-4111111111111111-479",
     ],
 )
 def test_leaves_other_numbers_alone(text):
