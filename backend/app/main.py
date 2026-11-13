@@ -30,7 +30,10 @@ from app.classification import (
     effective_classification,
     resolve_conversation_classification,
 )
+from app.auto_reply import configured_mode as auto_reply_configured_mode
 from app.auto_reply import mode as auto_reply_mode
+from app.auto_reply import pause_state as auto_reply_pause_state
+from app.auto_reply import set_paused as set_auto_reply_paused
 from app.auto_reply import simulate as simulate_auto_replies
 from app.config import READ_ONLY_MODE, get_settings
 from app.contacts import conversation_contact
@@ -123,6 +126,10 @@ app.add_middleware(
 Db = Annotated[Session, Depends(get_db)]
 Operator = Annotated[User, Depends(current_user)]
 Admin = Annotated[User, Depends(admin_user)]
+
+
+class AutoReplyPauseIn(BaseModel):
+    paused: bool
 
 
 class LoginIn(BaseModel):
@@ -1480,12 +1487,7 @@ def integrations(db: Db, user: Operator) -> dict:
             "sending_enabled": not READ_ONLY_MODE,
         },
         "ollama": {"configured": bool(settings.ollama_url and settings.ollama_model)},
-        "auto_reply": {
-            "mode": auto_reply_mode(),
-            "timezone": settings.auto_reply_timezone,
-            "night_start": settings.auto_reply_night_start,
-            "night_end": settings.auto_reply_night_end,
-        },
+        "auto_reply": _auto_reply_status(db),
         "csv": {
             "last_import_at": batch.created_at if batch else None,
             "age_hours": age,
@@ -1538,6 +1540,32 @@ def auto_replies(
     if mode:
         query = query.where(AutoReply.mode == mode)
     return [_auto_reply(item) for item in db.scalars(query).all()]
+
+
+def _auto_reply_status(db: Session) -> dict:
+    settings = get_settings()
+    pause = auto_reply_pause_state(db)
+    return {
+        "mode": auto_reply_mode(db),
+        "configured_mode": auto_reply_configured_mode(),
+        "paused": pause is not None,
+        "paused_at": pause.updated_at if pause else None,
+        "paused_by_id": pause.updated_by_id if pause else None,
+        "timezone": settings.auto_reply_timezone,
+        "night_start": settings.auto_reply_night_start,
+        "night_end": settings.auto_reply_night_end,
+    }
+
+
+@app.post("/api/auto-reply/pause")
+def pause_auto_reply(body: AutoReplyPauseIn, db: Db, admin: Admin) -> dict:
+    """Pause (or resume) the out-of-hours acknowledgements at once, without touching .env.
+
+    Takes effect for the next message the worker handles, including queued ones. Resuming
+    returns to AUTO_REPLY_MODE from .env; it cannot turn on a mode that .env leaves off.
+    """
+    set_auto_reply_paused(db, paused=body.paused, user_id=admin.id)
+    return _auto_reply_status(db)
 
 
 @app.get("/api/integrations/gowa")

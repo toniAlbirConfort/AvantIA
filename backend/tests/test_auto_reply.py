@@ -538,3 +538,68 @@ def test_banner_can_be_disabled(auto_reply_settings):
     assert "<img" in auto_reply.compose_html("Hola")
     auto_reply_settings.auto_reply_banner = False
     assert "<img" not in auto_reply.compose_html("Hola")
+
+
+def _login(client, db, role):
+    from app.auth import hasher
+    from app.models import User
+
+    db.add(User(username=role, password_hash=hasher.hash("very-long-test-password"), role=role))
+    db.commit()
+    login = client.post(
+        "/api/login", json={"username": role, "password": "very-long-test-password"}
+    )
+    return {"Authorization": f"Bearer {login.json()['token']}"}
+
+
+def test_pause_from_the_app_stops_sending_at_once(db, monkeypatch, auto_reply_settings):
+    from fastapi.testclient import TestClient
+
+    from app.db import get_db
+    from app.main import app
+
+    auto_reply_settings.auto_reply_mode = "send"
+    monkeypatch.setattr(
+        auto_reply_settings, "app_secret", "unit-test-secret-with-more-than-32-characters"
+    )
+    monkeypatch.setattr("app.auto_reply.datetime", _frozen(NIGHT + timedelta(minutes=2)))
+    delivered = []
+    monkeypatch.setattr("app.integrations._deliver", delivered.append)
+    app.dependency_overrides[get_db] = lambda: db
+    try:
+        with TestClient(app) as client:
+            operator = _login(client, db, "operator")
+            admin = _login(client, db, "admin")
+            assert client.post(
+                "/api/auto-reply/pause", headers=operator, json={"paused": True}
+            ).status_code == 403
+
+            paused = client.post("/api/auto-reply/pause", headers=admin, json={"paused": True})
+            assert paused.status_code == 200
+            assert paused.json()["mode"] == "off"
+            assert paused.json()["configured_mode"] == "send"
+            assert paused.json()["paused"] is True
+            status = client.get("/api/integrations", headers=operator).json()["auto_reply"]
+            assert status["paused"] is True
+
+            _, queued = add_email(db)  # Already queued when the pause happened.
+            asyncio.run(auto_reply.run(db, queued.id))
+            assert delivered == []
+            assert db.query(AutoReply).count() == 0
+
+            resumed = client.post("/api/auto-reply/pause", headers=admin, json={"paused": False})
+            assert resumed.json()["mode"] == "send"
+            assert resumed.json()["paused"] is False
+            _, later = add_email(db, sender="otro@example.test")
+            asyncio.run(auto_reply.run(db, later.id))
+            assert len(delivered) == 1
+    finally:
+        app.dependency_overrides.clear()
+    actions = [event.action for event in db.scalars(select(AuditEvent)).all()]
+    assert "auto_reply.paused" in actions and "auto_reply.resumed" in actions
+
+
+def test_resume_cannot_turn_on_what_env_leaves_off(db, auto_reply_settings):
+    auto_reply_settings.auto_reply_mode = "off"
+    auto_reply.set_paused(db, paused=False, user_id=None)
+    assert auto_reply.mode(db) == "off"

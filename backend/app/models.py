@@ -96,6 +96,16 @@ class Message(Base):
     conversation: Mapped[Conversation] = relationship(back_populates="messages")
 
 
+class AppSetting(Base):
+    """Switches changed from the app at runtime, which take precedence over .env."""
+
+    __tablename__ = "app_settings"
+    key: Mapped[str] = mapped_column(String(80), primary_key=True)
+    value: Mapped[dict] = mapped_column(JSON, default=dict)
+    updated_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
 class AutoReply(Base):
     """Out-of-hours acknowledgement decided for one inbound message (shadow, sent or failed)."""
 
