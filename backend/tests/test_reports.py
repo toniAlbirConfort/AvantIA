@@ -23,6 +23,12 @@ assert MIGRATION_SPEC and MIGRATION_SPEC.loader
 REPORTS_MIGRATION = importlib.util.module_from_spec(MIGRATION_SPEC)
 MIGRATION_SPEC.loader.exec_module(REPORTS_MIGRATION)
 
+UNPUBLISH_PATH = MIGRATION_PATH.with_name("0014_unpublished_report_link.py")
+UNPUBLISH_SPEC = importlib.util.spec_from_file_location("unpublish_migration", UNPUBLISH_PATH)
+assert UNPUBLISH_SPEC and UNPUBLISH_SPEC.loader
+UNPUBLISH_MIGRATION = importlib.util.module_from_spec(UNPUBLISH_SPEC)
+UNPUBLISH_SPEC.loader.exec_module(UNPUBLISH_MIGRATION)
+
 
 def study(name: str, status: str, completed_at: datetime | None) -> TariffStudy:
     return TariffStudy(
@@ -46,6 +52,23 @@ def test_migration_creates_reports_and_seeds_todays_competitor_study():
         assert title == "Precios de la competencia profesional en Albir"
         assert source == "claude"
         assert "Nuestra tarifa frente a la mediana" in html_body
+    finally:
+        engine.dispose()
+
+
+def test_migration_drops_link_to_unpublished_claude_copy():
+    engine = create_engine("sqlite+pysqlite://")
+    try:
+        with engine.begin() as connection:
+            with Operations.context(MigrationContext.configure(connection)):
+                REPORTS_MIGRATION.upgrade()
+                connection.execute(
+                    text("UPDATE reports SET original_url = :url"),
+                    {"url": UNPUBLISH_MIGRATION.UNPUBLISHED_URL},
+                )
+                UNPUBLISH_MIGRATION.upgrade()
+            urls = connection.execute(text("SELECT original_url FROM reports")).scalars().all()
+        assert urls == [None]
     finally:
         engine.dispose()
 

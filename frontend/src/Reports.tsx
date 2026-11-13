@@ -1,5 +1,5 @@
 import { FormEvent, useCallback, useEffect, useState } from 'react'
-import { ArrowLeft, Download, ExternalLink, FileText, FlaskConical, Plus, Sparkles, Trash2, X } from 'lucide-react'
+import { ArrowLeft, BookOpen, Download, ExternalLink, FileText, FlaskConical, Plus, Sparkles, Trash2, X } from 'lucide-react'
 import { api, apiDownload, apiText } from './api'
 import { Alert } from './components/ui/alert'
 import { Badge } from './components/ui/badge'
@@ -75,7 +75,7 @@ function UploadForm({ onDone, onCancel }: { onDone: (key: string) => void; onCan
   </Card>
 }
 
-function DocumentViewer({ item }: { item: ReportItem }) {
+function DocumentViewer({ item, frameClassName = 'h-[calc(100vh-17rem)] min-h-[32rem]' }: { item: ReportItem; frameClassName?: string }) {
   const [html, setHtml] = useState<string | null>(null)
   const [error, setError] = useState('')
   useEffect(() => {
@@ -88,7 +88,38 @@ function DocumentViewer({ item }: { item: ReportItem }) {
   }, [item.id])
   if (error) return <Alert variant="destructive" className="m-4">{error}</Alert>
   if (html === null) return <div className="grid gap-3 p-6"><Skeleton className="h-8 w-2/3" /><Skeleton className="h-4 w-full" /><Skeleton className="h-64 w-full" /></div>
-  return <iframe title={item.title} srcDoc={html} sandbox="allow-popups allow-popups-to-escape-sandbox" className="h-[calc(100vh-17rem)] min-h-[32rem] w-full border-0 bg-white" />
+  return <iframe title={item.title} srcDoc={html} sandbox="allow-popups allow-popups-to-escape-sandbox" className={`${frameClassName} w-full border-0 bg-white`} />
+}
+
+function ReadingMode({ item, onClose }: { item: ReportItem; onClose: () => void }) {
+  useEffect(() => {
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    document.getElementById('report-reading-close')?.focus()
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') { event.preventDefault(); onClose() }
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('keydown', onKeyDown)
+      document.body.style.overflow = previousOverflow
+      previousFocus?.focus()
+    }
+  }, [onClose])
+
+  return <div role="dialog" aria-modal="true" aria-label={`Lectura: ${item.title}`} className="fixed inset-0 z-50 flex flex-col bg-background">
+    <header className="flex shrink-0 items-center gap-3 border-b border-border bg-card px-3 py-2 sm:px-5">
+      <Button id="report-reading-close" variant="outline" size="sm" onClick={onClose}><ArrowLeft size={16} /> Volver a Informes</Button>
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-semibold">{item.title}</p>
+        <p className="hidden truncate text-xs text-muted-foreground sm:block">{sourceLabels[item.source]} · {dateLabel(item.created_at)} · Esc para salir</p>
+      </div>
+    </header>
+    <div className="min-h-0 flex-1">
+      <DocumentViewer item={item} frameClassName="h-full" />
+    </div>
+  </div>
 }
 
 function StudySummary({ item, onOpenTariffLab }: { item: ReportItem; onOpenTariffLab: () => void }) {
@@ -114,6 +145,8 @@ export function Reports({ role, refreshVersion, onOpenTariffLab }: { role: strin
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const [showDetail, setShowDetail] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const [reading, setReading] = useState<ReportItem | null>(null)
+  const closeReading = useCallback(() => setReading(null), [])
   const admin = role === 'admin'
 
   const load = useCallback(async (focusKey?: string) => {
@@ -136,6 +169,7 @@ export function Reports({ role, refreshVersion, onOpenTariffLab }: { role: strin
   }
 
   return <div className="grid gap-4">
+    {reading && <ReadingMode item={reading} onClose={closeReading} />}
     {error && <Alert variant="destructive" role="alert">{error}</Alert>}
     {uploading && <UploadForm onCancel={() => setUploading(false)} onDone={key => { setUploading(false); setShowDetail(true); void load(key) }} />}
     <div className="grid items-start gap-4 lg:grid-cols-[minmax(20rem,4fr)_minmax(0,8fr)]">
@@ -151,7 +185,7 @@ export function Reports({ role, refreshVersion, onOpenTariffLab }: { role: strin
           {loading && !items.length
             ? <div className="grid gap-3 p-4"><Skeleton className="h-16 w-full" /><Skeleton className="h-16 w-full" /></div>
             : visible.length
-              ? visible.map(item => <button key={item.key} type="button" onClick={() => { setSelectedKey(item.key); setShowDetail(true) }} aria-current={selectedKey === item.key ? 'true' : undefined} className={`grid w-full gap-1.5 border-b border-border px-4 py-3.5 text-left hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring ${selectedKey === item.key ? 'border-l-4 border-l-primary bg-accent pl-3' : ''}`}>
+              ? visible.map(item => <button key={item.key} type="button" onClick={() => { setSelectedKey(item.key); setShowDetail(true); if (item.kind === 'document') setReading(item) }} aria-current={selectedKey === item.key ? 'true' : undefined} className={`grid w-full gap-1.5 border-b border-border px-4 py-3.5 text-left hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring ${selectedKey === item.key ? 'border-l-4 border-l-primary bg-accent pl-3' : ''}`}>
                 <span className="flex items-center justify-between gap-3"><SourceBadge source={item.source} /><small className="shrink-0 text-xs text-muted-foreground">{isToday(item.created_at) ? <strong className="font-semibold text-primary">Hoy</strong> : dateLabel(item.created_at)}</small></span>
                 <strong className="text-sm leading-5">{item.title}</strong>
                 {item.description && <span className="line-clamp-2 text-sm leading-5 text-muted-foreground">{item.description}</span>}
@@ -169,6 +203,7 @@ export function Reports({ role, refreshVersion, onOpenTariffLab }: { role: strin
               {selected.description && <p className="mt-1 max-w-3xl text-sm leading-6 text-muted-foreground">{selected.description}</p>}
             </div>
             <div className="flex flex-wrap gap-2">
+              {selected.kind === 'document' && <Button size="sm" onClick={() => setReading(selected)}><BookOpen size={15} /> Modo lectura</Button>}
               {selected.original_url && <Button asChild variant="outline" size="sm"><a href={selected.original_url} target="_blank" rel="noreferrer"><ExternalLink size={15} /> Original</a></Button>}
               {admin && selected.kind === 'document' && <Button variant="ghost" size="sm" onClick={() => { if (window.confirm(`¿Borrar el informe «${selected.title}»? No se puede deshacer.`)) void remove(selected) }}><Trash2 size={15} /> Borrar</Button>}
             </div>

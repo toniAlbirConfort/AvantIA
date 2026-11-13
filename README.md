@@ -116,7 +116,7 @@ El repositorio define el contrato `MarketDataProvider` en `backend/app/tariff_la
 
 ## Informes
 
-La vista **Informes** reúne, del más reciente al más antiguo, los informes HTML preparados con Claude y los estudios completos o parciales del Laboratorio de tarifas. Los informes HTML se muestran en un visor aislado, sin scripts ni acceso a la sesión; los estudios enlazan a su PDF y al laboratorio. Los administradores añaden informes subiendo el archivo HTML (máximo 5 MB, UTF-8) y pueden borrarlos; los operadores los consultan.
+La vista **Informes** reúne, del más reciente al más antiguo, los informes HTML preparados con Claude y los estudios completos o parciales del Laboratorio de tarifas. Los informes HTML se abren en modo lectura a pantalla completa (Esc o «Volver a Informes» para salir), dentro de un visor aislado, sin scripts ni acceso a la sesión; los estudios enlazan a su PDF y al laboratorio. Los administradores añaden informes subiendo el archivo HTML (máximo 5 MB, UTF-8) y pueden borrarlos; los operadores los consultan.
 
 La migración `0013` crea la tabla `reports` e incorpora el estudio de precios de la competencia en Albir del 13/11/2026, guardado en `backend/alembic/seeds/`.
 
