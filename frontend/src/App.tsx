@@ -83,7 +83,8 @@ function label(value: string) {
     whatsapp: 'WhatsApp', email: 'Email', booking: 'Booking', demand: 'Demanda',
     guest_service: 'Atención de reserva', non_demand: 'No demanda', uncertain: 'Sin determinar',
     review: 'Revisión', unclassified: 'Sin clasificar', handled: 'Gestionada',
-    high: 'Confianza alta', medium: 'Confianza media', low: 'Confianza baja' } as Record<string, string>)[value] || value
+    high: 'Confianza alta', medium: 'Confianza media', low: 'Confianza baja',
+    shadow: 'Modo sombra', off: 'Desactivada', failed: 'Fallida' } as Record<string, string>)[value] || value
 }
 const badgeStyles: Record<string, string> = {
   pending: 'bg-warning-bg text-warning-ink', queued: 'bg-info-bg text-info-ink', sending: 'bg-info-bg text-info-ink',
@@ -96,17 +97,20 @@ const badgeStyles: Record<string, string> = {
   demand: 'bg-success-bg text-success-ink', guest_service: 'bg-info-bg text-info-ink',
   non_demand: 'bg-muted text-muted-foreground', uncertain: 'bg-warning-bg text-warning-ink',
   review: 'bg-warning-bg text-warning-ink', unclassified: 'bg-muted text-muted-foreground',
-  handled: 'bg-muted text-muted-foreground', medium: 'bg-warning-bg text-warning-ink', low: 'bg-warning-bg text-warning-ink',
+  handled: 'bg-muted text-muted-foreground', shadow: 'bg-info-bg text-info-ink', off: 'bg-muted text-muted-foreground',
+  failed: 'bg-error-bg text-error-ink', medium: 'bg-warning-bg text-warning-ink', low: 'bg-warning-bg text-warning-ink',
   operator: 'bg-muted text-muted-foreground',
 }
 function Badge({ value }: { value: string }) { return <UiBadge className={badgeStyles[value] || 'bg-muted text-muted-foreground'}>{label(value)}</UiBadge> }
 function Empty({ children }: { children: React.ReactNode }) { return <div className="grid min-h-28 place-items-center px-6 py-10 text-center text-sm leading-7 text-muted-foreground">{children}</div> }
 
 function integrationTitle(name: string) {
+  if (name === 'auto_reply') return 'Autorespuesta fuera de horario'
   return name === 'avantio' ? 'Reservas Avantio' : name.toUpperCase()
 }
 
 function integrationBadge(name: string, value: any) {
+  if (name === 'auto_reply') return value.mode === 'send' ? 'available' : value.mode
   if (name !== 'avantio') {
     return value.configured === false || value.stale || (name === 'imap' && !value.connected) ? 'manual_check' : 'available'
   }
@@ -119,6 +123,12 @@ function integrationBadge(name: string, value: any) {
 }
 
 function integrationDescription(name: string, value: any) {
+  if (name === 'auto_reply') {
+    const hours = `de ${value.night_start} a ${value.night_end} y fines de semana (${value.timezone})`
+    if (value.mode === 'send') return `Envía un acuse a las consultas nuevas de clientes recibidas ${hours}.`
+    if (value.mode === 'shadow') return `Registra, sin enviar, el acuse que recibirían las consultas nuevas ${hours}.`
+    return 'Desactivada. Se activa con AUTO_REPLY_MODE en el .env del servidor.'
+  }
   if (name === 'avantio') {
     if (!value.configured) return 'Falta configurar AVANTIO_EXPORT_URL en el .env del servidor.'
     if (value.status === 'running') return 'Chrome dedicado está exportando el CSV y actualizando el planning.'
@@ -529,6 +539,7 @@ export default function App() {
             <div className="border-y border-border p-4 sm:p-6"><p className="mb-3 text-xs font-semibold uppercase tracking-wide text-primary">ANÁLISIS / DATOS VERIFICADOS</p><div className="grid grid-cols-2 gap-3 sm:grid-cols-4">{[['Alojamiento', String(detail.analysis.property_query || 'Sin identificar')], ['Entrada', String(detail.analysis.arrival || '—')], ['Salida', String(detail.analysis.departure || '—')], ['Huéspedes', String(detail.analysis.guests || '—')]].map(([name, value]) => <div key={name} className="min-w-0"><span className="block text-xs text-muted-foreground">{name}</span><strong className="mt-1 block break-words text-sm">{value}</strong></div>)}</div>{Boolean(detail.analysis.availability) && <div className="mt-4 flex flex-wrap items-center gap-2 text-sm">Disponibilidad: <Badge value={String((detail.analysis.availability as Record<string, unknown>).status)} />{(detail.analysis.availability as Record<string, unknown>).stale ? <span className="text-warning-ink">CSV desactualizado</span> : null}</div>}{Array.isArray((detail.analysis.availability as Record<string, unknown> | undefined)?.alternatives) && ((detail.analysis.availability as Record<string, unknown>).alternatives as { name: string; capacity: number }[]).length > 0 && <div className="mt-4 text-sm"><strong>Alternativas para revisión</strong><div className="mt-2 flex flex-wrap gap-2">{((detail.analysis.availability as Record<string, unknown>).alternatives as { name: string; capacity: number }[]).map((option, index) => <span key={index} className="rounded-md bg-accent px-2 py-1 text-xs">{option.name} · {option.capacity} plazas</span>)}</div></div>}{Boolean(detail.analysis.availability_changed) && <p className="mt-3 text-sm text-warning-ink">La disponibilidad cambió desde que se creó el borrador. Revísalo antes de aprobar.</p>}{Boolean(detail.analysis.analysis_error) && <p className="mt-3 text-sm text-warning-ink">El análisis automático falló; comprobar manualmente.</p>}</div>
             )}
             {detail.kind === 'booking' ? <div className="grid gap-3 p-4 sm:p-6"><p className="text-xs font-semibold uppercase tracking-wide text-primary">TAREA BOOKING</p><p className="text-sm leading-6 text-muted-foreground">Comprueba la prerreserva en Avantio y realiza el seguimiento. AvantIA no confirma reservas automáticamente.</p><Button className="w-fit" disabled={busy || detail.booking_task?.status === 'closed'} onClick={() => detail.booking_task && void action(() => api(`/api/bookings/${detail.booking_task!.id}/close`, { method: 'POST' }))}>Marcar como gestionada</Button></div> : <div className="grid gap-3 p-4 sm:p-6"><div className="flex flex-wrap items-center justify-between gap-3"><div className="min-w-0"><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">{detail.draft && detail.draft.status !== 'superseded' ? (detail.draft.status === 'pending' ? (detail.active_classification === 'demand' ? 'BORRADOR / REVISIÓN OBLIGATORIA' : 'BORRADOR GUARDADO') : 'ÚLTIMA RESPUESTA') : 'SIN BORRADOR'}</p><h3 className="text-lg font-semibold">Respuesta al cliente</h3></div><Button variant={detail.draft && detail.draft.status === 'pending' ? 'default' : 'secondary'} onClick={() => setComposerOpen(true)}><Reply size={16} aria-hidden="true" /> {detail.draft && detail.draft.status === 'pending' ? 'Revisar y responder' : 'Redactar respuesta'}</Button></div>{detail.draft && detail.draft.status !== 'superseded' && detail.draft.text ? <button type="button" onClick={() => setComposerOpen(true)} className="line-clamp-4 w-full whitespace-pre-wrap break-words rounded-lg border border-border bg-background p-3 text-left text-sm leading-6 text-muted-foreground hover:border-primary/40 hover:bg-accent/40">{detail.draft.text}</button> : <p className="text-sm leading-6 text-muted-foreground">{detail.active_classification === 'demand' ? 'El borrador automático aparecerá aquí cuando esté listo.' : 'Abre el editor para leer la conversación completa y escribir tu respuesta.'}</p>}{detail.status === 'delivery_unknown' && <Alert variant="warning"><strong>Envío incierto.</strong> Comprueba en el canal si llegó antes de resolverlo.{user.role === 'admin' && <div className="mt-3 flex flex-wrap gap-2"><Button variant="secondary" size="sm" onClick={() => { const note = window.prompt('¿Cómo verificaste que se envió?'); if (note) void action(() => api(`/api/conversations/${detail.id}/resolve-delivery`, { method: 'POST', body: JSON.stringify({ outcome: 'sent', note }) })) }}>Confirmar enviado</Button><Button variant="secondary" size="sm" onClick={() => { const note = window.prompt('¿Cómo verificaste que no se envió?'); if (note) void action(() => api(`/api/conversations/${detail.id}/resolve-delivery`, { method: 'POST', body: JSON.stringify({ outcome: 'not_sent', note }) })) }}>No se envió</Button></div>}</Alert>}{detail.draft?.error && <Alert variant="destructive">{detail.draft.error}</Alert>}</div>}
+            {detail.auto_replies?.map(item => <div key={item.id} className="grid gap-2 border-t border-border p-4 sm:px-6"><div className="flex flex-wrap items-center gap-2"><p className="text-xs font-semibold uppercase tracking-wide text-primary">{item.mode === 'shadow' ? 'AUTORESPUESTA FUERA DE HORARIO · NO ENVIADA' : 'AUTORESPUESTA FUERA DE HORARIO'}</p><Badge value={item.mode === 'sending' ? 'delivery_unknown' : item.mode} /></div><p className="text-xs text-muted-foreground">{date(item.created_at)} · para {item.recipient} · {item.subject}</p><p className="line-clamp-4 whitespace-pre-wrap break-words rounded-lg border border-border bg-background p-3 text-sm leading-6 text-muted-foreground">{item.text}</p>{item.error && <Alert variant="destructive">{item.error}</Alert>}</div>)}
             <details className="border-t border-border p-4 text-sm text-muted-foreground sm:px-6"><summary className="cursor-pointer font-semibold text-primary">Actividad y auditoría</summary>{detail.audit?.map((event, index) => <p key={index} className="mt-3">{date(event.created_at)} · {event.action} {event.actor_user_id ? `· usuario #${event.actor_user_id}` : ''}</p>)}</details>
           </> : <Empty>Selecciona una conversación para revisar su contenido y preparar la respuesta.</Empty>}</section>
         </div>}

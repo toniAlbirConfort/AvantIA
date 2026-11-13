@@ -38,6 +38,11 @@ export type AnnotationScore = {
 export type AnnotationSummary = { total: number; by_intent: Record<string, number>; by_split: Record<string, number>; complete_availability: number; stored_model: AnnotationScore }
 export type Message = { id: number; direction: string; body: string; html_body?: string | null; sender: string | null; recipient?: string | null; subject: string | null; source_url: string | null; provider_id: string; created_at: string; classification?: MessageClassification | null; annotation?: MessageAnnotation | null }
 export type EmailTranslation = { message_id: number; language: 'es'; body: string }
+export type AutoReply = {
+  id: number; message_id: number; conversation_id: number; recipient: string;
+  mode: 'shadow' | 'sending' | 'sent' | 'failed'; language: string; subject: string; text: string;
+  error: string | null; created_at: string
+}
 export type Audit = { action: string; actor_user_id: number | null; detail: Record<string, unknown>; created_at: string }
 export type Conversation = {
   id: number; channel: string; kind: string; customer_name: string | null; customer_address: string | null;
@@ -46,6 +51,7 @@ export type Conversation = {
   classification_resolved_at: string | null; classification_resolved_by_id?: number | null;
   analysis: Record<string, unknown>; created_at: string; updated_at: string; last_inbound_at: string;
   draft: Draft | null; messages?: Message[]; drafts?: Draft[]; audit?: Audit[];
+  auto_replies?: AutoReply[]
   booking_task?: { id: number; status: string; extracted: Record<string, unknown> } | null
   contact?: ContactInfo | null
   reply?: ReplyDefaults | null
