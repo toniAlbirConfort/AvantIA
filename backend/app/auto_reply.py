@@ -1,7 +1,8 @@
 """Out-of-hours acknowledgement for new customer enquiries.
 
-A customer who writes at night or at the weekend asking for information gets a short, fixed
-message saying the request cannot be handled right now. Only the first message of a brand-new
+A customer who writes at night or at the weekend asking for information gets a short, warm
+message in their language: greeted by name when the From header gives one, told that the
+office is closed and when the reservations team will reply. Only the first message of a brand-new
 email thread qualifies: replies, forwards, quoted histories, colleagues, robots and anything
 the classifier is not sure is a demand never get one.
 
@@ -16,6 +17,7 @@ from __future__ import annotations
 
 import base64
 import html
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, time, timedelta
 from email.utils import parseaddr
@@ -43,56 +45,113 @@ from app.models import AuditEvent, AutoReply, Conversation, Message
 MODES = {"off", "shadow", "send"}
 RATE_WINDOW = timedelta(hours=24)
 
+# One block per language. compose() fills in the greeting, {when} and {site}.
 TEMPLATES = {
-    "es": (
-        "Hola:\n\n"
-        "Gracias por escribirnos. Hemos recibido su consulta fuera de nuestro horario de "
-        "atención, por lo que en este momento no podemos atenderla. Le responderemos lo antes "
-        "posible en cuanto retomemos la actividad.\n\n"
-        "Este es un mensaje automático; no es necesario que lo conteste.\n\n"
-        "Un saludo."
-    ),
-    "en": (
-        "Hello,\n\n"
-        "Thank you for your message. We received your enquiry outside our office hours, so we "
-        "are unable to deal with it right now. We will reply as soon as possible when we are "
-        "back.\n\n"
-        "This is an automatic message; there is no need to reply to it.\n\n"
-        "Kind regards."
-    ),
-    "fr": (
-        "Bonjour,\n\n"
-        "Merci pour votre message. Nous avons reçu votre demande en dehors de nos heures "
-        "d'ouverture et ne pouvons pas la traiter pour le moment. Nous vous répondrons dès que "
-        "possible à notre retour.\n\n"
-        "Ceci est un message automatique ; inutile d'y répondre.\n\n"
-        "Cordialement."
-    ),
-    "de": (
-        "Hallo,\n\n"
-        "vielen Dank für Ihre Nachricht. Ihre Anfrage ist außerhalb unserer Bürozeiten "
-        "eingegangen, daher können wir sie im Moment nicht bearbeiten. Wir antworten Ihnen so "
-        "bald wie möglich.\n\n"
-        "Dies ist eine automatische Nachricht; Sie müssen nicht darauf antworten.\n\n"
-        "Mit freundlichen Grüßen."
-    ),
-    "it": (
-        "Buongiorno,\n\n"
-        "grazie per averci scritto. Abbiamo ricevuto la sua richiesta fuori dal nostro orario "
-        "di lavoro, quindi al momento non possiamo gestirla. Le risponderemo il prima possibile "
-        "alla ripresa dell'attività.\n\n"
-        "Questo è un messaggio automatico; non è necessario rispondere.\n\n"
-        "Cordiali saluti."
-    ),
-    "pt": (
-        "Olá,\n\n"
-        "Obrigado pela sua mensagem. Recebemos o seu pedido fora do nosso horário de "
-        "atendimento, pelo que neste momento não o podemos tratar. Responderemos o mais "
-        "rapidamente possível quando retomarmos a atividade.\n\n"
-        "Esta é uma mensagem automática; não é necessário responder.\n\n"
-        "Com os melhores cumprimentos."
-    ),
+    "es": {
+        "greeting": ("Hola {name},", "Hola,"),
+        "body": (
+            "Muchas gracias por escribirnos y por su interés en Albir Confort.\n\n"
+            "Ahora mismo nuestra oficina está cerrada, pero hemos recibido su mensaje "
+            "correctamente. {when}, una persona de nuestro equipo de reservas revisará su "
+            "consulta y le responderá personalmente."
+        ),
+        "site": "Mientras tanto, puede ver nuestros apartamentos en {site}.",
+        "closing": "Un cordial saludo,\nEquipo de reservas de Albir Confort",
+        "when": (
+            "Hoy a partir de las {hour}",
+            "Mañana a partir de las {hour}",
+            "El {day} a partir de las {hour}",
+        ),
+        "days": ("lunes", "martes", "miércoles", "jueves", "viernes"),
+        "zone": "",
+    },
+    "en": {
+        "greeting": ("Hello {name},", "Hello,"),
+        "body": (
+            "Thank you very much for getting in touch and for your interest in Albir "
+            "Confort.\n\n"
+            "Our office is closed right now, but your message has reached us safely. {when}, a "
+            "member of our reservations team will look at your enquiry and reply to you "
+            "personally."
+        ),
+        "site": "In the meantime, you can browse our apartments at {site}.",
+        "closing": "Kind regards,\nThe Albir Confort reservations team",
+        "when": ("Today from {hour}", "Tomorrow from {hour}", "On {day} from {hour}"),
+        "days": ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday"),
+        "zone": " (Spanish time)",
+    },
+    "fr": {
+        "greeting": ("Bonjour {name},", "Bonjour,"),
+        "body": (
+            "Merci beaucoup pour votre message et pour l'intérêt que vous portez à Albir "
+            "Confort.\n\n"
+            "Notre bureau est fermé pour le moment, mais nous avons bien reçu votre message. "
+            "{when}, un membre de notre équipe de réservations étudiera votre demande et vous "
+            "répondra personnellement."
+        ),
+        "site": "En attendant, vous pouvez découvrir nos appartements sur {site}.",
+        "closing": "Bien cordialement,\nL'équipe de réservations d'Albir Confort",
+        "when": (
+            "Aujourd'hui à partir de {hour}",
+            "Demain à partir de {hour}",
+            "{day} à partir de {hour}",
+        ),
+        "days": ("Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi"),
+        "zone": " (heure espagnole)",
+    },
+    "de": {
+        "greeting": ("Hallo {name},", "Guten Tag,"),
+        "body": (
+            "vielen Dank für Ihre Nachricht und Ihr Interesse an Albir Confort.\n\n"
+            "Unser Büro ist gerade geschlossen, aber Ihre Nachricht ist gut bei uns "
+            "angekommen. {when} wird sich ein Mitglied unseres Reservierungsteams Ihre Anfrage "
+            "ansehen und Ihnen persönlich antworten."
+        ),
+        "site": "In der Zwischenzeit finden Sie unsere Apartments auf {site}.",
+        "closing": "Herzliche Grüße\nIhr Reservierungsteam von Albir Confort",
+        "when": ("Heute ab {hour} Uhr", "Morgen ab {hour} Uhr", "Am {day} ab {hour} Uhr"),
+        "days": ("Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag"),
+        "zone": " (spanische Zeit)",
+    },
+    "it": {
+        "greeting": ("Buongiorno {name},", "Buongiorno,"),
+        "body": (
+            "grazie mille per averci scritto e per il suo interesse per Albir Confort.\n\n"
+            "Il nostro ufficio è chiuso in questo momento, ma abbiamo ricevuto correttamente il "
+            "suo messaggio. {when} una persona del nostro team prenotazioni esaminerà la sua "
+            "richiesta e le risponderà personalmente."
+        ),
+        "site": "Nel frattempo, può scoprire i nostri appartamenti su {site}.",
+        "closing": "Cordiali saluti,\nIl team prenotazioni di Albir Confort",
+        "when": ("Oggi dalle {hour}", "Domani dalle {hour}", "{day} dalle {hour}"),
+        "days": ("Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì"),
+        "zone": " (ora spagnola)",
+    },
+    "pt": {
+        "greeting": ("Olá {name},", "Olá,"),
+        "body": (
+            "Muito obrigado pela sua mensagem e pelo seu interesse no Albir Confort.\n\n"
+            "Neste momento o nosso escritório está fechado, mas recebemos a sua mensagem. "
+            "{when}, uma pessoa da nossa equipa de reservas irá analisar o seu pedido e "
+            "responder-lhe pessoalmente."
+        ),
+        "site": "Entretanto, pode ver os nossos apartamentos em {site}.",
+        "closing": "Com os melhores cumprimentos,\nA equipa de reservas do Albir Confort",
+        "when": (
+            "Hoje a partir das {hour}",
+            "Amanhã a partir das {hour}",
+            "Na {day} a partir das {hour}",
+        ),
+        "days": ("segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira"),
+        "zone": " (hora de Espanha)",
+    },
 }
+# Words that sit where a first name would in a From header but are not names.
+NOT_NAMES = {
+    "info", "reservas", "reservations", "booking", "bookings", "admin", "contact", "contacto",
+    "hello", "hola", "office", "oficina", "team", "equipo", "sales", "ventas", "mail", "email",
+}
+NAME_RE = re.compile(r"[^\W\d_]+(?:[-'’][^\W\d_]+)*")
 
 
 @dataclass(frozen=True)
@@ -133,10 +192,67 @@ def language(message: Message) -> str:
     return "en" if value == "other" else "es"
 
 
-def compose(lang: str) -> str:
-    text = TEMPLATES.get(lang, TEMPLATES["es"])
+def first_name(message: Message) -> str | None:
+    """The customer's first name from the From header, only when it clearly is one."""
+    display = parseaddr(message.sender or "")[0].strip().strip("\"'")
+    if not display or "@" in display:
+        return None
+    if "," in display:  # "Surname, Name"
+        display = display.split(",", 1)[1].strip()
+    words = display.split()
+    token = words[0] if words else ""
+    if len(token) < 2 or not NAME_RE.fullmatch(token) or token.lower() in NOT_NAMES:
+        return None
+    return token.capitalize() if token.isupper() or token.islower() else token
+
+
+def reopening(received: datetime) -> datetime:
+    """When the office opens next after this moment: NIGHT_END on the next weekday."""
+    settings = get_settings()
+    local = aware(received).astimezone(ZoneInfo(settings.auto_reply_timezone))
+    opening = _clock(settings.auto_reply_night_end)
+    candidate = local.replace(hour=opening.hour, minute=opening.minute, second=0, microsecond=0)
+    if local >= candidate:
+        candidate += timedelta(days=1)
+    while candidate.weekday() >= 5:
+        candidate += timedelta(days=1)
+    return candidate
+
+
+def _when(lang: str, received: datetime) -> str:
+    template = TEMPLATES[lang]
+    local = aware(received).astimezone(ZoneInfo(get_settings().auto_reply_timezone))
+    opens = reopening(received)
+    days = (opens.date() - local.date()).days
+    hour = f"{opens.hour}:{opens.minute:02d}"
+    if lang == "fr":
+        hour = f"{opens.hour}h{opens.minute:02d}" if opens.minute else f"{opens.hour}h"
+    today, tomorrow, other = template["when"]
+    pattern = today if days == 0 else tomorrow if days == 1 else other
+    return pattern.format(hour=hour, day=template["days"][opens.weekday()]) + template["zone"]
+
+
+def _site() -> str | None:
+    url = get_settings().auto_reply_banner_url.strip()
+    return re.sub(r"^https?://", "", url).strip("/") or None
+
+
+def compose(lang: str, *, name: str | None = None, received: datetime | None = None) -> str:
+    lang = lang if lang in TEMPLATES else "es"
+    template = TEMPLATES[lang]
+    with_name, without_name = template["greeting"]
+    parts = [
+        with_name.format(name=name) if name else without_name,
+        template["body"].format(when=_when(lang, received or datetime.now(UTC))),
+    ]
+    site = _site()
+    if site:
+        parts.append(template["site"].format(site=site))
+    parts.append(template["closing"])
     signature = get_settings().auto_reply_signature.strip()
-    return f"{text}\n{signature}" if signature else text
+    if signature:
+        parts.append(signature)
+    return "\n\n".join(parts)
 
 
 BANNER = Path(__file__).parent / "assets" / "auto_reply_banner.png"
@@ -295,7 +411,7 @@ async def run(db: Session, message_id: int) -> None:
         mode="shadow" if current_mode == "shadow" else "sending",
         language=lang,
         subject=reply_subject(message.subject)[:500],
-        text=compose(lang),
+        text=compose(lang, name=first_name(message), received=aware(message.created_at)),
     )
     db.add(reply)
     if current_mode == "shadow":

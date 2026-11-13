@@ -424,6 +424,52 @@ def test_from_header_variants(auto_reply_settings):
     assert from_header() == "Albir <reservas@albirconfort.es>"
 
 
+@pytest.mark.parametrize(
+    ("sender", "expected"),
+    [
+        ("Ana <ana@example.test>", "Ana"),
+        ("ANA GARCÍA <ana@example.test>", "Ana"),
+        ("'Dag Tessem' <dtessem@online.no>", "Dag"),
+        ('"Tessem, Dag" <dtessem@online.no>', "Dag"),
+        ("Jean-Luc Picard <jl@example.test>", "Jean-Luc"),
+        ("\"'ana.smc ana.smc'\" <ana.smc@telefonica.net>", None),
+        ("Info <info@example.test>", None),
+        ("ana@example.test", None),
+        ("hrooney571@gmail.com <hrooney571@gmail.com>", None),
+        ("J <j@example.test>", None),
+    ],
+)
+def test_first_name(sender, expected):
+    assert auto_reply.first_name(Message(sender=sender)) == expected
+
+
+@pytest.mark.parametrize(
+    ("local", "lang", "expected"),
+    [
+        (datetime(2026, 11, 11, 23, 30), "es", "Mañana a partir de las 8:00"),
+        (datetime(2026, 11, 12, 3, 0), "es", "Hoy a partir de las 8:00"),
+        (datetime(2026, 11, 13, 21, 0), "es", "El lunes a partir de las 8:00"),
+        (datetime(2026, 11, 14, 12, 0), "en", "On Monday from 8:00 (Spanish time)"),
+        (datetime(2026, 11, 15, 22, 0), "de", "Morgen ab 8:00 Uhr (spanische Zeit)"),
+        (datetime(2026, 11, 13, 21, 0), "fr", "Lundi à partir de 8h (heure espagnole)"),
+        (datetime(2026, 11, 13, 21, 0), "pt", "Na segunda-feira a partir das 8:00"),
+    ],
+)
+def test_reply_says_when_the_team_answers(local, lang, expected):
+    received = local.replace(tzinfo=MADRID).astimezone(UTC)
+    assert expected in auto_reply.compose(lang, received=received)
+
+
+def test_message_is_personal_and_not_marked_automatic(auto_reply_settings):
+    text = auto_reply.compose("es", name="Ana", received=NIGHT)
+    assert text.startswith("Hola Ana,\n\nMuchas gracias por escribirnos")
+    assert "albirconfort-holidays.com" in text
+    assert text.rstrip().endswith("Equipo de reservas de Albir Confort")
+    for lang in auto_reply.TEMPLATES:
+        assert "autom" not in auto_reply.compose(lang, received=NIGHT).lower()
+    assert auto_reply.compose("other", received=NIGHT).startswith("Hola,")
+
+
 def test_banner_can_be_disabled(auto_reply_settings):
     assert "<img" in auto_reply.compose_html("Hola")
     auto_reply_settings.auto_reply_banner = False
