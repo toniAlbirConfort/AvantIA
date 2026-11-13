@@ -107,6 +107,9 @@ export type AnalysisSegmentRow = {
   key: string; units?: number; nights_change: number | null
   values: Record<string, { nights: number; adr: number | null; share: number | null; occupancy: number | null }>
 }
+export type ConversionGroup = 'converted' | 'pending' | 'lost' | 'other'
+export type ConversionCounts = { total: number; by_status: Record<string, number>; groups: Record<ConversionGroup, { count: number; share: number | null }> }
+export type AnalysisConversion = ConversionCounts & { year: number; partial: boolean; same_window: ConversionCounts }
 export type AnalysisInsight = { severity: 'warning' | 'info' | 'positive'; title: string; detail: string }
 export type ReservationAnalysis =
   | { has_data: false; missing: ('reservations' | 'properties')[] }
@@ -121,6 +124,7 @@ export type ReservationAnalysis =
       confirmed_past_stays: number; over_capacity: number; zero_value_sold: number
     }
     insights: AnalysisInsight[]
+    conversion: AnalysisConversion[]
   }
 export type CustomerSummary = { avantio_id: string; display_name: string; email: string | null; phone: string | null; country: string | null; document_number: string | null; customer_class: string | null }
 export type CustomersResponse = { items: CustomerSummary[]; total: number; offset: number; limit: number; has_data: boolean; last_import_at: string | null }

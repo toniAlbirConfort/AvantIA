@@ -412,3 +412,14 @@ def test_paid_owner_unavailable_block_and_cancelled_does_not(db):
         db, property_query="A", arrival=str(start + timedelta(days=3)),
         departure=str(start + timedelta(days=4)), guests=2,
     ).status == "available"
+
+
+def test_parser_accepts_non_blocking_request_states(db):
+    start = date.today() + timedelta(days=10)
+    end = start + timedelta(days=3)
+    rows = parse_export(reservations([
+        reservation("AC", "A", "Abandono carrito", start, end),
+        reservation("CP", "A", "Cancelada propietario", start, end),
+        reservation("PD", "A", "Peticiones desestimadas", start, end),
+    ]), "reservations")
+    assert [row["status"] for row in rows] == ["abandoned_cart", "owner_cancelled", "dismissed"]
