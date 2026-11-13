@@ -74,6 +74,7 @@ from app.models import (
     MailCursor,
     Message,
     MessageAnnotation,
+    RegistrationCheck,
     Report,
     ReservationSyncState,
     TariffSeason,
@@ -91,6 +92,9 @@ from app.planning import (
     properties_view,
     reservations_view,
 )
+from app.registration import alert_mode as registration_alert_mode
+from app.registration import check_view as registration_check_view
+from app.registration import simulate as simulate_registration
 from app.reports import (
     MAX_REPORT_BYTES,
     ReportError,
@@ -1516,6 +1520,31 @@ def integrations(db: Db, user: Operator) -> dict:
             "configured": gowa_is_configured(settings),
         }
     return result
+
+
+@app.get("/api/registration-checks")
+def registration_checks(
+    db: Db,
+    user: Operator,
+    status: str | None = None,
+    limit: int = Query(100, ge=1, le=500),
+) -> dict:
+    """Email consultations checked against Avantio, newest first (shadow review)."""
+    query = select(RegistrationCheck).order_by(desc(RegistrationCheck.id)).limit(limit)
+    if status:
+        query = query.where(RegistrationCheck.status == status)
+    return {
+        "mode": registration_alert_mode(),
+        "items": [registration_check_view(item) for item in db.scalars(query).all()],
+    }
+
+
+@app.get("/api/registration-checks/simulation")
+def registration_check_simulation(
+    db: Db, admin: Admin, days: int = Query(30, ge=1, le=365)
+) -> dict:
+    """Replay the stored inbox with the unregistered-consultation rule. Read-only."""
+    return simulate_registration(db, days)
 
 
 @app.get("/api/auto-replies/simulation")

@@ -456,6 +456,8 @@ def commit_import(
     current_batch = latest_source_batch(db, dataset)
     duplicate = current_batch if current_batch and current_batch.checksum == checksum else None
     if duplicate:
+        # Same CSV as before, but time has passed: pending consultations may now be due.
+        _after_reservations_import(db, duplicate)
         return duplicate
     batch = ImportBatch(
         dataset=dataset,
@@ -484,7 +486,18 @@ def commit_import(
     except (ValueError, csv.Error) as exc:
         batch.error = str(exc)[:1000]
     db.commit()
+    _after_reservations_import(db, batch)
     return batch
+
+
+def _after_reservations_import(db: Session, batch: ImportBatch) -> None:
+    """Check email consultations against the fresh reservation list (only valid imports)."""
+    if batch.dataset != "reservations" or batch.status != "valid":
+        return
+    from app.registration import enqueue_registration_check
+
+    enqueue_registration_check(db, batch.id)
+    db.commit()
 
 
 def properties_view(db: Session, batch_id: int | None = None) -> list[dict]:

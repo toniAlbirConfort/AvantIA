@@ -16,6 +16,7 @@ from app.delivery import send_approved
 from app.mail import poll_mail
 from app.models import Conversation, Draft, Job, TariffStudy
 from app.processing import alert_conversation, analyze_message, schedule_overdue
+from app.registration import run_registration_check, watch_sync
 from app.tariff_lab import run_study
 
 logging.basicConfig(level=logging.INFO)
@@ -49,6 +50,8 @@ async def run_job() -> bool:
                 )
             elif job.kind == "tariff_study":
                 await run_study(db, int(job.payload["study_id"]))
+            elif job.kind == "registration_check":
+                run_registration_check(db)
             else:
                 raise ValueError("Unknown job kind")
             job.status = "done"
@@ -138,6 +141,11 @@ async def main() -> None:
         if tick - last_housekeeping >= 30:
             with SessionLocal() as db:
                 schedule_overdue(db)
+            with SessionLocal() as db:
+                try:
+                    watch_sync(db)
+                except Exception:
+                    logger.exception("Avantio sync watchdog failed")
             recover_stale_jobs()
             watch_csv()
             last_housekeeping = tick

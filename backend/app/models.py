@@ -106,6 +106,32 @@ class AppSetting(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
+class RegistrationCheck(Base):
+    """Whether an email consultation ended up registered in Avantio (one row per conversation).
+
+    status: pending (waiting for its deadline), registered (a matching Avantio reservation
+    exists), excluded (not a new consultation: existing guest, vendor, follow-up...), alerted
+    (deadline passed with no reservation). ``reason`` explains excluded/registered outcomes.
+    """
+
+    __tablename__ = "registration_checks"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    conversation_id: Mapped[int] = mapped_column(ForeignKey("conversations.id"), unique=True)
+    message_id: Mapped[int] = mapped_column(ForeignKey("messages.id"))
+    customer_email: Mapped[str | None] = mapped_column(String(255), index=True)
+    customer_name: Mapped[str | None] = mapped_column(String(255))
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    status: Mapped[str] = mapped_column(String(20), index=True)
+    reason: Mapped[str | None] = mapped_column(String(60))
+    locator: Mapped[str | None] = mapped_column(String(150))
+    mode: Mapped[str | None] = mapped_column(String(12))
+    checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    alerted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
 class AutoReply(Base):
     """Out-of-hours acknowledgement decided for one inbound message (shadow, sent or failed)."""
 
