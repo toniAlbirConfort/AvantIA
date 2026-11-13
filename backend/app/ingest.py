@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.config import READ_ONLY_MODE
 from app.models import AuditEvent, Conversation, Job, Message, now
+from app.sensitive import redact_payment_data
 
 
 def enqueue(db: Session, *, key: str, kind: str, payload: dict) -> None:
@@ -45,6 +46,10 @@ def ingest(
     booking: bool = False,
     email_date: datetime | None = None,
 ) -> tuple[Message, bool]:
+    # Customers sometimes paste card numbers or IBANs; never store or show them in full.
+    body = redact_payment_data(body) or ""
+    html_body = redact_payment_data(html_body)
+    subject = redact_payment_data(subject)
     duplicate = db.scalar(
         select(Message).where(Message.channel == channel, Message.provider_id == provider_id)
     )
