@@ -32,6 +32,13 @@ from app.classification import (
 )
 from app.config import READ_ONLY_MODE, get_settings
 from app.contacts import conversation_contact
+from app.customers import DATASET as CUSTOMER_DATASET
+from app.customers import (
+    commit_customers,
+    customer_detail,
+    customers_view,
+    preview_customers,
+)
 from app.db import get_db
 from app.gowa import (
     GowaDeviceNotRegistered,
@@ -1032,10 +1039,12 @@ def import_detail(batch_id: int, db: Db, user: Operator) -> dict:
 async def preview_source_import(
     dataset: str, db: Db, admin: Admin, file: Annotated[UploadFile, File()]
 ) -> dict:
-    if dataset not in DATASETS:
+    if dataset not in DATASETS and dataset != CUSTOMER_DATASET:
         raise HTTPException(404, "Tipo de datos no válido")
     raw = await file.read(10_000_001)
     try:
+        if dataset == CUSTOMER_DATASET:
+            return preview_customers(db, raw)
         return preview_import(db, dataset, raw)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
@@ -1046,7 +1055,7 @@ async def upload_source_import(
     dataset: str, db: Db, admin: Admin,
     file: Annotated[UploadFile, File()], expected_checksum: Annotated[str, Form()],
 ) -> dict:
-    if dataset not in DATASETS:
+    if dataset not in DATASETS and dataset != CUSTOMER_DATASET:
         raise HTTPException(404, "Tipo de datos no válido")
     raw = await file.read(10_000_001)
     current_batch = latest_source_batch(db, dataset)
@@ -1056,9 +1065,11 @@ async def upload_source_import(
         else None
     )
     try:
-        batch = commit_import(
-            db, dataset, raw, file.filename or "upload.csv", admin.id, expected_checksum
-        )
+        filename = file.filename or "upload.csv"
+        if dataset == CUSTOMER_DATASET:
+            batch = commit_customers(db, raw, filename, admin.id, expected_checksum)
+        else:
+            batch = commit_import(db, dataset, raw, filename, admin.id, expected_checksum)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     db.add(
@@ -1265,6 +1276,25 @@ def reservations(
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/api/customers")
+def customers(
+    db: Db,
+    user: Operator,
+    q: str = Query(default="", max_length=150),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=40, ge=1, le=100),
+) -> dict:
+    return customers_view(db, q=q, offset=offset, limit=limit)
+
+
+@app.get("/api/customers/{avantio_id}")
+def customer(avantio_id: str, db: Db, user: Operator) -> dict:
+    detail = customer_detail(db, avantio_id)
+    if detail is None:
+        raise HTTPException(404, "Cliente no encontrado")
+    return detail
 
 
 @app.get("/api/integrations")
