@@ -72,6 +72,12 @@ class Settings(BaseSettings):
     avantio_sync_interval_hours: int = Field(default=6, ge=1, le=168)
     avantio_storage_state_path: str = "/run/avantio-auth/storage-state.json"
     avantio_import_dir: str = "/run/avantio-import"
+    # Aviso de consulta por email sin registrar en Avantio: off o shadow (solo registra).
+    registration_alert_mode: str = "off"
+    # Horas de oficina que se dejan al equipo para registrar la consulta antes de avisar.
+    registration_alert_delay_minutes: int = Field(default=60, ge=1, le=10080)
+    # Antigüedad máxima de los correos que se revisan en cada comprobación.
+    registration_alert_lookback_days: int = Field(default=14, ge=1, le=90)
 
 
 @lru_cache
