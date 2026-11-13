@@ -8,6 +8,7 @@ from pathlib import Path
 
 from sqlalchemy import select
 
+from app.auto_reply import run as run_auto_reply
 from app.availability import env_csv_mapping, import_csv
 from app.config import get_settings
 from app.db import SessionLocal
@@ -38,6 +39,8 @@ async def run_job() -> bool:
         try:
             if job.kind == "analyze":
                 await analyze_message(db, int(job.payload["message_id"]))
+            elif job.kind == "auto_reply":
+                await run_auto_reply(db, int(job.payload["message_id"]))
             elif job.kind == "send":
                 await send_approved(db, int(job.payload["draft_id"]))
             elif job.kind == "alert":

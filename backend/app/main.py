@@ -30,6 +30,7 @@ from app.classification import (
     effective_classification,
     resolve_conversation_classification,
 )
+from app.auto_reply import mode as auto_reply_mode
 from app.config import READ_ONLY_MODE, get_settings
 from app.contacts import conversation_contact
 from app.customers import DATASET as CUSTOMER_DATASET
@@ -59,6 +60,7 @@ from app.ingest import enqueue, ingest
 from app.integrations import ollama_translate_email
 from app.models import (
     AuditEvent,
+    AutoReply,
     BookingTask,
     Conversation,
     Draft,
@@ -337,6 +339,12 @@ def _conversation(conv: Conversation, db: Session, detail: bool = False) -> dict
                 select(Draft).where(Draft.conversation_id == conv.id).order_by(Draft.id)
             ).all()
         ]
+        data["auto_replies"] = [
+            _auto_reply(item)
+            for item in db.scalars(
+                select(AutoReply).where(AutoReply.conversation_id == conv.id).order_by(AutoReply.id)
+            ).all()
+        ]
         task = db.scalar(select(BookingTask).where(BookingTask.conversation_id == conv.id))
         data["booking_task"] = (
             {"id": task.id, "status": task.status, "extracted": task.extracted} if task else None
@@ -356,6 +364,21 @@ def _conversation(conv: Conversation, db: Session, detail: bool = False) -> dict
             ).all()
         ]
     return data
+
+
+def _auto_reply(item: AutoReply) -> dict:
+    return {
+        "id": item.id,
+        "message_id": item.message_id,
+        "conversation_id": item.conversation_id,
+        "recipient": item.recipient,
+        "mode": item.mode,
+        "language": item.language,
+        "subject": item.subject,
+        "text": item.text,
+        "error": item.error,
+        "created_at": item.created_at,
+    }
 
 
 def _get_conv(db: Session, id: int) -> Conversation:
@@ -1456,6 +1479,12 @@ def integrations(db: Db, user: Operator) -> dict:
             "sending_enabled": not READ_ONLY_MODE,
         },
         "ollama": {"configured": bool(settings.ollama_url and settings.ollama_model)},
+        "auto_reply": {
+            "mode": auto_reply_mode(),
+            "timezone": settings.auto_reply_timezone,
+            "night_start": settings.auto_reply_night_start,
+            "night_end": settings.auto_reply_night_end,
+        },
         "csv": {
             "last_import_at": batch.created_at if batch else None,
             "age_hours": age,
@@ -1483,6 +1512,20 @@ def integrations(db: Db, user: Operator) -> dict:
             "configured": gowa_is_configured(settings),
         }
     return result
+
+
+@app.get("/api/auto-replies")
+def auto_replies(
+    db: Db,
+    user: Operator,
+    mode: str | None = None,
+    limit: int = Query(100, ge=1, le=500),
+) -> list[dict]:
+    """Out-of-hours acknowledgements, newest first, to review the shadow period."""
+    query = select(AutoReply).order_by(desc(AutoReply.id)).limit(limit)
+    if mode:
+        query = query.where(AutoReply.mode == mode)
+    return [_auto_reply(item) for item in db.scalars(query).all()]
 
 
 @app.get("/api/integrations/gowa")

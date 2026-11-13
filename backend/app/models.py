@@ -90,8 +90,27 @@ class Message(Base):
     classification_model: Mapped[str | None] = mapped_column(String(100))
     classification_reviewed_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
     classification_reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # When the sender wrote it (email Date header); created_at is when AvantIA ingested it.
+    email_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     conversation: Mapped[Conversation] = relationship(back_populates="messages")
+
+
+class AutoReply(Base):
+    """Out-of-hours acknowledgement decided for one inbound message (shadow, sent or failed)."""
+
+    __tablename__ = "auto_replies"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    message_id: Mapped[int] = mapped_column(ForeignKey("messages.id"), unique=True)
+    conversation_id: Mapped[int] = mapped_column(ForeignKey("conversations.id"), index=True)
+    recipient: Mapped[str] = mapped_column(String(255), index=True)
+    mode: Mapped[str] = mapped_column(String(12), index=True)
+    language: Mapped[str] = mapped_column(String(8))
+    subject: Mapped[str] = mapped_column(String(500))
+    text: Mapped[str] = mapped_column(Text)
+    provider_id: Mapped[str | None] = mapped_column(String(500))
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
 class MessageAnnotation(Base):

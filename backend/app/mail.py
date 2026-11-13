@@ -6,7 +6,7 @@ import logging
 import re
 from datetime import UTC, datetime
 from email import policy
-from email.utils import parseaddr
+from email.utils import parseaddr, parsedate_to_datetime
 from html.parser import HTMLParser
 from urllib.parse import quote
 
@@ -77,6 +77,22 @@ def _email_content(message: email.message.EmailMessage) -> tuple[str, str | None
     content = re.sub(r"[ \t]+\n", "\n", content)
     content = re.sub(r"\n{3,}", "\n\n", content).strip()
     return content[:20_000], html_body
+
+
+def _email_date(message: email.message.EmailMessage) -> datetime | None:
+    """The sender's Date header in UTC, or None when it is missing or unparseable."""
+    raw = message.get("Date")
+    if not raw:
+        return None
+    try:
+        value = parsedate_to_datetime(str(raw))
+    except (TypeError, ValueError, IndexError):
+        return None
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 def _booking(sender: str) -> bool:
@@ -188,6 +204,7 @@ def poll_mail(db: Session) -> int:
                     references=references,
                     source_url=_source_link(provider_id),
                     booking=_booking(sender),
+                    email_date=_email_date(message),
                 )
                 count += int(not duplicate)
                 cursor.last_uid = uid

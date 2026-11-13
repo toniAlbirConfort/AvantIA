@@ -105,6 +105,32 @@ def smtp_send(
     _deliver(message)
 
 
+def smtp_send_auto_reply(
+    *,
+    to: str,
+    subject: str,
+    text: str,
+    message_id: str,
+    in_reply_to: str | None,
+    references: str | None,
+) -> None:
+    """Out-of-hours acknowledgement (app.auto_reply), the one send READ_ONLY_MODE allows.
+
+    Marked as an automatic reply so that the customer's own autoresponders do not answer it
+    and loop, and so that AvantIA's IMAP poller ignores it if it lands in the inbox.
+    """
+    settings = get_settings()
+    if not settings.smtp_host or not settings.smtp_from:
+        raise RuntimeError("SMTP no configurado")
+    message = build_email(
+        to=to, subject=subject, text=text, message_id=message_id,
+        in_reply_to=in_reply_to, references=references,
+    )
+    message["Auto-Submitted"] = "auto-replied"
+    message["X-Auto-Response-Suppress"] = "All"
+    _deliver(message)
+
+
 DATA_IMAGE = re.compile(
     r"""src=(["'])data:image/(png|jpe?g|gif|webp);base64,([A-Za-z0-9+/=\s]+)\1""", re.I
 )
