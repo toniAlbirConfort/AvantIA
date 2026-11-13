@@ -4,7 +4,7 @@ export type GowaStatus = {
   is_connected: boolean; is_logged_in: boolean; phone_number?: string | null
 }
 export type GowaPairing = { qr_image: string; qr_duration: number }
-export type Draft = { id: number; text: string; status: string; approved_by_id: number | null; approved_at: string | null; sent_at: string | null; error: string | null }
+export type Draft = { id: number; text: string; html_body?: string | null; subject?: string | null; cc?: string | null; status: string; approved_by_id: number | null; approved_at: string | null; sent_at: string | null; error: string | null }
 export type ClassificationLabel = 'demand' | 'guest_service' | 'non_demand' | 'uncertain' | 'review'
 export type MessageClassification = {
   label: Exclude<ClassificationLabel, 'review'> | null
@@ -48,7 +48,11 @@ export type Conversation = {
   draft: Draft | null; messages?: Message[]; drafts?: Draft[]; audit?: Audit[];
   booking_task?: { id: number; status: string; extracted: Record<string, unknown> } | null
   contact?: ContactInfo | null
+  reply?: ReplyDefaults | null
 }
+export type ReplyDefaults = { mailbox: string | null; to: string | null; subject: string }
+export type EmailSignature = { id: number; mailbox: string; html_body: string; updated_at: string }
+export type SignaturesResponse = { mailboxes: string[]; signatures: EmailSignature[] }
 export type InboxThread = {
   type: 'thread'; id: number; channel: string; kind: string; customer_name: string | null;
   customer_address: string | null; subject: string | null; status: string; priority: string;
