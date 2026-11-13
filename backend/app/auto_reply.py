@@ -41,7 +41,7 @@ from app.contacts import (
     _is_internal,
 )
 from app.delivery import reply_subject
-from app.models import AuditEvent, AutoReply, Conversation, Message
+from app.models import AppSetting, AuditEvent, AutoReply, Conversation, Message, now
 
 MODES = {"off", "shadow", "send"}
 RATE_WINDOW = timedelta(hours=24)
@@ -202,9 +202,45 @@ class Decision:
     audit: bool = True
 
 
-def mode() -> str:
+PAUSE_KEY = "auto_reply_pause"
+
+
+def configured_mode() -> str:
+    """AUTO_REPLY_MODE from .env."""
     value = (get_settings().auto_reply_mode or "off").strip().lower()
     return value if value in MODES else "off"
+
+
+def pause_state(db: Session | None) -> AppSetting | None:
+    """The pause switch from the app, when an admin has paused the acknowledgements."""
+    if db is None:
+        return None
+    setting = db.get(AppSetting, PAUSE_KEY)
+    return setting if setting and (setting.value or {}).get("paused") else None
+
+
+def mode(db: Session | None = None) -> str:
+    """The mode in force: .env, unless an admin paused it from the app (then off)."""
+    return "off" if pause_state(db) is not None else configured_mode()
+
+
+def set_paused(db: Session, *, paused: bool, user_id: int) -> AppSetting:
+    setting = db.get(AppSetting, PAUSE_KEY)
+    if setting is None:
+        setting = AppSetting(key=PAUSE_KEY)
+        db.add(setting)
+    setting.value = {"paused": paused}
+    setting.updated_by_id = user_id
+    setting.updated_at = now()
+    db.add(
+        AuditEvent(
+            actor_user_id=user_id,
+            action="auto_reply.paused" if paused else "auto_reply.resumed",
+            detail={"configured_mode": configured_mode()},
+        )
+    )
+    db.commit()
+    return setting
 
 
 def _clock(value: str) -> time:
@@ -407,7 +443,7 @@ def evaluate(
     """
     settings = get_settings()
     current = aware(at or datetime.now(UTC))
-    if simulation is None and mode() == "off":
+    if simulation is None and mode(db) == "off":
         return Decision(False, "disabled", audit=False)
     if message.direction != "inbound" or message.channel != "email" or conv.channel != "email":
         return Decision(False, "not_inbound_email", audit=False)
@@ -470,7 +506,7 @@ def evaluate(
 
 
 async def run(db: Session, message_id: int) -> None:
-    current_mode = mode()
+    current_mode = mode(db)
     if current_mode == "off":
         return
     message = db.get(Message, message_id)
