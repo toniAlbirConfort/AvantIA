@@ -158,3 +158,12 @@
     color: var(--brand-orange-dark);
   }
 }
+
+.rich-editor p, .rich-editor div { margin: 0; }
+.rich-editor ul, .rich-editor ol { margin: 0.4em 0; padding-left: 1.6em; }
+.rich-editor ul { list-style: disc; }
+.rich-editor ol { list-style: decimal; }
+.rich-editor a { color: #2563eb; text-decoration: underline; }
+.rich-editor blockquote { margin: 0.4em 0 0.4em 0.8ex; border-left: 2px solid #cbd5e1; padding-left: 1ex; color: #475569; }
+.rich-editor img { max-width: 100%; height: auto; }
+.rich-editor [data-signature] { color: #334155; }

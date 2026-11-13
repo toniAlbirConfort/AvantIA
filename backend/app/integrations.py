@@ -84,6 +84,8 @@ def smtp_send(
     subject: str,
     text: str,
     message_id: str,
+    cc: list[str] | None = None,
+    html_body: str | None = None,
     in_reply_to: str | None,
     references: str | None,
 ) -> None:
@@ -95,6 +97,8 @@ def smtp_send(
     message = EmailMessage()
     message["From"] = settings.smtp_from
     message["To"] = to
+    if cc:
+        message["Cc"] = ", ".join(cc)
     message["Subject"] = subject
     message["Message-ID"] = message_id
     if in_reply_to:
@@ -102,6 +106,12 @@ def smtp_send(
     if references:
         message["References"] = references
     message.set_content(text)
+    if html_body:
+        message.add_alternative(
+            '<!doctype html><html><body style="font-family: Arial, Helvetica, sans-serif; '
+            f'font-size: 14px">{html_body}</body></html>',
+            subtype="html",
+        )
     if settings.smtp_starttls:
         with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=30) as smtp:
             smtp.starttls(context=ssl.create_default_context())

@@ -40,6 +40,7 @@ from app.customers import (
     preview_customers,
 )
 from app.db import get_db
+from app.delivery import parse_cc, reply_defaults
 from app.gowa import (
     GowaDeviceNotRegistered,
     GowaNotConfigured,
@@ -53,6 +54,7 @@ from app.gowa import (
     reconnect_gowa,
     start_gowa_pairing,
 )
+from app.html_sanitize import sanitize_html
 from app.ingest import enqueue, ingest
 from app.integrations import ollama_translate_email
 from app.models import (
@@ -60,6 +62,7 @@ from app.models import (
     BookingTask,
     Conversation,
     Draft,
+    EmailSignature,
     ImportBatch,
     MailCursor,
     Message,
@@ -123,8 +126,16 @@ class UserIn(BaseModel):
 
 
 class DraftIn(BaseModel):
-    text: str = Field(min_length=1, max_length=5000)
+    text: str = Field(min_length=1, max_length=20000)
+    html_body: str | None = Field(default=None, max_length=400_000)
+    subject: str | None = Field(default=None, max_length=500)
+    cc: str | None = Field(default=None, max_length=1000)
     expected_draft_id: int | None = None
+
+
+class SignatureIn(BaseModel):
+    mailbox: str = Field(min_length=1, max_length=255)
+    html_body: str = Field(max_length=400_000)
 
 
 class GowaPurgeIn(BaseModel):
@@ -204,6 +215,9 @@ def _draft(draft: Draft) -> dict:
     return {
         "id": draft.id,
         "text": draft.text,
+        "html_body": draft.html_body,
+        "subject": draft.subject,
+        "cc": draft.cc,
         "status": draft.status,
         "approved_by_id": draft.approved_by_id,
         "approved_at": draft.approved_at,
@@ -308,6 +322,7 @@ def _conversation(conv: Conversation, db: Session, detail: bool = False) -> dict
             }
             for item in messages
         ]
+        data["reply"] = reply_defaults(db, conv) if conv.channel == "email" else None
         data["drafts"] = [
             _draft(item)
             for item in db.scalars(
@@ -842,6 +857,10 @@ def edit_draft(id: int, body: DraftIn, db: Db, user: Operator) -> dict:
     conv = _get_conv(db, id)
     if conv.kind == "booking" or conv.status not in {"pending", "error"}:
         raise HTTPException(409, "La consulta no admite edición")
+    try:
+        cc = parse_cc(body.cc)
+    except ValueError as exc:
+        raise HTTPException(422, f"Dirección en copia no válida: {exc}") from None
     live, _ = _live_analysis(db, conv)
     live.pop("availability_changed", None)
     conv.analysis = live
@@ -855,6 +874,10 @@ def edit_draft(id: int, body: DraftIn, db: Db, user: Operator) -> dict:
         db.add(draft)
     else:
         draft.text = body.text.strip()
+    if conv.channel == "email":
+        draft.html_body = sanitize_html(body.html_body) if body.html_body else None
+        draft.subject = (body.subject or "").strip() or None
+        draft.cc = ", ".join(cc) or None
     db.add(AuditEvent(actor_user_id=user.id, conversation_id=id, action="draft.edited", detail={}))
     db.commit()
     return _draft(draft)
@@ -889,6 +912,51 @@ def approve(id: int, db: Db, user: Operator) -> dict:
     )
     db.commit()
     return _draft(draft)
+
+
+def _signature_mailboxes() -> list[str]:
+    settings = get_settings()
+    addresses = [parseaddr(item)[1].lower() for item in (settings.smtp_from, settings.imap_user)]
+    return ["*", *dict.fromkeys(item for item in addresses if "@" in item)]
+
+
+def _signature(item: EmailSignature) -> dict:
+    return {"id": item.id, "mailbox": item.mailbox, "html_body": item.html_body,
+            "updated_at": item.updated_at}
+
+
+@app.get("/api/signatures")
+def signatures(db: Db, user: Operator) -> dict:
+    """The current operator's signatures; each operator only sees and edits their own."""
+    items = db.scalars(
+        select(EmailSignature).where(EmailSignature.user_id == user.id).order_by(EmailSignature.id)
+    ).all()
+    return {"mailboxes": _signature_mailboxes(), "signatures": [_signature(i) for i in items]}
+
+
+@app.put("/api/signatures")
+def save_signature(body: SignatureIn, db: Db, user: Operator) -> dict:
+    mailbox = body.mailbox.strip().lower()
+    if mailbox not in _signature_mailboxes():
+        raise HTTPException(422, "Cuenta de correo desconocida")
+    item = db.scalar(
+        select(EmailSignature).where(
+            EmailSignature.user_id == user.id, EmailSignature.mailbox == mailbox
+        )
+    )
+    html_body = sanitize_html(body.html_body)
+    if not html_body:
+        if item:
+            db.delete(item)
+            db.commit()
+        return signatures(db, user)
+    if item:
+        item.html_body = html_body
+        item.updated_at = now()
+    else:
+        db.add(EmailSignature(user_id=user.id, mailbox=mailbox, html_body=html_body))
+    db.commit()
+    return signatures(db, user)
 
 
 @app.post("/api/conversations/{id}/pending")

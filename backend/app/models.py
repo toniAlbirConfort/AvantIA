@@ -120,6 +120,10 @@ class Draft(Base):
     conversation_id: Mapped[int] = mapped_column(ForeignKey("conversations.id"), index=True)
     source_message_id: Mapped[int | None] = mapped_column(ForeignKey("messages.id"), unique=True)
     text: Mapped[str] = mapped_column(Text)
+    # Rich-text body, subject and CC chosen in the reply composer (email only).
+    html_body: Mapped[str | None] = mapped_column(Text)
+    subject: Mapped[str | None] = mapped_column(String(500))
+    cc: Mapped[str | None] = mapped_column(String(1000))
     status: Mapped[str] = mapped_column(String(30), default="pending")
     approved_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -128,6 +132,19 @@ class Draft(Base):
     error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     conversation: Mapped[Conversation] = relationship(back_populates="drafts")
+
+
+class EmailSignature(Base):
+    """Signature of one operator for one sending mailbox ("*" applies to every mailbox)."""
+
+    __tablename__ = "email_signatures"
+    __table_args__ = (UniqueConstraint("user_id", "mailbox"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    mailbox: Mapped[str] = mapped_column(String(255))
+    html_body: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
 
 
 class BookingTask(Base):
