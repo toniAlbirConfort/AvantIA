@@ -122,6 +122,22 @@ API: `GET /api/tariff-lab/readiness`, `GET|PUT /api/tariff-lab/property-groups`,
 
 El repositorio define el contrato `MarketDataProvider` en `backend/app/tariff_lab.py`, pero aún no incorpora una API concreta ni credenciales. La comprobación de preparación informa que falta esa fuente y el endpoint de creación responde `503` hasta instalar un adaptador autorizado. No se automatiza la extracción mediante bots de OTA.
 
+### Proyección de año
+
+La **Proyección de año** genera las tarifas SA de un año a partir de las del año base sin proveedor de mercado. Cada temporada del año base conserva sus fechas en el año de destino (el final de febrero sigue al año bisiesto) y su precio cambia por la suma de tres ajustes, cada uno visible en pantalla:
+
+- **IPC y costes:** porcentaje fijo indicado al crear la proyección (3,5 % por defecto). El catálogo no tiene costes reales.
+- **Demanda:** ocupación de la misma temporada en el último año en que ya terminó, contando alojamientos activos asignados al grupo y reservas confirmadas y pagadas. +2 puntos si llegó al 80 %; −2 si quedó por debajo del 60 % y cayó 5 puntos o más frente al año anterior. Se omite en grupos con menos alojamientos que el mínimo (3 por defecto).
+- **Mercado:** mediana de los precios de la competencia cuya fecha de entrada cae en la temporada; los de años anteriores al base se actualizan con el IPC indicado. Con 2 o más competidores: si la mediana supera nuestra SA en un 10 % o más, se suma un tercio de la diferencia (máximo 5 puntos); si queda un 10 % o más por debajo, −2 puntos.
+
+El total se limita entre la subida mínima y la máxima (0 % y 10 % por defecto) y se redondea al euro o a un precio acabado en 9. Si Semana Santa cambia de mes, la proyección propone llevar el precio de la temporada de Semana Santa al viernes anterior al Domingo de Ramos hasta el Lunes de Pascua del año de destino, y su antigua temporada toma el precio de la anterior; el administrador decide si lo aplica. También avisa de temporadas largas cuyos meses tienen ocupaciones muy distintas y muestra las noches ya reservadas para el año base frente a las del año anterior en la misma fecha.
+
+Los precios de la competencia se registran a mano en el laboratorio, uno por competidor, fecha de entrada y grupo SA. La migración `0018` incorpora los del estudio de competencia en Albir del 13/11/2026.
+
+Un administrador puede cambiar cualquier precio con su motivo, guardar notas y **aplicar** la proyección: entonces se crean en Tarifas las temporadas SA del año de destino y la proyección queda cerrada. No se aplica si el grupo ya tiene tarifas SA en ese año, ni escribe en Avantio. Cada creación, cambio y aplicación queda en el registro de auditoría.
+
+API: `GET|POST /api/tariff-lab/market-observations`, `DELETE /api/tariff-lab/market-observations/{id}`, `GET|POST /api/tariff-lab/projections`, `GET|PATCH|DELETE /api/tariff-lab/projections/{id}`, `POST /api/tariff-lab/projections/{id}/apply` y `GET /api/tariff-lab/projections/{id}/tariffs.csv`. Crear, cambiar, aplicar y borrar requiere administrador; los operadores consultan y descargan.
+
 ## Informes
 
 La vista **Informes** reúne, del más reciente al más antiguo, los informes HTML preparados con Claude y los estudios completos o parciales del Laboratorio de tarifas. Los informes HTML se abren en modo lectura a pantalla completa (Esc o «Volver a Informes» para salir), dentro de un visor aislado, sin scripts ni acceso a la sesión; los estudios enlazan a su PDF y al laboratorio. Los administradores añaden informes subiendo el archivo HTML (máximo 5 MB, UTF-8) y pueden borrarlos; los operadores los consultan.
