@@ -95,6 +95,31 @@ def _email_date(message: email.message.EmailMessage) -> datetime | None:
     return value.astimezone(UTC)
 
 
+def append_sent_copy(message: email.message.EmailMessage, folder: str) -> None:
+    """Keep a copy of a message AvantIA sent in the mailbox (e.g. "Elementos enviados").
+
+    The only IMAP write AvantIA does: it adds one message, marked as read, and never
+    touches what is already in the mailbox.
+    """
+    settings = get_settings()
+    if not settings.imap_host or not settings.imap_user:
+        raise RuntimeError("IMAP no configurado")
+    mailbox = '"' + folder.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    conn = imaplib.IMAP4_SSL(settings.imap_host, settings.imap_port, timeout=30)
+    try:
+        conn.login(settings.imap_user, settings.imap_password)
+        result, data = conn.append(
+            mailbox, r"(\Seen)", imaplib.Time2Internaldate(datetime.now(UTC)), message.as_bytes()
+        )
+        if result != "OK":
+            raise RuntimeError(f"IMAP APPEND falló: {data!r}")
+    finally:
+        try:
+            conn.logout()
+        except Exception:
+            pass
+
+
 def _booking(sender: str) -> bool:
     address = parseaddr(sender)[1].lower()
     domain = address.rsplit("@", 1)[-1]

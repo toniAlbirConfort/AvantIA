@@ -35,6 +35,11 @@ def auto_reply_settings(monkeypatch):
     monkeypatch.setattr(settings, "smtp_from", "reservas@albirconfort.es")
     monkeypatch.setattr(settings, "smtp_host", "smtp.example.test")
     monkeypatch.setattr(settings, "imap_user", "reservas@albirconfort.es")
+    monkeypatch.setattr(settings, "imap_host", "imap.example.test")
+    monkeypatch.setattr(settings, "smtp_from_name", "Albir Confort Holidays")
+    monkeypatch.setattr(settings, "auto_reply_banner", True)
+    monkeypatch.setattr(settings, "auto_reply_banner_url", "https://albirconfort-holidays.com/")
+    monkeypatch.setattr(settings, "auto_reply_sent_folder", "")
     return settings
 
 
@@ -217,7 +222,15 @@ def test_send_mode_delivers_marked_auto_reply(db, monkeypatch, auto_reply_settin
     assert email["Auto-Submitted"] == "auto-replied"
     assert email["In-Reply-To"] == message.provider_id
     assert email["Subject"] == "Re: Disponibilidad en diciembre"
-    assert email.get_content().rstrip().endswith("Albir Confort")
+    assert email["From"] == "Albir Confort Holidays <reservas@albirconfort.es>"
+    assert email["Date"]
+    assert email.get_body(("plain",)).get_content().rstrip().endswith("Albir Confort")
+    html_part = email.get_body(("html",))
+    html_text = html_part.get_content()
+    assert '<a href="https://albirconfort-holidays.com/"><img src="cid:' in html_text
+    images = [part for part in email.walk() if part.get_content_type() == "image/png"]
+    assert len(images) == 1
+    assert images[0].get_payload(decode=True) == auto_reply.BANNER.read_bytes()
     reply = db.scalar(select(AutoReply))
     assert reply.mode == "sent"
     outbound = db.scalar(select(Message).where(Message.direction == "outbound"))
@@ -330,3 +343,198 @@ def test_simulation_can_ignore_office_hours(db):
     window = {"start": DAY - timedelta(hours=1), "end": DAY + timedelta(hours=1)}
     assert auto_reply.simulate(db, **window)["replies"] == 0
     assert auto_reply.simulate(db, **window, any_hour=True)["replies"] == 1
+
+
+def test_sent_copy_goes_to_configured_folder(db, monkeypatch, auto_reply_settings):
+    auto_reply_settings.auto_reply_mode = "send"
+    auto_reply_settings.auto_reply_sent_folder = "Elementos enviados"
+    monkeypatch.setattr("app.auto_reply.datetime", _frozen(NIGHT + timedelta(minutes=2)))
+    delivered, copies = [], []
+    monkeypatch.setattr("app.integrations._deliver", delivered.append)
+    monkeypatch.setattr("app.mail.append_sent_copy", lambda m, f: copies.append((m, f)))
+    _, message = add_email(db)
+    asyncio.run(auto_reply.run(db, message.id))
+    assert copies == [(delivered[0], "Elementos enviados")]
+
+
+def test_failed_copy_does_not_undo_the_reply(db, monkeypatch, auto_reply_settings):
+    auto_reply_settings.auto_reply_mode = "send"
+    auto_reply_settings.auto_reply_sent_folder = "Elementos enviados"
+    monkeypatch.setattr("app.auto_reply.datetime", _frozen(NIGHT + timedelta(minutes=2)))
+    monkeypatch.setattr("app.integrations._deliver", lambda m: None)
+
+    def broken(message, folder):
+        raise OSError("imap down")
+
+    monkeypatch.setattr("app.mail.append_sent_copy", broken)
+    _, message = add_email(db)
+    asyncio.run(auto_reply.run(db, message.id))
+    assert db.scalar(select(AutoReply)).mode == "sent"
+    assert db.scalar(select(AuditEvent).where(AuditEvent.action == "auto_reply.copy_failed"))
+
+
+def test_no_copy_without_folder(db, monkeypatch, auto_reply_settings):
+    auto_reply_settings.auto_reply_mode = "send"
+    monkeypatch.setattr("app.auto_reply.datetime", _frozen(NIGHT + timedelta(minutes=2)))
+    monkeypatch.setattr("app.integrations._deliver", lambda m: None)
+    monkeypatch.setattr(
+        "app.mail.append_sent_copy",
+        lambda m, f: (_ for _ in ()).throw(AssertionError("no folder configured")),
+    )
+    _, message = add_email(db)
+    asyncio.run(auto_reply.run(db, message.id))
+    assert db.scalar(select(AutoReply)).mode == "sent"
+
+
+def test_append_sent_copy_uses_imap_append(monkeypatch, auto_reply_settings):
+    from app.mail import append_sent_copy
+
+    calls = []
+
+    class FakeImap:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def login(self, user, password):
+            calls.append("login")
+
+        def append(self, mailbox, flags, date_time, raw):
+            calls.append((mailbox, flags, raw))
+            return "OK", [b"APPEND completed"]
+
+        def logout(self):
+            calls.append("logout")
+
+    monkeypatch.setattr("app.mail.imaplib.IMAP4_SSL", FakeImap)
+    message = EmailMessage()
+    message["Subject"] = "Copia"
+    message.set_content("hola")
+    append_sent_copy(message, "Elementos enviados")
+    assert calls[1] == ('"Elementos enviados"', r"(\Seen)", message.as_bytes())
+    assert calls[-1] == "logout"
+
+
+def test_from_header_variants(auto_reply_settings):
+    from app.integrations import from_header
+
+    assert from_header() == "Albir Confort Holidays <reservas@albirconfort.es>"
+    auto_reply_settings.smtp_from_name = ""
+    assert from_header() == "reservas@albirconfort.es"
+    auto_reply_settings.smtp_from = "Albir <reservas@albirconfort.es>"
+    assert from_header() == "Albir <reservas@albirconfort.es>"
+
+
+@pytest.mark.parametrize(
+    ("sender", "expected"),
+    [
+        # The address confirms the name.
+        ("ANA GARCÍA <ana.garcia@example.test>", "Ana"),
+        ("José Pérez <jperez@example.test>", "José"),
+        ("'Dag Tessem' <dtessem@online.no>", "Dag"),
+        ('"Tessem, Dag" <dtessem@online.no>', "Dag"),
+        ("Helen Rooney <hrooney571@gmail.com>", "Helen"),
+        ("Jean-Luc Picard <jean-luc.picard@example.test>", "Jean-Luc"),
+        # Not clear: no name, a company, a nickname or an address that says otherwise.
+        ("Katarzyna Szymczak <kasia80.szymczak@gmail.com>", "Katarzyna"),
+        ("Sølvi Sommervoll <solvisom@ntebb.no>", "Sølvi"),
+        ("Ana <ana@example.test>", None),
+        ("Aisling Killeen Dickson <simondickson@icloud.com>", None),
+        ("Extranet Sidetours <extranet@sidetours.com>", None),
+        ("Product Muchosol <product@muchosol.com>", None),
+        ("Gmail KARBAR Grup <karbarsolucionesindustriales@gmail.com>", None),
+        ("Vrbo Integrations <integrationsupport@expediagroup.com>", None),
+        ("Ana Garcia <contacto@example.test>", None),
+        ("Viajes Sol <info@viajessol.com>", None),
+        ("Mibtrysil <mibtrysil@gmail.com>", None),
+        ("Familia Garcia <familiagarcia@example.test>", None),
+        ("\"'ana.smc ana.smc'\" <ana.smc@telefonica.net>", None),
+        ("Info <info@example.test>", None),
+        ("Reservas Hotel Sol <reservas@hotelsol.es>", None),
+        ("ana@example.test", None),
+        ("hrooney571@gmail.com <hrooney571@gmail.com>", None),
+        ("J <j@example.test>", None),
+        ("Ana Maria de la Cruz Lopez <ana@example.test>", None),
+    ],
+)
+def test_first_name(sender, expected):
+    assert auto_reply.first_name(Message(sender=sender)) == expected
+
+
+@pytest.mark.parametrize(
+    ("local", "lang", "expected"),
+    [
+        (datetime(2026, 11, 11, 23, 30), "es", "Mañana a partir de las 8:00"),
+        (datetime(2026, 11, 12, 3, 0), "es", "Hoy a partir de las 8:00"),
+        (datetime(2026, 11, 13, 21, 0), "es", "El lunes a partir de las 8:00"),
+        (datetime(2026, 11, 14, 12, 0), "en", "On Monday from 8:00 (Spanish time)"),
+        (datetime(2026, 11, 15, 22, 0), "de", "Morgen ab 8:00 Uhr (spanische Zeit)"),
+        (datetime(2026, 11, 13, 21, 0), "fr", "Lundi à partir de 8h (heure espagnole)"),
+        (datetime(2026, 11, 13, 21, 0), "pt", "Na segunda-feira a partir das 8:00"),
+    ],
+)
+def test_reply_says_when_the_team_answers(local, lang, expected):
+    received = local.replace(tzinfo=MADRID).astimezone(UTC)
+    assert expected in auto_reply.compose(lang, received=received)
+
+
+@pytest.mark.parametrize(
+    ("data", "sender", "expected"),
+    [
+        ({"language": "nb", "language_detected": True}, "x@online.no", "nb"),
+        ({"language": "de", "language_detected": True}, "x@example.test", "de"),
+        ({"language": "other", "language_detected": True}, "x@example.nl", "en"),
+        # The model gave no language: Spanish only for a Spanish address.
+        ({"language": "es", "language_detected": False}, "x@online.no", "en"),
+        ({"language": "es", "language_detected": False}, "x@telefonica.es", "es"),
+        (None, "x@gmail.com", "en"),
+        # Data stored before language_detected existed keeps the detected language.
+        ({"language": "es"}, "x@gmail.com", "es"),
+    ],
+)
+def test_language_choice(data, sender, expected):
+    assert auto_reply.language(Message(sender=sender, classification_data=data)) == expected
+
+
+def test_extraction_marks_whether_language_was_detected():
+    from app.processing import _safe_analysis
+
+    assert _safe_analysis({"customer_language": "nb"})["language"] == "nb"
+    assert _safe_analysis({"customer_language": "nb"})["language_detected"] is True
+    missing = _safe_analysis({})
+    assert missing["language"] == "es"  # Drafts keep their Spanish default.
+    assert missing["language_detected"] is False
+
+
+def test_norwegian_reply(auto_reply_settings):
+    received = datetime(2026, 11, 13, 21, 0, tzinfo=MADRID).astimezone(UTC)
+    text = auto_reply.compose("nb", name="Dag", received=received)
+    assert text.startswith("Hei Dag,")
+    assert "Mandag fra kl. 08.00 vil en av oss" in text
+    assert text.rstrip().endswith("Reservasjonsteamet i Albir Confort")
+
+
+def test_dutch_reply(auto_reply_settings):
+    received = datetime(2026, 11, 11, 23, 30, tzinfo=MADRID).astimezone(UTC)
+    text = auto_reply.compose("nl", name="Minie", received=received)
+    assert text.startswith("Beste Minie,")
+    assert "Morgen vanaf 8.00 uur bekijkt een medewerker" in text
+    assert auto_reply.compose("nl", received=received).startswith("Goedendag,")
+    assert auto_reply.language(
+        Message(sender="x@example.nl", classification_data={"language": "nl"})
+    ) == "nl"
+
+
+def test_message_is_personal_and_not_marked_automatic(auto_reply_settings):
+    text = auto_reply.compose("es", name="Ana", received=NIGHT)
+    assert text.startswith("Hola Ana,\n\nMuchas gracias por escribirnos")
+    assert "albirconfort-holidays.com" in text
+    assert text.rstrip().endswith("Equipo de reservas de Albir Confort")
+    for lang in auto_reply.TEMPLATES:
+        assert "autom" not in auto_reply.compose(lang, received=NIGHT).lower()
+    assert auto_reply.compose("other", received=NIGHT).startswith("Hola,")
+
+
+def test_banner_can_be_disabled(auto_reply_settings):
+    assert "<img" in auto_reply.compose_html("Hola")
+    auto_reply_settings.auto_reply_banner = False
+    assert "<img" not in auto_reply.compose_html("Hola")

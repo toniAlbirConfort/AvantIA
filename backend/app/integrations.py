@@ -8,6 +8,7 @@ import re
 import smtplib
 import ssl
 from email.message import EmailMessage
+from email.utils import formataddr, formatdate, parseaddr
 
 import httpx
 
@@ -113,7 +114,8 @@ def smtp_send_auto_reply(
     message_id: str,
     in_reply_to: str | None,
     references: str | None,
-) -> None:
+    html_body: str | None = None,
+) -> EmailMessage:
     """Out-of-hours acknowledgement (app.auto_reply), the one send READ_ONLY_MODE allows.
 
     Marked as an automatic reply so that the customer's own autoresponders do not answer it
@@ -123,12 +125,14 @@ def smtp_send_auto_reply(
     if not settings.smtp_host or not settings.smtp_from:
         raise RuntimeError("SMTP no configurado")
     message = build_email(
-        to=to, subject=subject, text=text, message_id=message_id,
+        to=to, subject=subject, text=text, message_id=message_id, html_body=html_body,
         in_reply_to=in_reply_to, references=references,
     )
+    message["Date"] = formatdate(localtime=True)
     message["Auto-Submitted"] = "auto-replied"
     message["X-Auto-Response-Suppress"] = "All"
     _deliver(message)
+    return message
 
 
 DATA_IMAGE = re.compile(
@@ -155,6 +159,14 @@ def _inline_images(html_body: str) -> tuple[str, list[tuple[str, str, bytes]]]:
     return DATA_IMAGE.sub(replace, html_body), list(images.values())
 
 
+def from_header() -> str:
+    """SMTP_FROM with SMTP_FROM_NAME as display name, when one is set."""
+    settings = get_settings()
+    name, address = parseaddr(settings.smtp_from)
+    name = settings.smtp_from_name.strip() or name
+    return formataddr((name, address)) if name and address else settings.smtp_from
+
+
 def build_email(
     *,
     to: str,
@@ -166,9 +178,8 @@ def build_email(
     in_reply_to: str | None = None,
     references: str | None = None,
 ) -> EmailMessage:
-    settings = get_settings()
     message = EmailMessage()
-    message["From"] = settings.smtp_from
+    message["From"] = from_header()
     message["To"] = to
     if cc:
         message["Cc"] = ", ".join(cc)
