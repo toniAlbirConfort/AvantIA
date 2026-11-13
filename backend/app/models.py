@@ -363,6 +363,24 @@ class TariffStudy(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class Report(Base):
+    """An HTML report stored in the app, such as a market study prepared with Claude."""
+
+    __tablename__ = "reports"
+    __table_args__ = (
+        CheckConstraint("source IN ('claude', 'app')", name="ck_reports_source"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    title: Mapped[str] = mapped_column(String(200))
+    description: Mapped[str | None] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(String(20), default="claude", index=True)
+    html_body: Mapped[str] = mapped_column(Text)
+    original_url: Mapped[str | None] = mapped_column(String(500))
+    created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
+
+
 class Customer(Base):
     """Current state of a customer from the Avantio customer export, keyed by its Avantio id."""
 

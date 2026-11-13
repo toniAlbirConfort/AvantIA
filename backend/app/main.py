@@ -67,6 +67,7 @@ from app.models import (
     MailCursor,
     Message,
     MessageAnnotation,
+    Report,
     ReservationSyncState,
     TariffSeason,
     TariffStudy,
@@ -82,6 +83,13 @@ from app.planning import (
     preview_import,
     properties_view,
     reservations_view,
+)
+from app.reports import (
+    MAX_REPORT_BYTES,
+    ReportError,
+    create_report,
+    list_reports,
+    report_document,
 )
 from app.tariff_lab import (
     MarketProviderUnavailable,
@@ -1304,6 +1312,65 @@ def download_tariff_study_report(study_id: int, db: Db, user: Operator) -> Respo
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="tariff-study-{study.id}.pdf"'},
     )
+
+
+@app.get("/api/reports")
+def reports(db: Db, user: Operator) -> list[dict]:
+    return list_reports(db)
+
+
+@app.get("/api/reports/{report_id}/content")
+def report_content(report_id: int, db: Db, user: Operator) -> Response:
+    report = db.get(Report, report_id)
+    if report is None:
+        raise HTTPException(404, "Informe no encontrado")
+    return Response(
+        content=report_document(report),
+        media_type="text/html; charset=utf-8",
+        headers={
+            "Content-Security-Policy": "sandbox allow-popups allow-popups-to-escape-sandbox",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@app.post("/api/reports", status_code=201)
+async def upload_report(
+    db: Db, admin: Admin,
+    file: Annotated[UploadFile, File()],
+    title: Annotated[str, Form()],
+    description: Annotated[str | None, Form()] = None,
+    source: Annotated[str, Form()] = "claude",
+    original_url: Annotated[str | None, Form()] = None,
+) -> dict:
+    raw = await file.read(MAX_REPORT_BYTES + 1)
+    try:
+        report = create_report(
+            db, title=title, description=description, raw=raw, source=source,
+            original_url=original_url, user_id=admin.id,
+        )
+    except ReportError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    db.add(AuditEvent(
+        actor_user_id=admin.id, action="report.created",
+        detail={"report_id": report.id, "source": report.source},
+    ))
+    db.commit()
+    return {"id": report.id, "key": f"report-{report.id}"}
+
+
+@app.delete("/api/reports/{report_id}")
+def delete_report(report_id: int, db: Db, admin: Admin) -> dict:
+    report = db.get(Report, report_id)
+    if report is None:
+        raise HTTPException(404, "Informe no encontrado")
+    db.delete(report)
+    db.add(AuditEvent(
+        actor_user_id=admin.id, action="report.deleted",
+        detail={"report_id": report_id, "title": report.title},
+    ))
+    db.commit()
+    return {"deleted": True}
 
 
 @app.get("/api/planning")

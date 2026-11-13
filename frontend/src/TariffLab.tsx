@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { api, token } from './api'
+import { api, apiDownload } from './api'
 import { Alert } from './components/ui/alert'
 import { Button } from './components/ui/button'
 import { Card } from './components/ui/card'
@@ -42,7 +42,6 @@ type StudyResult = {
   warnings: string[]; generated_days: number; missing_days: number; status: string
 }
 
-const apiBase = import.meta.env.VITE_API_BASE || ''
 const checkLabels: Record<string, string> = {
   properties: 'Catálogo activo', group_mapping: 'Asignación a grupos SA', reservations: 'Histórico de reservas',
   availability_history: 'Histórico de disponibilidad', market_provider: 'Proveedor de mercado autorizado',
@@ -70,23 +69,6 @@ function money(value: string | null | undefined) {
 
 function percentage(value: number | null | undefined) {
   return value == null ? '—' : new Intl.NumberFormat('es-ES', { style: 'percent', maximumFractionDigits: 0 }).format(value)
-}
-
-async function download(path: string, filename: string) {
-  const headers = new Headers()
-  if (token()) headers.set('Authorization', `Bearer ${token()}`)
-  const response = await fetch(`${apiBase}${path}`, { headers })
-  if (!response.ok) {
-    let message = `Error ${response.status}`
-    try { message = (await response.json()).detail || message } catch { /* use status */ }
-    throw new Error(message)
-  }
-  const objectUrl = URL.createObjectURL(await response.blob())
-  const link = document.createElement('a')
-  link.href = objectUrl
-  link.download = filename
-  link.click()
-  URL.revokeObjectURL(objectUrl)
 }
 
 export function TariffLab({ role, refreshVersion }: { role: string; refreshVersion: number }) {
@@ -206,7 +188,7 @@ export function TariffLab({ role, refreshVersion }: { role: string; refreshVersi
     setDownloadError('')
     try {
       const extension = kind.endsWith('.csv') ? 'csv' : 'pdf'
-      await download(`/api/tariff-lab/studies/${selectedStudy.id}/${kind}`, `propuesta-tarifas-${selectedStudy.id}.${extension}`)
+      await apiDownload(`/api/tariff-lab/studies/${selectedStudy.id}/${kind}`, `propuesta-tarifas-${selectedStudy.id}.${extension}`)
     } catch (err) { setDownloadError((err as Error).message) }
   }
 
