@@ -60,9 +60,11 @@ def test_gowa_duplicate_is_classified_without_any_real_send(db, monkeypatch):
     monkeypatch.setattr("app.delivery.gowa_send", fake_send)
     try:
         with TestClient(app) as client:
+            # Real GOWA v9 shape: the phone's JID in device_id, our alias in session_id.
             event = {
                 "event": "message",
-                "device_id": "test-device",
+                "device_id": "34636000000@s.whatsapp.net",
+                "session_id": "test-device",
                 "payload": {
                     "id": "in-1",
                     "chat_id": "34600111222@s.whatsapp.net",
@@ -105,6 +107,47 @@ def test_gowa_duplicate_is_classified_without_any_real_send(db, monkeypatch):
             with pytest.raises(RuntimeError, match="solo lectura"):
                 asyncio.run(send_approved(db, draft.id))
             assert sent == []
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.parametrize(
+    ("identity", "expected_status"),
+    [
+        ({"device_id": "34636000000@s.whatsapp.net", "session_id": "test-device"}, 200),
+        ({"device_id": "34636000000@s.whatsapp.net"}, 200),
+        ({"device_id": "34636000000:12@s.whatsapp.net"}, 200),
+        ({"device_id": "test-device"}, 200),
+        ({"device_id": "34636000000@s.whatsapp.net", "session_id": "other-device"}, 400),
+        ({"device_id": "other-device"}, 400),
+        ({}, 400),
+    ],
+)
+def test_gowa_webhook_device_identity(db, monkeypatch, identity, expected_status):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "gowa_webhook_secret", "test-webhook-secret")
+    monkeypatch.setattr(settings, "gowa_device_id", "test-device")
+    app.dependency_overrides[get_db] = lambda: db
+    try:
+        with TestClient(app) as client:
+            event = {
+                "event": "message",
+                **identity,
+                "payload": {
+                    "id": "in-identity",
+                    "chat_id": "34600111222@s.whatsapp.net",
+                    "from": "34600111222@s.whatsapp.net",
+                    "body": "Hola",
+                },
+            }
+            raw = json.dumps(event).encode()
+            sig = hmac.new(b"test-webhook-secret", raw, hashlib.sha256).hexdigest()
+            response = client.post(
+                "/webhooks/gowa", content=raw, headers={"X-Hub-Signature-256": f"sha256={sig}"}
+            )
+            assert response.status_code == expected_status
+            stored = db.query(Message).count()
+            assert stored == (1 if expected_status == 200 else 0)
     finally:
         app.dependency_overrides.clear()
 

@@ -52,6 +52,26 @@ def gowa_device_id(settings: Settings | None = None) -> str:
     return configured_id or DEFAULT_GOWA_DEVICE_ID
 
 
+def gowa_event_matches_device(event: dict, settings: Settings | None = None) -> bool:
+    """Whether a signed GOWA webhook event belongs to AvantIA's registered device.
+
+    GOWA puts the WhatsApp JID of the receiving phone in ``device_id`` (for example
+    ``34600111222@s.whatsapp.net``) and the alias registered with ``POST /devices`` in
+    ``session_id``, which it omits when it cannot map the JID back to a session. The
+    signature already proves the event comes from GOWA, and AvantIA registers a single
+    device, so an event is accepted when ``session_id`` names our alias or, without
+    ``session_id``, when ``device_id`` is our alias or the JID of a phone.
+    """
+    alias = gowa_device_id(settings)
+    session_id = event.get("session_id")
+    if session_id not in (None, ""):
+        return str(session_id) == alias
+    device_id = event.get("device_id")
+    if not isinstance(device_id, str):
+        return False
+    return device_id == alias or _phone_number_from_jid(device_id) is not None
+
+
 def gowa_is_configured(settings: Settings | None = None) -> bool:
     current = settings or get_settings()
     username, separator, password = current.gowa_basic_auth.partition(":")
