@@ -654,6 +654,127 @@ def check_view(check: RegistrationCheck) -> dict:
         "checked_at": check.checked_at,
         "alerted_at": check.alerted_at,
         "resolved_at": check.resolved_at,
+        "resolved_by_id": check.resolved_by_id,
+        "note": check.note,
+    }
+
+
+# --- operator actions ----------------------------------------------------------------------
+
+DISMISS_REASONS = {
+    "no_es_consulta": "No es una consulta de alojamiento",
+    "huesped_existente": "Huésped con reserva ya hecha",
+    "proveedor": "Proveedor, agencia o publicidad",
+    "registrada_otro_nombre": "Registrada en Avantio con otro nombre",
+    "otro": "Otro motivo",
+}
+
+
+class RegistrationActionError(ValueError):
+    """A safe-to-display reason why an operator action was refused."""
+
+
+def find_reservation(db: Session, locator: str) -> Reservation | None:
+    """Exact locator, or its number before the hyphen ("34777127" for "34777127-130661")."""
+    wanted = locator.strip().upper()
+    if not wanted:
+        return None
+    reservations = latest_reservations(db)
+    exact = next((item for item in reservations if item.locator.upper() == wanted), None)
+    if exact:
+        return exact
+    matches = [item for item in reservations if item.prefix.upper() == wanted]
+    return matches[0] if len(matches) == 1 else None
+
+
+def link_check(db: Session, check: RegistrationCheck, locator: str, user_id: int) -> None:
+    """The operator says which Avantio reservation registers this consultation."""
+    reservation = find_reservation(db, locator)
+    if reservation is None:
+        raise RegistrationActionError(
+            "No hay ninguna reserva con ese localizador en la última importación de Avantio."
+        )
+    current_time = now()
+    check.status = "registered"
+    check.reason = "vinculada_manual"
+    check.locator = reservation.locator
+    check.resolved_at = current_time
+    check.resolved_by_id = user_id
+    db.add(
+        AuditEvent(
+            actor_user_id=user_id,
+            conversation_id=check.conversation_id,
+            action="registration.linked",
+            detail={"check_id": check.id, "locator": reservation.locator},
+        )
+    )
+    db.commit()
+
+
+def dismiss_check(
+    db: Session, check: RegistrationCheck, reason: str, note: str | None, user_id: int
+) -> None:
+    """The operator says this alert does not apply (not a consultation, existing guest...)."""
+    if reason not in DISMISS_REASONS:
+        raise RegistrationActionError("Motivo no válido.")
+    note = (note or "").strip()[:300] or None
+    if reason == "otro" and not note:
+        raise RegistrationActionError("Explica el motivo en la nota.")
+    check.status = "excluded"
+    check.reason = f"operador:{reason}"
+    check.note = note
+    check.resolved_at = now()
+    check.resolved_by_id = user_id
+    db.add(
+        AuditEvent(
+            actor_user_id=user_id,
+            conversation_id=check.conversation_id,
+            action="registration.dismissed",
+            detail={"check_id": check.id, "reason": reason},
+        )
+    )
+    db.commit()
+
+
+def status_summary(db: Session, current_time: datetime | None = None) -> dict:
+    """What the Integrations card shows: mode, last Avantio sync and the last 7 days."""
+    settings = get_settings()
+    current_time = _aware(current_time or now())
+    week = current_time - timedelta(days=7)
+    rows = db.execute(
+        select(RegistrationCheck.status, RegistrationCheck.reason, func.count())
+        .where(RegistrationCheck.received_at >= week)
+        .group_by(RegistrationCheck.status, RegistrationCheck.reason)
+    ).all()
+    counts: dict[str, int] = {}
+    late = manual = dismissed = 0
+    for status, reason, total in rows:
+        counts[status] = counts.get(status, 0) + total
+        if reason == "registrada_tras_aviso":
+            late += total
+        elif reason == "vinculada_manual":
+            manual += total
+        elif (reason or "").startswith("operador:"):
+            dismissed += total
+    open_alerts = db.scalar(select(func.count()).where(RegistrationCheck.status == "alerted")) or 0
+    state = db.get(ReservationSyncState, "avantio_reservations")
+    return {
+        "mode": alert_mode(),
+        "delay_minutes": settings.registration_alert_delay_minutes,
+        "open_alerts": open_alerts,
+        "last_7_days": {
+            "checked": sum(counts.values()),
+            "registered": counts.get("registered", 0),
+            "alerted": counts.get("alerted", 0),
+            "pending": counts.get("pending", 0),
+            "excluded": counts.get("excluded", 0),
+            "registered_after_alert": late,
+            "linked_by_operator": manual,
+            "dismissed_by_operator": dismissed,
+        },
+        "last_sync_at": state.last_success_at if state else None,
+        "sync_interval_hours": (state.interval_hours if state else None)
+        or settings.avantio_sync_interval_hours,
     }
 
 

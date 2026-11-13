@@ -129,6 +129,9 @@ class RegistrationCheck(Base):
     checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     alerted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Set when an operator links a reservation by hand or marks the alert as not applicable.
+    resolved_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    note: Mapped[str | None] = mapped_column(String(300))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
