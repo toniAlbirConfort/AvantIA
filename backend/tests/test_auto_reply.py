@@ -513,6 +513,17 @@ def test_norwegian_reply(auto_reply_settings):
     assert text.rstrip().endswith("Reservasjonsteamet i Albir Confort")
 
 
+def test_dutch_reply(auto_reply_settings):
+    received = datetime(2026, 11, 11, 23, 30, tzinfo=MADRID).astimezone(UTC)
+    text = auto_reply.compose("nl", name="Minie", received=received)
+    assert text.startswith("Beste Minie,")
+    assert "Morgen vanaf 8.00 uur bekijkt een medewerker" in text
+    assert auto_reply.compose("nl", received=received).startswith("Goedendag,")
+    assert auto_reply.language(
+        Message(sender="x@example.nl", classification_data={"language": "nl"})
+    ) == "nl"
+
+
 def test_message_is_personal_and_not_marked_automatic(auto_reply_settings):
     text = auto_reply.compose("es", name="Ana", received=NIGHT)
     assert text.startswith("Hola Ana,\n\nMuchas gracias por escribirnos")

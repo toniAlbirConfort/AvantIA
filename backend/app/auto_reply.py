@@ -160,6 +160,21 @@ TEMPLATES = {
         "days": ("Mandag", "Tirsdag", "Onsdag", "Torsdag", "Fredag"),
         "zone": "",
     },
+    # Dutch (Netherlands and Flanders, both in Spain's time zone).
+    "nl": {
+        "greeting": ("Beste {name},", "Goedendag,"),
+        "body": (
+            "Hartelijk dank voor uw bericht en voor uw interesse in Albir Confort.\n\n"
+            "Ons kantoor is op dit moment gesloten, maar we hebben uw bericht ontvangen. "
+            "{when} bekijkt een medewerker van ons reserveringsteam uw aanvraag en neemt "
+            "persoonlijk contact met u op."
+        ),
+        "site": "In de tussentijd kunt u onze appartementen bekijken op {site}.",
+        "closing": "Met vriendelijke groet,\nHet reserveringsteam van Albir Confort",
+        "when": ("Vandaag vanaf {hour} uur", "Morgen vanaf {hour} uur", "{day} vanaf {hour} uur"),
+        "days": ("Maandag", "Dinsdag", "Woensdag", "Donderdag", "Vrijdag"),
+        "zone": "",
+    },
 }
 # Words that sit where a first name would in a From header but are not names.
 NOT_NAMES = {
@@ -301,6 +316,8 @@ def _when(lang: str, received: datetime) -> str:
         hour = f"{opens.hour}h{opens.minute:02d}" if opens.minute else f"{opens.hour}h"
     elif lang == "nb":
         hour = f"{opens.hour:02d}.{opens.minute:02d}"
+    elif lang == "nl":
+        hour = f"{opens.hour}.{opens.minute:02d}"
     today, tomorrow, other = template["when"]
     pattern = today if days == 0 else tomorrow if days == 1 else other
     return pattern.format(hour=hour, day=template["days"][opens.weekday()]) + template["zone"]
