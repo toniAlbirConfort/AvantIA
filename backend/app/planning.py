@@ -60,6 +60,12 @@ BLOCKING_STATUSES = frozenset(
     {"confirmed", "pre_reservation", "paid", "unavailable", "owner"}
 )
 CANCELLED_STATUSES = frozenset({"cancelled", "owner_cancelled", "dismissed"})
+# Import warnings only flag what someone has to fix in Avantio. Amounts are
+# checked on sold stays (cancellations, inquiries and abandoned carts keep
+# placeholder amounts) and inactive apartments only matter for guests still to
+# come: past stays in apartments that left the catalogue are normal history.
+AMOUNT_CHECK_STATUSES = frozenset({"confirmed", "pre_reservation", "paid"})
+GUEST_STATUSES = AMOUNT_CHECK_STATUSES | {"inquiry"}
 RESERVATION_FIELDS = (
     "source_row", "row_hash", "locator", "property_id", "status_original", "status",
     "created_on", "start_date", "end_date", "nights", "adults", "children", "infants",
@@ -337,9 +343,12 @@ def _merge_reservations(
     return list(merged.values())
 
 
-def _warnings(rows: list[dict], dataset: str, properties: list) -> list[dict]:
+def _warnings(
+    rows: list[dict], dataset: str, properties: list, today: date | None = None
+) -> list[dict]:
     if dataset != "reservations":
         return []
+    today = today or date.today()
     warnings = []
     lookup = {item.property_id: item for item in properties}
     blocked = defaultdict(list)
@@ -359,7 +368,11 @@ def _warnings(rows: list[dict], dataset: str, properties: list) -> list[dict]:
                     **provenance,
                 }
             )
-        elif not prop.active:
+        elif (
+            not prop.active
+            and row["status"] in GUEST_STATUSES
+            and row["end_date"] > today
+        ):
             warnings.append(
                 {
                     "code": "inactive_property",
@@ -368,11 +381,14 @@ def _warnings(rows: list[dict], dataset: str, properties: list) -> list[dict]:
                     **provenance,
                 }
             )
-        if abs(row["total"] - row["net"] - row["tax"]) > Decimal("0.01"):
+        checks_amounts = row["status"] in AMOUNT_CHECK_STATUSES
+        if checks_amounts and abs(row["total"] - row["net"] - row["tax"]) > Decimal("0.01"):
             warnings.append(
                 {"code": "tax_mismatch", "locator": locator, **provenance}
             )
-        if abs(row["total"] - row["paid"] - row["pending"]) > Decimal("0.01"):
+        if checks_amounts and abs(row["total"] - row["paid"] - row["pending"]) > Decimal(
+            "0.01"
+        ):
             warnings.append(
                 {"code": "balance_mismatch", "locator": locator, **provenance}
             )
