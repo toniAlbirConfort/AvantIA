@@ -469,3 +469,88 @@ def test_simulation_writes_nothing(db):
     result = simulate(db, 30, LATER)
     assert result["counts"] == {"pending": 1}
     assert db.scalar(select(RegistrationCheck)) is None
+
+
+def _login(client, db, role):
+    from app.auth import hasher
+    from app.models import User
+
+    db.add(User(username=role, password_hash=hasher.hash("very-long-test-password"), role=role))
+    db.commit()
+    login = client.post(
+        "/api/login", json={"username": role, "password": "very-long-test-password"}
+    )
+    return {"Authorization": f"Bearer {login.json()['token']}"}
+
+
+def test_operator_links_or_dismisses_alerts_from_the_api(db, shadow, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from app.db import get_db
+    from app.main import app
+
+    monkeypatch.setattr(shadow, "app_secret", "unit-test-secret-with-more-than-32-characters")
+    reservations(
+        db,
+        ("40000020-130650", "OTRA PERSONA", "paid", DAY, *NEXT_YEAR),
+        ("40000021-130651", "PEDRO MARTI", "inquiry", DAY, *NEXT_YEAR),
+    )
+    first = email(db, "Laura Sanz <ls@example.test>", "Apartamento", "Del 1 al 15 de marzo")
+    second = email(db, "Mark <mk@example.test>", "Offer", "Do you have 1-15 March?")
+    run_registration_check(db, LATER)
+    one, two = check_for(db, first), check_for(db, second)
+    assert one.status == two.status == "alerted"
+
+    app.dependency_overrides[get_db] = lambda: db
+    try:
+        with TestClient(app) as client:
+            headers = _login(client, db, "operator")
+            listed = client.get("/api/inbox?registration=alerted", headers=headers).json()
+            assert {item["id"] for item in listed["items"]} == {first.id, second.id}
+            assert {item["registration_status"] for item in listed["items"]} == {"alerted"}
+
+            missing = client.post(
+                f"/api/registration-checks/{one.id}/link", headers=headers, json={"locator": "999"}
+            )
+            assert missing.status_code == 422
+            linked = client.post(
+                f"/api/registration-checks/{one.id}/link",
+                headers=headers,
+                json={"locator": "40000021"},  # the number before the hyphen is enough
+            )
+            assert linked.status_code == 200
+            assert (linked.json()["status"], linked.json()["locator"]) == (
+                "registered",
+                "40000021-130651",
+            )
+
+            without_note = client.post(
+                f"/api/registration-checks/{two.id}/dismiss",
+                headers=headers,
+                json={"reason": "otro"},
+            )
+            assert without_note.status_code == 422
+            dismissed = client.post(
+                f"/api/registration-checks/{two.id}/dismiss",
+                headers=headers,
+                json={"reason": "proveedor", "note": "agencia"},
+            )
+            assert dismissed.json()["reason"] == "operador:proveedor"
+
+            detail = client.get(f"/api/conversations/{first.id}", headers=headers).json()
+            assert detail["registration"]["reason"] == "vinculada_manual"
+            summary = client.get("/api/integrations", headers=headers).json()["registration_alert"]
+            assert summary["mode"] == "shadow" and summary["open_alerts"] == 0
+            assert summary["last_7_days"]["linked_by_operator"] == 1
+            assert summary["last_7_days"]["dismissed_by_operator"] == 1
+            assert (
+                client.get("/api/inbox?registration=alerted", headers=headers).json()["items"] == []
+            )
+    finally:
+        app.dependency_overrides.clear()
+    actions = [event.action for event in db.scalars(select(AuditEvent)).all()]
+    assert "registration.linked" in actions and "registration.dismissed" in actions
+    # A later automatic run never overrides what the operator decided.
+    run_registration_check(db, LATER + timedelta(days=1))
+    db.refresh(two)
+    assert two.status == "excluded"

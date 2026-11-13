@@ -24,6 +24,8 @@ import { GowaIntegrationCard } from './GowaIntegrationCard'
 import { MessageClassificationControl } from './ClassificationControls'
 import { AnnotationProgress, MessageAnnotationControl } from './AnnotationControls'
 import { CustomerContactCard, threadTitle } from './CustomerContact'
+import { RegistrationPanel } from './RegistrationPanel'
+import { RegistrationAlertCard, type RegistrationAlertStatus } from './RegistrationAlertCard'
 import { TariffLab } from './TariffLab'
 import { Analysis } from './Analysis'
 import { Reports } from './Reports'
@@ -220,6 +222,7 @@ export default function App() {
   const [channelFilter, setChannelFilter] = useState('')
   const [priorityFilter, setPriorityFilter] = useState('')
   const [classificationFilter, setClassificationFilter] = useState<ClassificationLabel | 'unclassified' | ''>('')
+  const [registrationFilter, setRegistrationFilter] = useState<'alerted' | 'pending' | 'registered' | ''>('')
   const [grouping, setGrouping] = useState<InboxGrouping>('thread')
   const [datePreset, setDatePreset] = useState<DatePreset>('all')
   const [dateFrom, setDateFrom] = useState('')
@@ -273,10 +276,11 @@ export default function App() {
     if (channelFilter) params.set('channel', channelFilter)
     if (priorityFilter) params.set('priority', priorityFilter)
     if (view === 'inbox' && classificationFilter) params.set('classification', classificationFilter)
+    if (view === 'inbox' && registrationFilter) params.set('registration', registrationFilter)
     if (view === 'bookings') params.set('kind', 'booking')
     if (sender) params.set('sender', sender)
     return `/api/inbox?${params.toString()}`
-  }, [grouping, datePreset, dateFrom, dateTo, searchQuery, statusFilter, channelFilter, priorityFilter, classificationFilter, view])
+  }, [grouping, datePreset, dateFrom, dateTo, searchQuery, statusFilter, channelFilter, priorityFilter, classificationFilter, registrationFilter, view])
 
   const loadInboxPage = useCallback(async (offset: number, append: boolean, limit = INBOX_PAGE_SIZE) => {
     if (!user || (view !== 'inbox' && view !== 'bookings')) return
@@ -364,7 +368,7 @@ export default function App() {
     setSenderLoading(null)
     setExpandedSender(null)
     setSenderThreads({})
-  }, [view, grouping, datePreset, dateFrom, dateTo, searchQuery, statusFilter, channelFilter, priorityFilter, classificationFilter])
+  }, [view, grouping, datePreset, dateFrom, dateTo, searchQuery, statusFilter, channelFilter, priorityFilter, classificationFilter, registrationFilter])
   useEffect(() => { void refresh(); const timer = window.setInterval(() => void refresh(), 15000); return () => clearInterval(timer) }, [refresh])
   useEffect(() => {
     const timer = window.setTimeout(() => setSearchQuery(searchText.trim()), 250)
@@ -418,14 +422,20 @@ export default function App() {
       : item.channel === 'email' && item.customer_name && item.customer_address && <small className="block truncate text-xs text-muted-foreground">{item.customer_address}</small>}
     <span className="block truncate text-sm font-medium text-foreground">{item.subject || `${label(item.channel)} · consulta #${item.id}`}</span>
     <span className={item.channel === 'email' ? 'line-clamp-2 whitespace-normal text-sm leading-5 text-muted-foreground' : 'block truncate text-sm text-muted-foreground'}>{item.preview || 'Sin vista previa del último mensaje'}</span>
-    <span className="flex flex-wrap items-center gap-2"><Badge value={item.kind === 'booking' ? 'booking' : item.channel} /><Badge value={item.status} /><Badge value={item.active_classification || 'unclassified'} />{item.classification_review_count > 0 && <Badge value="review" />}<span className="ml-auto text-xs text-muted-foreground">{item.message_count} {item.message_count === 1 ? 'mensaje' : 'mensajes'}</span>{item.priority === 'high' && <span className="text-xs font-semibold text-warning-ink">ALTA</span>}</span>
+    <span className="flex flex-wrap items-center gap-2"><Badge value={item.kind === 'booking' ? 'booking' : item.channel} /><Badge value={item.status} /><Badge value={item.active_classification || 'unclassified'} />{item.classification_review_count > 0 && <Badge value="review" />}{item.registration_status === 'alerted' && <UiBadge className="bg-error-bg text-error-ink">Sin registrar en Avantio</UiBadge>}<span className="ml-auto text-xs text-muted-foreground">{item.message_count} {item.message_count === 1 ? 'mensaje' : 'mensajes'}</span>{item.priority === 'high' && <span className="text-xs font-semibold text-warning-ink">ALTA</span>}</span>
     {item.active_classification && ['demand', 'guest_service'].includes(item.active_classification) && !item.classification_open && <span className="text-left text-xs text-muted-foreground">Clasificación gestionada</span>}
   </Button>
   const clearInboxFilters = () => {
     setSearchText(''); setSearchQuery('')
     setDatePreset('all'); setDateFrom(''); setDateTo('')
     setStatusFilter(''); setChannelFilter(''); setPriorityFilter('')
-    setClassificationFilter('')
+    setClassificationFilter(''); setRegistrationFilter('')
+  }
+  const userName = (id: number | null) => users.find(item => item.id === id)?.username || (id ? `usuario #${id}` : '—')
+  const openRegistrationAlerts = () => {
+    clearInboxFilters()
+    setRegistrationFilter('alerted')
+    navigate('inbox')
   }
   const section = navigation.find(item => item.id === view)?.label || 'Reservas'
   const visibleNavigation = navigation.filter(item => item.id !== 'users' || user.role === 'admin')
@@ -507,7 +517,8 @@ export default function App() {
                 <label className="grid gap-1 text-xs font-medium">Canal<Select className="h-9 px-2 text-xs" value={channelFilter} onChange={event => setChannelFilter(event.target.value)}><option value="">Todos</option><option value="email">Email</option><option value="whatsapp">WhatsApp</option></Select></label>
                 <label className="grid gap-1 text-xs font-medium">Prioridad<Select className="h-9 px-2 text-xs" value={priorityFilter} onChange={event => setPriorityFilter(event.target.value)}><option value="">Todas</option><option value="high">Alta</option><option value="normal">Normal</option></Select></label>
                 {view === 'inbox' && <label className="grid gap-1 text-xs font-medium">Clasificación<Select className="h-9 px-2 text-xs" value={classificationFilter} onChange={event => setClassificationFilter(event.target.value as ClassificationLabel | 'unclassified' | '')}><option value="">Todas</option><option value="demand">Demanda abierta</option><option value="guest_service">Atención de reserva</option><option value="non_demand">No demanda</option><option value="review">Revisión pendiente</option><option value="unclassified">Sin clasificar</option></Select></label>}
-                <Button className="h-9" variant="ghost" size="sm" onClick={clearInboxFilters} disabled={!searchText && datePreset === 'all' && !dateFrom && !dateTo && !statusFilter && !channelFilter && !priorityFilter && !classificationFilter}><X size={14} /> Limpiar</Button>
+                {view === 'inbox' && <label className="grid gap-1 text-xs font-medium">Avantio<Select className="h-9 px-2 text-xs" value={registrationFilter} onChange={event => setRegistrationFilter(event.target.value as 'alerted' | 'pending' | 'registered' | '')}><option value="">Todas</option><option value="alerted">Sin registrar</option><option value="pending">Pendiente de comprobar</option><option value="registered">Registrada</option></Select></label>}
+                <Button className="h-9" variant="ghost" size="sm" onClick={clearInboxFilters} disabled={!searchText && datePreset === 'all' && !dateFrom && !dateTo && !statusFilter && !channelFilter && !priorityFilter && !classificationFilter && !registrationFilter}><X size={14} /> Limpiar</Button>
               </div>
             </div>
             <div className="max-h-[calc(100vh-24rem)] min-h-72 overflow-y-auto sm:max-h-[calc(100vh-26rem)]">
@@ -529,6 +540,7 @@ export default function App() {
               </div>}
             </div>}
             {detail.contact && detail.contact.source !== 'internal' && <CustomerContactCard contact={detail.contact} />}
+            {detail.registration && <RegistrationPanel check={detail.registration} busy={busy} userName={userName} onAction={(path, body) => void action(() => api(path, { method: 'POST', body: JSON.stringify(body) }))} />}
             <div className={`grid max-h-[70vh] gap-3 overflow-auto bg-background p-4 sm:p-6 ${detail.channel === 'email' ? 'email-feed' : ''}`}>{detail.messages?.map(message => <article key={message.id} className={`w-fit max-w-[90%] overflow-hidden rounded-lg border border-border p-3 text-sm leading-6 ${message.direction === 'outbound' ? 'ml-auto bg-accent' : 'bg-card'} ${detail.channel === 'email' ? 'w-full max-w-4xl p-0' : ''}`}>
               <div className="mb-2 text-[0.65rem] font-semibold uppercase tracking-wide text-muted-foreground">{message.direction === 'inbound' ? 'RECIBIDO' : 'AVANTIA'} · {date(message.created_at)}</div>
               {detail.channel === 'email' ? <EmailMessageContent conversationId={detail.id} message={message} fallbackSender={detail.customer_address} fallbackSubject={detail.subject} onExpand={setExpandedEmail} /> : <p className="m-0 whitespace-pre-wrap break-words">{message.body}</p>}
@@ -569,7 +581,7 @@ export default function App() {
         {view === 'tariff-lab' && <TariffLab role={user.role} refreshVersion={tariffRefreshVersion} />}
         {view === 'reports' && <Reports role={user.role} refreshVersion={reportsRefreshVersion} onOpenTariffLab={() => navigate('tariff-lab')} />}
         {view === 'imports' && <div className="grid items-start gap-4 xl:grid-cols-2"><Card className="p-4 sm:p-6"><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">CATÁLOGO Y RESERVAS</p><h2 className="mb-3 text-xl font-semibold">Importación supervisada</h2><p className="mb-5 text-sm leading-6 text-muted-foreground">Valida la exportación, revisa cambios e incidencias y confirma la nueva instantánea. Los CSV originales no se conservan.</p><SourceImportForm onDone={refresh} admin={user.role === 'admin'} /></Card><Card className="p-4 sm:p-6"><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">INTERVALOS</p><h2 className="mb-3 text-xl font-semibold">Importar disponibilidad</h2><p className="mb-5 text-sm leading-6 text-muted-foreground">El archivo describe intervalos con salida exclusiva y estado disponible u ocupado. Una importación inválida conserva la última válida.</p><ImportForm onDone={refresh} admin={user.role === 'admin'} /></Card><Card className="p-4 sm:p-6 xl:col-span-2"><ImportHistory imports={imports} /></Card></div>}
-        {view === 'integrations' && <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{integrations ? <>{Object.entries(integrations).filter(([name]) => name !== 'mode' && (name !== 'whatsapp' || user.role === 'admin')).map(([name, value]) => name === 'whatsapp' ? <GowaIntegrationCard key={name} /> : name === 'auto_reply' ? <AutoReplyCard key={name} value={value as AutoReplyStatus} isAdmin={user.role === 'admin'} userName={id => users.find(item => item.id === id)?.username || (id ? `usuario #${id}` : '—')} onChanged={() => void refresh()} /> : <IntegrationCard key={name} name={name} value={value} />)}</> : <Empty>Cargando integraciones…</Empty>}</div>}
+        {view === 'integrations' && <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{integrations ? <>{Object.entries(integrations).filter(([name]) => name !== 'mode' && (name !== 'whatsapp' || user.role === 'admin')).map(([name, value]) => name === 'whatsapp' ? <GowaIntegrationCard key={name} /> : name === 'auto_reply' ? <AutoReplyCard key={name} value={value as AutoReplyStatus} isAdmin={user.role === 'admin'} userName={userName} onChanged={() => void refresh()} /> : name === 'registration_alert' ? <RegistrationAlertCard key={name} value={value as RegistrationAlertStatus} onOpenAlerts={openRegistrationAlerts} /> : <IntegrationCard key={name} name={name} value={value} />)}</> : <Empty>Cargando integraciones…</Empty>}</div>}
         {view === 'users' && user.role === 'admin' && <div className="grid items-start gap-4 xl:grid-cols-2"><Card className="p-5 sm:p-6"><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">ACCESO</p><h2 className="mb-4 text-xl font-semibold">Operadores</h2>{users.map(item => <div className="flex items-center justify-between gap-3 border-t border-border py-3" key={item.id}><strong className="text-sm">{item.username}</strong><Badge value={item.role} /></div>)}</Card><UserForm onDone={refresh} /></div>}
         </main>
       </div>

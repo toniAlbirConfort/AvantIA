@@ -92,9 +92,14 @@ from app.planning import (
     properties_view,
     reservations_view,
 )
+from app.registration import DISMISS_REASONS as REGISTRATION_DISMISS_REASONS
+from app.registration import RegistrationActionError
 from app.registration import alert_mode as registration_alert_mode
 from app.registration import check_view as registration_check_view
+from app.registration import dismiss_check as dismiss_registration_check
+from app.registration import link_check as link_registration_check
 from app.registration import simulate as simulate_registration
+from app.registration import status_summary as registration_status_summary
 from app.reports import (
     MAX_REPORT_BYTES,
     ReportError,
@@ -135,6 +140,15 @@ Admin = Annotated[User, Depends(admin_user)]
 
 class AutoReplyPauseIn(BaseModel):
     paused: bool
+
+
+class RegistrationLinkIn(BaseModel):
+    locator: str = Field(min_length=1, max_length=150)
+
+
+class RegistrationDismissIn(BaseModel):
+    reason: str = Field(min_length=1, max_length=40)
+    note: str | None = Field(default=None, max_length=300)
 
 
 class LoginIn(BaseModel):
@@ -352,6 +366,10 @@ def _conversation(conv: Conversation, db: Session, detail: bool = False) -> dict
                 select(Draft).where(Draft.conversation_id == conv.id).order_by(Draft.id)
             ).all()
         ]
+        check = db.scalar(
+            select(RegistrationCheck).where(RegistrationCheck.conversation_id == conv.id)
+        )
+        data["registration"] = registration_check_view(check) if check else None
         data["auto_replies"] = [
             _auto_reply(item)
             for item in db.scalars(
@@ -539,6 +557,13 @@ def _inbox_thread_items(conversations: list[Conversation], db: Session) -> list[
             .group_by(Message.conversation_id)
         ).all()
     )
+    registration_statuses = dict(
+        db.execute(
+            select(RegistrationCheck.conversation_id, RegistrationCheck.status).where(
+                RegistrationCheck.conversation_id.in_(ids)
+            )
+        ).all()
+    )
     result = []
     for item in conversations:
         latest = latest_messages.get(item.id)
@@ -578,6 +603,7 @@ def _inbox_thread_items(conversations: list[Conversation], db: Session) -> list[
                 "message_count": counts.get(item.id, 0),
                 "last_message_at": latest.created_at if latest else None,
                 "preview": preview[:240],
+                "registration_status": registration_statuses.get(item.id),
             }
         )
     return result
@@ -598,6 +624,9 @@ def inbox(
     classification: str | None = Query(
         default=None,
         pattern="^(demand|guest_service|non_demand|review|unclassified)$",
+    ),
+    registration: str | None = Query(
+        default=None, pattern="^(alerted|pending|registered|excluded)$"
     ),
     sender: str | None = Query(default=None, max_length=255),
     offset: int = Query(0, ge=0),
@@ -636,6 +665,14 @@ def inbox(
         query = query.where(Conversation.active_classification == classification)
         if classification in {"demand", "guest_service"}:
             query = query.where(Conversation.classification_open.is_(True))
+    if registration:
+        query = query.where(
+            Conversation.id.in_(
+                select(RegistrationCheck.conversation_id).where(
+                    RegistrationCheck.status == registration
+                )
+            )
+        )
     if from_at:
         query = query.where(Conversation.last_inbound_at >= from_at)
     if to_at:
@@ -1493,6 +1530,7 @@ def integrations(db: Db, user: Operator) -> dict:
         },
         "ollama": {"configured": bool(settings.ollama_url and settings.ollama_model)},
         "auto_reply": _auto_reply_status(db),
+        "registration_alert": registration_status_summary(db),
         "csv": {
             "last_import_at": batch.created_at if batch else None,
             "age_hours": age,
@@ -1535,8 +1573,38 @@ def registration_checks(
         query = query.where(RegistrationCheck.status == status)
     return {
         "mode": registration_alert_mode(),
+        "dismiss_reasons": REGISTRATION_DISMISS_REASONS,
         "items": [registration_check_view(item) for item in db.scalars(query).all()],
     }
+
+
+def _registration_check_or_404(db: Session, id: int) -> RegistrationCheck:
+    check = db.get(RegistrationCheck, id)
+    if check is None:
+        raise HTTPException(404, "Comprobación no encontrada")
+    return check
+
+
+@app.post("/api/registration-checks/{id}/link")
+def link_registration(id: int, body: RegistrationLinkIn, db: Db, user: Operator) -> dict:
+    """Mark the consultation as registered with the Avantio reservation the operator found."""
+    check = _registration_check_or_404(db, id)
+    try:
+        link_registration_check(db, check, body.locator, user.id)
+    except RegistrationActionError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return registration_check_view(check)
+
+
+@app.post("/api/registration-checks/{id}/dismiss")
+def dismiss_registration(id: int, body: RegistrationDismissIn, db: Db, user: Operator) -> dict:
+    """Mark the alert as not applicable, with the reason (feeds the shadow measurement)."""
+    check = _registration_check_or_404(db, id)
+    try:
+        dismiss_registration_check(db, check, body.reason, body.note, user.id)
+    except RegistrationActionError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return registration_check_view(check)
 
 
 @app.get("/api/registration-checks/simulation")
