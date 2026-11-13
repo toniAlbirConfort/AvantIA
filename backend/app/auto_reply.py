@@ -52,8 +52,8 @@ TEMPLATES = {
         "greeting": ("Hola {name},", "Hola,"),
         "body": (
             "Muchas gracias por escribirnos y por su interés en Albir Confort.\n\n"
-            "Ahora mismo nuestra oficina está cerrada, pero hemos recibido su mensaje "
-            "correctamente. {when}, una persona de nuestro equipo de reservas revisará su "
+            "Ahora mismo nuestra oficina está cerrada, pero hemos recibido su mensaje. "
+            "{when}, una persona de nuestro equipo de reservas revisará su "
             "consulta y le responderá personalmente."
         ),
         "site": "Mientras tanto, puede ver nuestros apartamentos en {site}.",
@@ -118,8 +118,8 @@ TEMPLATES = {
         "greeting": ("Buongiorno {name},", "Buongiorno,"),
         "body": (
             "grazie mille per averci scritto e per il suo interesse per Albir Confort.\n\n"
-            "Il nostro ufficio è chiuso in questo momento, ma abbiamo ricevuto correttamente il "
-            "suo messaggio. {when} una persona del nostro team prenotazioni esaminerà la sua "
+            "Il nostro ufficio è chiuso in questo momento, ma abbiamo ricevuto il suo "
+            "messaggio. {when} una persona del nostro team prenotazioni esaminerà la sua "
             "richiesta e le risponderà personalmente."
         ),
         "site": "Nel frattempo, può scoprire i nostri appartamenti su {site}.",
