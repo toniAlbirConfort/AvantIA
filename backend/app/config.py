@@ -51,7 +51,7 @@ class Settings(BaseSettings):
     internal_sender_domains: str = "albirconfort.es,albirconfort.com,albirconfort-holidays.com"
     internal_phone_numbers: str = ""
     # Acuse automático a consultas nuevas fuera de horario: off, shadow (solo registra) o send.
-    auto_reply_mode: str = "shadow"
+    auto_reply_mode: str = "off"
     auto_reply_timezone: str = "Europe/Madrid"
     auto_reply_night_start: str = "20:00"
     auto_reply_night_end: str = "08:00"

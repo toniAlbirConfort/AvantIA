@@ -285,3 +285,31 @@ def _frozen(moment: datetime):
             return moment if tz else moment.replace(tzinfo=None)
 
     return Frozen
+
+
+def test_simulation_replays_history_without_writing(db, auto_reply_settings):
+    auto_reply_settings.auto_reply_mode = "off"  # The simulation ignores the switch.
+    conv, first = add_email(db)  # Wednesday night: answered.
+    # The customer's later reply in the same thread does not disqualify the first email.
+    add_email(
+        db, conversation=conv, subject="RE: Disponibilidad", references=first.provider_id,
+        received=NIGHT + timedelta(hours=5),
+    )
+    add_email(db, subject="Otra pregunta", received=NIGHT + timedelta(hours=1))  # Same day.
+    add_email(db, sender="luc@example.test", received=DAY, language="fr")  # Office hours.
+    add_email(db, sender="luc@example.test", received=NIGHT + timedelta(days=3), language="fr")
+
+    result = auto_reply.simulate(
+        db, start=NIGHT - timedelta(days=1), end=NIGHT + timedelta(days=5)
+    )
+
+    assert result["total"] == 5
+    assert result["replies"] == 2
+    assert [item["message_id"] for item in result["items"]][0] == first.id
+    assert result["items"][1]["recipient"] == "luc@example.test"
+    assert result["items"][1]["language"] == "fr"
+    assert result["reasons"]["recently_answered"] == 1
+    assert result["reasons"]["office_hours"] == 1
+    assert result["reasons"]["thread_headers"] == 1
+    assert db.query(AutoReply).count() == 0
+    assert db.query(AuditEvent).count() == 0

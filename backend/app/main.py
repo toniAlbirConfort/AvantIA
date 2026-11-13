@@ -6,7 +6,7 @@ import json
 import os
 import re
 import uuid
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from email.utils import parseaddr
 from pathlib import Path
 from typing import Annotated, Literal
@@ -31,6 +31,7 @@ from app.classification import (
     resolve_conversation_classification,
 )
 from app.auto_reply import mode as auto_reply_mode
+from app.auto_reply import simulate as simulate_auto_replies
 from app.config import READ_ONLY_MODE, get_settings
 from app.contacts import conversation_contact
 from app.customers import DATASET as CUSTOMER_DATASET
@@ -1512,6 +1513,15 @@ def integrations(db: Db, user: Operator) -> dict:
             "configured": gowa_is_configured(settings),
         }
     return result
+
+
+@app.get("/api/auto-replies/simulation")
+def auto_reply_simulation(
+    db: Db, admin: Admin, days: int = Query(90, ge=1, le=730)
+) -> dict:
+    """Replay the stored inbox with the out-of-hours rules. Read-only, sends nothing."""
+    end = datetime.now(UTC)
+    return simulate_auto_replies(db, start=end - timedelta(days=days), end=end)
 
 
 @app.get("/api/auto-replies")

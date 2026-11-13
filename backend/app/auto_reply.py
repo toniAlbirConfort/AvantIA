@@ -148,11 +148,22 @@ def _own_addresses() -> set[str]:
 
 
 def evaluate(
-    db: Session, message: Message, conv: Conversation, *, at: datetime | None = None
+    db: Session,
+    message: Message,
+    conv: Conversation,
+    *,
+    at: datetime | None = None,
+    simulation: dict[str, datetime] | None = None,
 ) -> Decision:
+    """Whether this message gets an acknowledgement.
+
+    With ``simulation`` (address -> last simulated reply) the history of the inbox is replayed:
+    the mode switch and the processing-delay checks are ignored, and the 24-hour limit uses the
+    simulated replies instead of the auto_replies table.
+    """
     settings = get_settings()
     current = aware(at or datetime.now(UTC))
-    if mode() == "off":
+    if simulation is None and mode() == "off":
         return Decision(False, "disabled", audit=False)
     if message.direction != "inbound" or message.channel != "email" or conv.channel != "email":
         return Decision(False, "not_inbound_email", audit=False)
@@ -167,7 +178,7 @@ def evaluate(
         return Decision(False, "low_confidence")
 
     max_age = timedelta(minutes=settings.auto_reply_max_age_minutes)
-    if current - received > max_age:
+    if simulation is None and current - received > max_age:
         return Decision(False, "processed_too_late")
     if message.email_date and received - aware(message.email_date) > max_age:
         return Decision(False, "old_email")
@@ -182,7 +193,7 @@ def evaluate(
         return Decision(False, "quoted_history")
     others = db.scalar(
         select(func.count(Message.id)).where(
-            Message.conversation_id == conv.id, Message.id != message.id
+            Message.conversation_id == conv.id, Message.id < message.id
         )
     )
     if others:
@@ -197,13 +208,17 @@ def evaluate(
         return Decision(False, "internal_sender")
     if address in _own_addresses():
         return Decision(False, "own_address")
-    recent = db.scalar(
-        select(AutoReply.id).where(
-            AutoReply.recipient == address,
-            AutoReply.mode.in_(("shadow", "sending", "sent")),
-            AutoReply.created_at >= current - RATE_WINDOW,
+    if simulation is not None:
+        last = simulation.get(address)
+        recent = last if last is not None and received - last < RATE_WINDOW else None
+    else:
+        recent = db.scalar(
+            select(AutoReply.id).where(
+                AutoReply.recipient == address,
+                AutoReply.mode.in_(("shadow", "sending", "sent")),
+                AutoReply.created_at >= current - RATE_WINDOW,
+            )
         )
-    )
     if recent is not None:
         return Decision(False, "recently_answered")
     return Decision(True, "eligible")
@@ -313,3 +328,84 @@ async def _send(db: Session, reply_id: int) -> None:
         )
     )
     db.commit()
+
+
+def simulate(db: Session, *, start: datetime, end: datetime) -> dict:
+    """Replay the stored inbox between start and end and report what would have been answered.
+
+    Read-only: nothing is written, nothing is sent. The checks are the live ones, with two
+    differences: the processing delay is ignored (the history was processed long ago) and an
+    email is judged by the messages that existed when it arrived, not by later replies.
+    """
+    messages = db.scalars(
+        select(Message)
+        .where(
+            Message.channel == "email",
+            Message.direction == "inbound",
+            Message.created_at >= start,
+            Message.created_at < end,
+        )
+        .order_by(Message.created_at, Message.id)
+    ).all()
+    answered: dict[str, datetime] = {}
+    reasons: dict[str, int] = {}
+    replies = []
+    out_of_hours = 0
+    for message in messages:
+        conv = db.get(Conversation, message.conversation_id)
+        if conv is None:
+            continue
+        received = aware(message.created_at)
+        if is_out_of_hours(received):
+            out_of_hours += 1
+        decision = evaluate(db, message, conv, at=received, simulation=answered)
+        reasons[decision.reason] = reasons.get(decision.reason, 0) + 1
+        if not decision.eligible:
+            continue
+        answered[recipient(message)] = received
+        replies.append(
+            {
+                "message_id": message.id,
+                "conversation_id": conv.id,
+                "received_at": received,
+                "recipient": recipient(message),
+                "subject": message.subject,
+                "language": language(message),
+                "excerpt": (message.body or "")[:300],
+            }
+        )
+    return {
+        "start": start,
+        "end": end,
+        "total": len(messages),
+        "out_of_hours": out_of_hours,
+        "replies": len(replies),
+        "reasons": dict(sorted(reasons.items(), key=lambda item: -item[1])),
+        "items": replies,
+    }
+
+
+def main() -> None:
+    """python -m app.auto_reply [días]: simulate the last N days (90 by default)."""
+    import sys
+
+    from app.db import SessionLocal
+
+    days = int(sys.argv[1]) if len(sys.argv) > 1 else 90
+    end = datetime.now(UTC)
+    with SessionLocal() as db:
+        result = simulate(db, start=end - timedelta(days=days), end=end)
+    tz = ZoneInfo(get_settings().auto_reply_timezone)
+    print(
+        f"Últimos {days} días: {result['total']} emails entrantes, "
+        f"{result['out_of_hours']} fuera de horario, {result['replies']} autorespuestas."
+    )
+    for reason, count in result["reasons"].items():
+        print(f"  {reason}: {count}")
+    for item in result["items"]:
+        when = item["received_at"].astimezone(tz).strftime("%a %d/%m %H:%M")
+        print(f"{when} · {item['language']} · {item['recipient']} · {item['subject'] or ''}")
+
+
+if __name__ == "__main__":
+    main()
