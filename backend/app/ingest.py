@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -42,6 +43,7 @@ def ingest(
     references: str | None = None,
     source_url: str | None = None,
     booking: bool = False,
+    email_date: datetime | None = None,
 ) -> tuple[Message, bool]:
     duplicate = db.scalar(
         select(Message).where(Message.channel == channel, Message.provider_id == provider_id)
@@ -89,6 +91,7 @@ def ingest(
         recipient=recipient,
         references=references,
         source_url=source_url,
+        email_date=email_date,
     )
     db.add(message)
     db.flush()

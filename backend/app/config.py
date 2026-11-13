@@ -50,6 +50,13 @@ class Settings(BaseSettings):
     # Remitentes de la propia empresa: si escriben con datos de un cliente, son leads reenviados.
     internal_sender_domains: str = "albirconfort.es,albirconfort.com,albirconfort-holidays.com"
     internal_phone_numbers: str = ""
+    # Acuse automático a consultas nuevas fuera de horario: off, shadow (solo registra) o send.
+    auto_reply_mode: str = "off"
+    auto_reply_timezone: str = "Europe/Madrid"
+    auto_reply_night_start: str = "20:00"
+    auto_reply_night_end: str = "08:00"
+    auto_reply_max_age_minutes: int = Field(default=60, ge=1, le=1440)
+    auto_reply_signature: str = ""
     admin_username: str = ""
     admin_password: str = ""
     avantio_export_url: str = ""

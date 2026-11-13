@@ -195,6 +195,15 @@ async def analyze_message(db: Session, message_id: int) -> None:
         message.classification_model = settings.ollama_model or message.classification_model
         db.commit()
 
+    # Out-of-hours acknowledgement runs as its own job so an SMTP problem never blocks drafts.
+    enqueue(
+        db,
+        key=f"auto_reply:{message.id}",
+        kind="auto_reply",
+        payload={"message_id": message.id},
+    )
+    db.commit()
+
     existing_draft = db.scalar(
         select(Draft).where(Draft.source_message_id == message.id)
     )
