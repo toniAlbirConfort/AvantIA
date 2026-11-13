@@ -30,3 +30,6 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 include = ["app*"]
 exclude = ["alembic*", "tests*"]
+
+[tool.setuptools.package-data]
+app = ["assets/*.png"]

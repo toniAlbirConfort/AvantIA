@@ -103,7 +103,7 @@ async def send_approved(db: Session, draft_id: int) -> None:
             address = parseaddr(original.sender or "")[1]
             if not address:
                 raise RuntimeError("Destinatario no válido")
-            domain = get_settings().smtp_from.rsplit("@", 1)[-1]
+            domain = parseaddr(get_settings().smtp_from)[1].rsplit("@", 1)[-1]
             provider_id = f"<avantia-{draft.id}@{domain}>"
             subject = (draft.subject or "").strip() or reply_subject(original.subject)
             body_html = draft.html_body or text_to_html(draft.text)

@@ -45,6 +45,8 @@ class Settings(BaseSettings):
     smtp_user: str = ""
     smtp_password: str = ""
     smtp_from: str = ""
+    # Name the customer sees next to SMTP_FROM, e.g. "Albir Confort Holidays".
+    smtp_from_name: str = ""
     smtp_starttls: bool = True
     booking_sender_domains: str = "booking.com"
     # Remitentes de la propia empresa: si escriben con datos de un cliente, son leads reenviados.
@@ -57,6 +59,11 @@ class Settings(BaseSettings):
     auto_reply_night_end: str = "08:00"
     auto_reply_max_age_minutes: int = Field(default=60, ge=1, le=1440)
     auto_reply_signature: str = ""
+    # Company banner (app/assets/auto_reply_banner.png) below the text, linking to this URL.
+    auto_reply_banner: bool = True
+    auto_reply_banner_url: str = "https://albirconfort-holidays.com/"
+    # IMAP folder that keeps a copy of each acknowledgement sent (e.g. "Elementos enviados").
+    auto_reply_sent_folder: str = ""
     admin_username: str = ""
     admin_password: str = ""
     avantio_export_url: str = ""

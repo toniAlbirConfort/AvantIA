@@ -14,9 +14,13 @@ AUTO_REPLY_MODE decides what happens to an eligible message:
 
 from __future__ import annotations
 
+import base64
+import html
 from dataclasses import dataclass
 from datetime import UTC, datetime, time, timedelta
 from email.utils import parseaddr
+from functools import lru_cache
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
@@ -133,6 +137,36 @@ def compose(lang: str) -> str:
     text = TEMPLATES.get(lang, TEMPLATES["es"])
     signature = get_settings().auto_reply_signature.strip()
     return f"{text}\n{signature}" if signature else text
+
+
+BANNER = Path(__file__).parent / "assets" / "auto_reply_banner.png"
+
+
+@lru_cache
+def _banner_data_uri() -> str | None:
+    try:
+        return "data:image/png;base64," + base64.b64encode(BANNER.read_bytes()).decode()
+    except OSError:
+        return None
+
+
+def compose_html(text: str) -> str:
+    """The acknowledgement as the team's Outlook replies look: text, then the company banner."""
+    from app.html_sanitize import text_to_html
+
+    settings = get_settings()
+    body = text_to_html(text)
+    banner = _banner_data_uri() if settings.auto_reply_banner else None
+    if banner:
+        image = (
+            f'<img src="{banner}" width="589" height="94" alt="Albir Confort Holidays" '
+            'style="border:0;display:block;max-width:100%;height:auto">'
+        )
+        url = settings.auto_reply_banner_url.strip()
+        if url:
+            image = f'<a href="{html.escape(url)}">{image}</a>'
+        body += f"<p>{image}</p>"
+    return body
 
 
 def recipient(message: Message) -> str:
@@ -286,10 +320,12 @@ async def _send(db: Session, reply_id: int) -> None:
     domain = (parseaddr(get_settings().smtp_from)[1] or "avantia.local").rsplit("@", 1)[-1]
     provider_id = f"<avantia-auto-{reply.id}@{domain}>"
     try:
-        smtp_send_auto_reply(
+        html_body = compose_html(reply.text)
+        sent = smtp_send_auto_reply(
             to=reply.recipient,
             subject=reply.subject,
             text=reply.text,
+            html_body=html_body,
             message_id=provider_id,
             in_reply_to=message.provider_id,
             references=message.provider_id,
@@ -317,6 +353,7 @@ async def _send(db: Session, reply_id: int) -> None:
             provider_id=provider_id,
             direction="outbound",
             body=reply.text,
+            html_body=html_body,
             subject=reply.subject,
             sender=get_settings().smtp_from,
             recipient=reply.recipient,
@@ -332,6 +369,27 @@ async def _send(db: Session, reply_id: int) -> None:
         )
     )
     db.commit()
+    _keep_sent_copy(db, reply, sent)
+
+
+def _keep_sent_copy(db: Session, reply: AutoReply, sent) -> None:
+    """Copy to the mailbox's sent folder, so the team sees it in Outlook. Best effort."""
+    from app.mail import append_sent_copy
+
+    folder = get_settings().auto_reply_sent_folder.strip()
+    if not folder:
+        return
+    try:
+        append_sent_copy(sent, folder)
+    except Exception as exc:
+        db.add(
+            AuditEvent(
+                conversation_id=reply.conversation_id,
+                action="auto_reply.copy_failed",
+                detail={"message_id": reply.message_id, "error_type": type(exc).__name__},
+            )
+        )
+        db.commit()
 
 
 def simulate(

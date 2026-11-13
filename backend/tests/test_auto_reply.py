@@ -35,6 +35,11 @@ def auto_reply_settings(monkeypatch):
     monkeypatch.setattr(settings, "smtp_from", "reservas@albirconfort.es")
     monkeypatch.setattr(settings, "smtp_host", "smtp.example.test")
     monkeypatch.setattr(settings, "imap_user", "reservas@albirconfort.es")
+    monkeypatch.setattr(settings, "imap_host", "imap.example.test")
+    monkeypatch.setattr(settings, "smtp_from_name", "Albir Confort Holidays")
+    monkeypatch.setattr(settings, "auto_reply_banner", True)
+    monkeypatch.setattr(settings, "auto_reply_banner_url", "https://albirconfort-holidays.com/")
+    monkeypatch.setattr(settings, "auto_reply_sent_folder", "")
     return settings
 
 
@@ -217,7 +222,15 @@ def test_send_mode_delivers_marked_auto_reply(db, monkeypatch, auto_reply_settin
     assert email["Auto-Submitted"] == "auto-replied"
     assert email["In-Reply-To"] == message.provider_id
     assert email["Subject"] == "Re: Disponibilidad en diciembre"
-    assert email.get_content().rstrip().endswith("Albir Confort")
+    assert email["From"] == "Albir Confort Holidays <reservas@albirconfort.es>"
+    assert email["Date"]
+    assert email.get_body(("plain",)).get_content().rstrip().endswith("Albir Confort")
+    html_part = email.get_body(("html",))
+    html_text = html_part.get_content()
+    assert '<a href="https://albirconfort-holidays.com/"><img src="cid:' in html_text
+    images = [part for part in email.walk() if part.get_content_type() == "image/png"]
+    assert len(images) == 1
+    assert images[0].get_payload(decode=True) == auto_reply.BANNER.read_bytes()
     reply = db.scalar(select(AutoReply))
     assert reply.mode == "sent"
     outbound = db.scalar(select(Message).where(Message.direction == "outbound"))
@@ -330,3 +343,88 @@ def test_simulation_can_ignore_office_hours(db):
     window = {"start": DAY - timedelta(hours=1), "end": DAY + timedelta(hours=1)}
     assert auto_reply.simulate(db, **window)["replies"] == 0
     assert auto_reply.simulate(db, **window, any_hour=True)["replies"] == 1
+
+
+def test_sent_copy_goes_to_configured_folder(db, monkeypatch, auto_reply_settings):
+    auto_reply_settings.auto_reply_mode = "send"
+    auto_reply_settings.auto_reply_sent_folder = "Elementos enviados"
+    monkeypatch.setattr("app.auto_reply.datetime", _frozen(NIGHT + timedelta(minutes=2)))
+    delivered, copies = [], []
+    monkeypatch.setattr("app.integrations._deliver", delivered.append)
+    monkeypatch.setattr("app.mail.append_sent_copy", lambda m, f: copies.append((m, f)))
+    _, message = add_email(db)
+    asyncio.run(auto_reply.run(db, message.id))
+    assert copies == [(delivered[0], "Elementos enviados")]
+
+
+def test_failed_copy_does_not_undo_the_reply(db, monkeypatch, auto_reply_settings):
+    auto_reply_settings.auto_reply_mode = "send"
+    auto_reply_settings.auto_reply_sent_folder = "Elementos enviados"
+    monkeypatch.setattr("app.auto_reply.datetime", _frozen(NIGHT + timedelta(minutes=2)))
+    monkeypatch.setattr("app.integrations._deliver", lambda m: None)
+
+    def broken(message, folder):
+        raise OSError("imap down")
+
+    monkeypatch.setattr("app.mail.append_sent_copy", broken)
+    _, message = add_email(db)
+    asyncio.run(auto_reply.run(db, message.id))
+    assert db.scalar(select(AutoReply)).mode == "sent"
+    assert db.scalar(select(AuditEvent).where(AuditEvent.action == "auto_reply.copy_failed"))
+
+
+def test_no_copy_without_folder(db, monkeypatch, auto_reply_settings):
+    auto_reply_settings.auto_reply_mode = "send"
+    monkeypatch.setattr("app.auto_reply.datetime", _frozen(NIGHT + timedelta(minutes=2)))
+    monkeypatch.setattr("app.integrations._deliver", lambda m: None)
+    monkeypatch.setattr(
+        "app.mail.append_sent_copy",
+        lambda m, f: (_ for _ in ()).throw(AssertionError("no folder configured")),
+    )
+    _, message = add_email(db)
+    asyncio.run(auto_reply.run(db, message.id))
+    assert db.scalar(select(AutoReply)).mode == "sent"
+
+
+def test_append_sent_copy_uses_imap_append(monkeypatch, auto_reply_settings):
+    from app.mail import append_sent_copy
+
+    calls = []
+
+    class FakeImap:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def login(self, user, password):
+            calls.append("login")
+
+        def append(self, mailbox, flags, date_time, raw):
+            calls.append((mailbox, flags, raw))
+            return "OK", [b"APPEND completed"]
+
+        def logout(self):
+            calls.append("logout")
+
+    monkeypatch.setattr("app.mail.imaplib.IMAP4_SSL", FakeImap)
+    message = EmailMessage()
+    message["Subject"] = "Copia"
+    message.set_content("hola")
+    append_sent_copy(message, "Elementos enviados")
+    assert calls[1] == ('"Elementos enviados"', r"(\Seen)", message.as_bytes())
+    assert calls[-1] == "logout"
+
+
+def test_from_header_variants(auto_reply_settings):
+    from app.integrations import from_header
+
+    assert from_header() == "Albir Confort Holidays <reservas@albirconfort.es>"
+    auto_reply_settings.smtp_from_name = ""
+    assert from_header() == "reservas@albirconfort.es"
+    auto_reply_settings.smtp_from = "Albir <reservas@albirconfort.es>"
+    assert from_header() == "Albir <reservas@albirconfort.es>"
+
+
+def test_banner_can_be_disabled(auto_reply_settings):
+    assert "<img" in auto_reply.compose_html("Hola")
+    auto_reply_settings.auto_reply_banner = False
+    assert "<img" not in auto_reply.compose_html("Hola")
