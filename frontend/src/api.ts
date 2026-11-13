@@ -6,7 +6,7 @@ export function setToken(value: string | null) {
   else sessionStorage.removeItem('avantia-token')
 }
 
-export async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
+async function request(path: string, options: RequestInit = {}): Promise<Response> {
   const headers = new Headers(options.headers)
   if (token()) headers.set('Authorization', `Bearer ${token()}`)
   if (options.body && !(options.body instanceof FormData)) headers.set('Content-Type', 'application/json')
@@ -17,5 +17,22 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
     if (response.status === 401 && path !== '/api/login') setToken(null)
     throw new Error(detail)
   }
-  return response.json() as Promise<T>
+  return response
+}
+
+export async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
+  return (await request(path, options)).json() as Promise<T>
+}
+
+export async function apiText(path: string): Promise<string> {
+  return (await request(path)).text()
+}
+
+export async function apiDownload(path: string, filename: string) {
+  const objectUrl = URL.createObjectURL(await (await request(path)).blob())
+  const link = document.createElement('a')
+  link.href = objectUrl
+  link.download = filename
+  link.click()
+  URL.revokeObjectURL(objectUrl)
 }

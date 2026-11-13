@@ -114,6 +114,14 @@ API: `GET /api/tariff-lab/readiness`, `GET|PUT /api/tariff-lab/property-groups`,
 
 El repositorio define el contrato `MarketDataProvider` en `backend/app/tariff_lab.py`, pero aún no incorpora una API concreta ni credenciales. La comprobación de preparación informa que falta esa fuente y el endpoint de creación responde `503` hasta instalar un adaptador autorizado. No se automatiza la extracción mediante bots de OTA.
 
+## Informes
+
+La vista **Informes** reúne, del más reciente al más antiguo, los informes HTML preparados con Claude y los estudios completos o parciales del Laboratorio de tarifas. Los informes HTML se muestran en un visor aislado, sin scripts ni acceso a la sesión; los estudios enlazan a su PDF y al laboratorio. Los administradores añaden informes subiendo el archivo HTML (máximo 5 MB, UTF-8) y pueden borrarlos; los operadores los consultan.
+
+La migración `0013` crea la tabla `reports` e incorpora el estudio de precios de la competencia en Albir del 13/11/2026, guardado en `backend/alembic/seeds/`.
+
+API: `GET|POST /api/reports`, `GET /api/reports/{id}/content` y `DELETE /api/reports/{id}`.
+
 ## Operación diaria
 
 - El webhook firmado de GOWA guarda consultas 1 a 1, ignora grupos y mensajes propios y deduplica por ID del proveedor.
