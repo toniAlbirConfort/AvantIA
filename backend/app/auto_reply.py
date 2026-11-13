@@ -23,6 +23,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.availability import aware
+from app.classification import effective_classification
 from app.config import get_settings
 from app.contacts import (
     FORWARD_HEADER_RE,
@@ -154,12 +155,14 @@ def evaluate(
     *,
     at: datetime | None = None,
     simulation: dict[str, datetime] | None = None,
+    any_hour: bool = False,
 ) -> Decision:
     """Whether this message gets an acknowledgement.
 
     With ``simulation`` (address -> last simulated reply) the history of the inbox is replayed:
     the mode switch and the processing-delay checks are ignored, and the 24-hour limit uses the
-    simulated replies instead of the auto_replies table.
+    simulated replies instead of the auto_replies table. ``any_hour`` skips the office-hours
+    check, to judge the content filters on history whose arrival time is not reliable.
     """
     settings = get_settings()
     current = aware(at or datetime.now(UTC))
@@ -169,12 +172,13 @@ def evaluate(
         return Decision(False, "not_inbound_email", audit=False)
     if conv.kind == "booking":
         return Decision(False, "booking", audit=False)
-    if message.classification_override is not None or message.classification_label != "demand":
+    # An operator's correction wins over the model; a confirmed demand needs no confidence.
+    if effective_classification(message) != "demand":
         return Decision(False, "not_demand", audit=False)
     received = aware(message.created_at or current)
-    if not is_out_of_hours(received):
+    if not any_hour and not is_out_of_hours(received):
         return Decision(False, "office_hours", audit=False)
-    if message.classification_confidence != "high":
+    if message.classification_override is None and message.classification_confidence != "high":
         return Decision(False, "low_confidence")
 
     max_age = timedelta(minutes=settings.auto_reply_max_age_minutes)
@@ -330,7 +334,9 @@ async def _send(db: Session, reply_id: int) -> None:
     db.commit()
 
 
-def simulate(db: Session, *, start: datetime, end: datetime) -> dict:
+def simulate(
+    db: Session, *, start: datetime, end: datetime, any_hour: bool = False
+) -> dict:
     """Replay the stored inbox between start and end and report what would have been answered.
 
     Read-only: nothing is written, nothing is sent. The checks are the live ones, with two
@@ -358,7 +364,9 @@ def simulate(db: Session, *, start: datetime, end: datetime) -> dict:
         received = aware(message.created_at)
         if is_out_of_hours(received):
             out_of_hours += 1
-        decision = evaluate(db, message, conv, at=received, simulation=answered)
+        decision = evaluate(
+            db, message, conv, at=received, simulation=answered, any_hour=any_hour
+        )
         reasons[decision.reason] = reasons.get(decision.reason, 0) + 1
         if not decision.eligible:
             continue
@@ -376,6 +384,7 @@ def simulate(db: Session, *, start: datetime, end: datetime) -> dict:
         )
     return {
         "start": start,
+        "any_hour": any_hour,
         "end": end,
         "total": len(messages),
         "out_of_hours": out_of_hours,
@@ -386,15 +395,17 @@ def simulate(db: Session, *, start: datetime, end: datetime) -> dict:
 
 
 def main() -> None:
-    """python -m app.auto_reply [días]: simulate the last N days (90 by default)."""
+    """python -m app.auto_reply [días] [--any-hour]: simulate the last N days (90 by default)."""
     import sys
 
     from app.db import SessionLocal
 
-    days = int(sys.argv[1]) if len(sys.argv) > 1 else 90
+    args = [item for item in sys.argv[1:] if not item.startswith("--")]
+    any_hour = "--any-hour" in sys.argv
+    days = int(args[0]) if args else 90
     end = datetime.now(UTC)
     with SessionLocal() as db:
-        result = simulate(db, start=end - timedelta(days=days), end=end)
+        result = simulate(db, start=end - timedelta(days=days), end=end, any_hour=any_hour)
     tz = ZoneInfo(get_settings().auto_reply_timezone)
     print(
         f"Últimos {days} días: {result['total']} emails entrantes, "

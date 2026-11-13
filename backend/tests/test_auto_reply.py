@@ -313,3 +313,20 @@ def test_simulation_replays_history_without_writing(db, auto_reply_settings):
     assert result["reasons"]["thread_headers"] == 1
     assert db.query(AutoReply).count() == 0
     assert db.query(AuditEvent).count() == 0
+
+
+def test_operator_corrections_win_over_the_model(db):
+    _, confirmed = add_email(db, confidence="low")
+    confirmed.classification_override = "demand"
+    _, corrected = add_email(db, sender="otra@example.test")
+    corrected.classification_override = "non_demand"
+    db.commit()
+    assert decide(db, confirmed).eligible
+    assert decide(db, corrected).reason == "not_demand"
+
+
+def test_simulation_can_ignore_office_hours(db):
+    add_email(db, received=DAY)
+    window = {"start": DAY - timedelta(hours=1), "end": DAY + timedelta(hours=1)}
+    assert auto_reply.simulate(db, **window)["replies"] == 0
+    assert auto_reply.simulate(db, **window, any_hour=True)["replies"] == 1

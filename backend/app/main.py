@@ -1517,11 +1517,13 @@ def integrations(db: Db, user: Operator) -> dict:
 
 @app.get("/api/auto-replies/simulation")
 def auto_reply_simulation(
-    db: Db, admin: Admin, days: int = Query(90, ge=1, le=730)
+    db: Db, admin: Admin, days: int = Query(90, ge=1, le=730), any_hour: bool = False
 ) -> dict:
     """Replay the stored inbox with the out-of-hours rules. Read-only, sends nothing."""
     end = datetime.now(UTC)
-    return simulate_auto_replies(db, start=end - timedelta(days=days), end=end)
+    return simulate_auto_replies(
+        db, start=end - timedelta(days=days), end=end, any_hour=any_hour
+    )
 
 
 @app.get("/api/auto-replies")
