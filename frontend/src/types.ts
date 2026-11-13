@@ -65,7 +65,7 @@ export type InboxSenderGroup = {
 export type InboxItem = InboxThread | InboxSenderGroup
 export type InboxResponse = { items: InboxItem[]; total: number; offset: number; limit: number }
 export type Summary = { pending: number; delivery_unknown: number; bookings: number; last_import_at: string | null; last_import_rows: number }
-export type ImportIssue = { code: string; locator?: string; property_id?: string; source_row?: number; source_batch_id?: number | null; locators?: string[] }
+export type ImportIssue = { code: string; customer_id?: string; field?: string; locator?: string; property_id?: string; source_row?: number; source_batch_id?: number | null; locators?: string[] }
 export type ImportChange = { key: string; kind: string; fields?: string[] }
 export type ImportBatch = { id: number; dataset: string; filename: string; source: string; status: string; rows: number; error: string | null; created_at: string; actor_user_id: number | null; parser_version: string | null; warning_count: number; change_count: number }
 export type ImportDetail = ImportBatch & { checksum: string; warnings: ImportIssue[]; changes: ImportChange[] }
@@ -112,3 +112,18 @@ export type ReservationAnalysis =
     }
     insights: AnalysisInsight[]
   }
+export type CustomerSummary = { avantio_id: string; display_name: string; email: string | null; phone: string | null; country: string | null; document_number: string | null; customer_class: string | null }
+export type CustomersResponse = { items: CustomerSummary[]; total: number; offset: number; limit: number; has_data: boolean; last_import_at: string | null }
+export type CustomerDetail = CustomerSummary & {
+  first_name: string | null; last_name: string | null; second_last_name: string | null
+  birth_date: string | null; sex: string | null; nationality: string | null
+  street: string | null; street_number: string | null; door: string | null; postal_code: string | null
+  city: string | null; province: string | null; region: string | null
+  email_alt: string | null; phone_alt1: string | null; phone_alt2: string | null
+  language: string | null; customer_type: string | null; bank_account_masked: string | null
+  tax_code: string | null; accounting_account: string | null; notes: string | null
+  registered_on: string | null; email_opt_in: boolean | null; stay_period: string | null
+  source_row: number; created_at: string; updated_at: string
+  source: { batch_id: number; filename: string | null; imported_at: string | null }
+  reservations: ReservationRecord[]
+}

@@ -51,7 +51,7 @@ function occupancy(item: ReservationRecord) {
   return parts.length ? parts.join(' · ') : 'Ocupación no indicada'
 }
 
-function Status({ value }: { value: string }) {
+export function Status({ value }: { value: string }) {
   const appearance = statusAppearance[value] || { label: value, badge: 'bg-muted text-muted-foreground', stripe: 'border-l-muted-foreground' }
   return <Badge className={appearance.badge}><span className="mr-1.5 inline-block size-1.5 rounded-full bg-current" aria-hidden="true" />{appearance.label}</Badge>
 }

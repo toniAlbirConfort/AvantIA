@@ -7,20 +7,24 @@ import { Button } from './components/ui/button'
 import { Card } from './components/ui/card'
 import { Select } from './components/ui/select'
 
-const datasetName: Record<string, string> = { availability: 'Disponibilidad', properties: 'Propiedades', reservations: 'Reservas' }
+const datasetName: Record<string, string> = { availability: 'Disponibilidad', properties: 'Propiedades', reservations: 'Reservas', customers: 'Clientes' }
 const sourceName: Record<string, string> = { upload: 'Manual', folder: 'Carpeta vigilada', playwright: 'Playwright · Avantio' }
 const issueName: Record<string, string> = {
   unknown_property: 'Alojamiento ausente del catálogo', inactive_property: 'Alojamiento inactivo',
   tax_mismatch: 'Total y tasas no cuadran', balance_mismatch: 'Total, pagado y pendiente no cuadran',
   overlap: 'Reservas bloqueantes solapadas',
+  extra_separators: 'Separadores de más en observaciones (se han unido)', invalid_date: 'Fecha no válida, se deja vacía',
+  short_row: 'Fila incompleta descartada', missing_customer_id: 'Fila sin Id de cliente descartada', duplicate_customer: 'Id de cliente repetido; se usa la última fila',
 }
 export function issueText(issue: ImportIssue) {
-  const reference = issue.locator || issue.locators?.join(' / ') || issue.property_id || ''
+  const reference = (issue.customer_id && `cliente ${issue.customer_id}`) || (issue.source_row && !issue.locator && !issue.locators && !issue.property_id && `fila ${issue.source_row}`) || issue.locator || issue.locators?.join(' / ') || issue.property_id || ''
   return `${issueName[issue.code] || issue.code}${reference ? ` · ${reference}` : ''}`
 }
 
+type Dataset = 'properties' | 'reservations' | 'customers'
+
 export function SourceImportForm({ onDone, admin }: { onDone: () => Promise<void>; admin: boolean }) {
-  const [dataset, setDataset] = useState<'properties' | 'reservations'>('properties')
+  const [dataset, setDataset] = useState<Dataset>('properties')
   const [files, setFiles] = useState<File[]>([])
   const [dragging, setDragging] = useState(false)
   const [preview, setPreview] = useState<ImportPreview | null>(null)
@@ -57,7 +61,7 @@ export function SourceImportForm({ onDone, admin }: { onDone: () => Promise<void
     finally { setBusy(false) }
   }
   return <form className="grid gap-4" onSubmit={validate}>
-    <label className="grid gap-1.5 text-sm font-medium">Conjunto de datos<Select value={dataset} disabled={!admin || busy} onChange={e => { setDataset(e.target.value as 'properties' | 'reservations'); setPreview(null); setMessage('') }}><option value="properties">Propiedades</option><option value="reservations">Reservas</option></Select></label>
+    <label className="grid gap-1.5 text-sm font-medium">Conjunto de datos<Select value={dataset} disabled={!admin || busy} onChange={e => { setDataset(e.target.value as Dataset); setPreview(null); setMessage('') }}><option value="properties">Propiedades</option><option value="reservations">Reservas</option><option value="customers">Clientes</option></Select></label>
     <div className={`flex min-h-36 flex-col items-center justify-center gap-2 rounded-lg border border-dashed p-5 text-center transition-colors ${dragging ? 'border-primary bg-accent' : 'border-border bg-background'}`} onDragEnter={event => { event.preventDefault(); setDragging(true) }} onDragOver={event => event.preventDefault()} onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false) }} onDrop={dropFiles}>
       <strong className="text-sm">Suelta aquí tus archivos CSV</strong><span className="text-xs text-muted-foreground">o selecciónalos desde el dispositivo</span>
       <label className="mt-2 inline-flex min-h-10 cursor-pointer items-center rounded-md border border-border bg-card px-4 py-2 text-sm font-medium hover:bg-accent focus-within:ring-2 focus-within:ring-ring">Elegir archivos<input className="sr-only" type="file" accept=".csv,text/csv" multiple disabled={!admin || busy} onChange={e => { if (e.target.files) addFiles(e.target.files); e.target.value = '' }} /></label>
@@ -68,6 +72,7 @@ export function SourceImportForm({ onDone, admin }: { onDone: () => Promise<void
       <strong className="text-sm">{preview.rows} registros en el archivo · {preview.changes.length} cambios · {preview.warnings.length} incidencias</strong>
       {preview.coverage && <p className="text-sm leading-6 text-muted-foreground">Estancias presentes en este archivo: {preview.coverage.first_arrival} → {preview.coverage.last_departure}. Altas registradas: {preview.coverage.first_created || 'sin fecha'} → {preview.coverage.last_created || 'sin fecha'}. La fecha de alta no indica cuándo se ocupa el alojamiento.</p>}
       {preview.dataset === 'reservations' && <p className="text-sm leading-6 text-muted-foreground">Planning consolidado tras confirmar: {preview.effective_rows} reservas. Se conservarán {preview.carried_rows} reservas anteriores ausentes de este archivo; las coincidencias por localizador se actualizarán. Una ausencia no se interpreta como cancelación.</p>}
+      {preview.dataset === 'customers' && <p className="text-sm leading-6 text-muted-foreground">Clientes tras confirmar: {preview.effective_rows}. Se conservarán {preview.carried_rows} clientes ausentes de este archivo; las coincidencias por Id de cliente se actualizarán. Los números de tarjeta y cuenta se guardan enmascarados.</p>}
       {preview.dataset === 'properties' && preview.changes.some(change => change.kind === 'removed') && <Alert variant="warning">{preview.changes.filter(change => change.kind === 'removed').length} propiedades de la instantánea anterior faltan en este archivo.</Alert>}
       {preview.duplicate_of && <p className="text-sm">Archivo ya importado como instantánea #{preview.duplicate_of}.</p>}
       {preview.warnings.length > 0 && <ul className="max-h-56 list-disc space-y-1 overflow-auto pl-5 text-sm text-muted-foreground">{preview.warnings.slice(0, 12).map((issue, index) => <li key={index}>{issueText(issue)}</li>)}</ul>}
