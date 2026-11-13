@@ -493,6 +493,27 @@ def properties_view(db: Session, batch_id: int | None = None) -> list[dict]:
     ]
 
 
+def consolidated_reservations(
+    db: Session, reservation_batch: ImportBatch
+) -> dict[str, ReservationSnapshot]:
+    """Fold valid imports by locator so older non-cumulative snapshots still
+    contribute the newest imported version of every reservation."""
+    latest_by_locator: dict[str, ReservationSnapshot] = {}
+    source_rows = db.scalars(
+        select(ReservationSnapshot)
+        .join(ImportBatch, ReservationSnapshot.batch_id == ImportBatch.id)
+        .where(
+            ImportBatch.dataset == "reservations",
+            ImportBatch.status == "valid",
+            ImportBatch.id <= reservation_batch.id,
+        )
+        .order_by(ImportBatch.id, ReservationSnapshot.id)
+    )
+    for row in source_rows:
+        latest_by_locator[row.locator] = row
+    return latest_by_locator
+
+
 def reservations_view(
     db: Session,
     *,
@@ -534,21 +555,7 @@ def reservations_view(
             "has_snapshot": False, "properties": property_options,
         }
 
-    # Fold valid imports by locator so older non-cumulative snapshots still show
-    # the newest imported version of every reservation.
-    latest_by_locator: dict[str, ReservationSnapshot] = {}
-    source_rows = db.scalars(
-        select(ReservationSnapshot)
-        .join(ImportBatch, ReservationSnapshot.batch_id == ImportBatch.id)
-        .where(
-            ImportBatch.dataset == "reservations",
-            ImportBatch.status == "valid",
-            ImportBatch.id <= reservation_batch.id,
-        )
-        .order_by(ImportBatch.id, ReservationSnapshot.id)
-    )
-    for row in source_rows:
-        latest_by_locator[row.locator] = row
+    latest_by_locator = consolidated_reservations(db, reservation_batch)
 
     needle = "".join(
         character

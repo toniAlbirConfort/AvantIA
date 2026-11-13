@@ -63,6 +63,7 @@ from app.models import (
     User,
     now,
 )
+from app.analytics import reservation_analysis
 from app.planning import (
     DATASETS,
     commit_import,
@@ -1078,6 +1079,11 @@ def properties(db: Db, user: Operator, batch_id: int | None = None) -> list[dict
         return properties_view(db, batch_id)
     except ValueError as exc:
         raise HTTPException(404, str(exc)) from exc
+
+
+@app.get("/api/analysis")
+def analysis(db: Db, user: Operator, years: int = Query(4, ge=2, le=8)) -> dict:
+    return reservation_analysis(db, years)
 
 
 @app.get("/api/tariffs")
