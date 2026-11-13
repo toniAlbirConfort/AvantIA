@@ -37,7 +37,7 @@ from app.tariff_projection import (
     update_projection,
 )
 
-MIGRATION_PATH = Path(__file__).parents[1] / "alembic" / "versions" / "0018_tariff_projections.py"
+MIGRATION_PATH = Path(__file__).parents[1] / "alembic" / "versions" / "0019_tariff_projections.py"
 SPEC = importlib.util.spec_from_file_location("tariff_projection_migration", MIGRATION_PATH)
 assert SPEC and SPEC.loader
 MIGRATION = importlib.util.module_from_spec(SPEC)

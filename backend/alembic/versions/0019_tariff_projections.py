@@ -3,8 +3,8 @@
 Seeds the competitor prices of the Albir study of 13/11/2026 (report in 0013) so the
 first projection can compare each SA group with the market.
 
-Revision ID: 0018
-Revises: 0017
+Revision ID: 0019
+Revises: 0018
 """
 
 from datetime import UTC, date, datetime
@@ -14,8 +14,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision = "0018"
-down_revision = "0017"
+revision = "0019"
+down_revision = "0018"
 branch_labels = None
 depends_on = None
 
