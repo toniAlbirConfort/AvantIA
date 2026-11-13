@@ -3,7 +3,9 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
-from app.analytics import channel_of, reservation_analysis, stay_bucket
+from types import SimpleNamespace
+
+from app.analytics import channel_of, conversion_funnel, reservation_analysis, stay_bucket
 from app.models import ImportBatch, PropertySnapshot, ReservationSnapshot
 
 AS_OF = datetime(2026, 3, 1, 9, tzinfo=UTC)
@@ -143,3 +145,48 @@ def test_channel_and_stay_buckets():
     assert channel_of("Airbnb.com") == "Airbnb"
     assert channel_of("VIAJES OLYMPIA") == "Agencias y otros"
     assert stay_bucket(3) == "1-3 noches" and stay_bucket(28) == "28 noches o más"
+
+
+def test_conversion_funnel_matches_the_avantio_report():
+    """Figures from the report Albir Confort builds by hand from Avantio."""
+    counts = {
+        "owner": 7, "confirmed": 76, "pre_reservation": 3, "paid": 312, "inquiry": 11,
+        "dismissed": 167, "cancelled": 56, "unavailable": 2, "abandoned_cart": 1,
+    }
+    rows = [
+        SimpleNamespace(status=status, created_on=date(2026, 5, 1))
+        for status, count in counts.items()
+        for _ in range(count)
+    ]
+    rows.append(SimpleNamespace(status="paid", created_on=date(2025, 12, 31)))
+    rows.append(SimpleNamespace(status="paid", created_on=None))
+
+    funnel = conversion_funnel(rows, [2025, 2026], date(2026, 11, 13))
+    current = funnel[1]
+    assert current["total"] == 635 and current["partial"] is True
+    assert current["by_status"]["dismissed"] == 167
+    assert {name: group["count"] for name, group in current["groups"].items()} == {
+        "converted": 391, "pending": 11, "lost": 223, "other": 10,
+    }
+    assert current["groups"]["converted"]["share"] == 0.6157
+    assert sum(group["count"] for group in current["groups"].values()) == current["total"]
+    assert current["same_window"]["total"] == 635
+    previous = funnel[0]
+    assert previous["total"] == 1 and previous["partial"] is False
+    assert previous["same_window"]["total"] == 0
+
+
+def test_conversion_counts_requests_outside_the_rentable_catalogue(db):
+    setup_catalog(db)
+    reservations = batch(db, "reservations")
+    created = date(2026, 2, 1)
+    reservation(db, reservations.id, "R1", "A", date(2026, 6, 1), date(2026, 6, 5), created=created)
+    reservation(
+        db, reservations.id, "R2", "OLD", date(2026, 6, 1), date(2026, 6, 5),
+        status="inquiry", created=created,
+    )
+    db.commit()
+
+    current = reservation_analysis(db)["conversion"][-1]
+    assert current["total"] == 2
+    assert current["groups"]["converted"]["share"] == 0.5

@@ -25,6 +25,14 @@ LONG_STAY_NIGHTS = 28
 ORPHAN_GAP_NIGHTS = 3
 DIRECT_PREFIXES = ("canal", "albir confort")
 MIN_YEARS, MAX_YEARS = 2, 8
+# Conversion funnel groups, as Albir Confort reports it from Avantio: every
+# request created in the year falls in exactly one group, so they add to 100 %.
+FUNNEL_GROUPS = {
+    "converted": frozenset({"pre_reservation", "confirmed", "paid"}),
+    "pending": frozenset({"inquiry"}),
+    "lost": frozenset({"dismissed", "cancelled", "owner_cancelled"}),
+    "other": frozenset({"abandoned_cart", "owner", "unavailable"}),
+}
 
 
 def _fold(value: str | None) -> str:
@@ -342,6 +350,39 @@ def _insights(result: dict) -> list[dict]:
     return insights
 
 
+def _funnel(rows: list, start: date, end: date) -> dict:
+    created = [r for r in rows if r.created_on and start <= r.created_on < end]
+    by_status: dict[str, int] = defaultdict(int)
+    for row in created:
+        by_status[row.status] += 1
+    total = len(created)
+    groups = {
+        name: {
+            "count": (count := sum(by_status[status] for status in statuses)),
+            "share": _ratio(count, total),
+        }
+        for name, statuses in FUNNEL_GROUPS.items()
+    }
+    return {"total": total, "by_status": dict(by_status), "groups": groups}
+
+
+def conversion_funnel(rows: list, years: list[int], as_of: date) -> list[dict]:
+    """Requests created in each calendar year (the current one up to ``as_of``,
+    inclusive) plus the same 1 January → ``as_of`` window, so years compare fairly."""
+    result = []
+    for year in years:
+        full_end = min(date(year + 1, 1, 1), as_of + timedelta(days=1))
+        result.append({
+            "year": year,
+            "partial": full_end <= date(year, 12, 31),
+            **_funnel(rows, date(year, 1, 1), full_end),
+            "same_window": _funnel(
+                rows, date(year, 1, 1), _same_day(year, as_of) + timedelta(days=1)
+            ),
+        })
+    return result
+
+
 def reservation_analysis(db: Session, years: int = 4) -> dict:
     years = max(MIN_YEARS, min(MAX_YEARS, years))
     reservation_batch = latest_source_batch(db, "reservations")
@@ -364,11 +405,8 @@ def reservation_analysis(db: Session, years: int = 4) -> dict:
         if _rentable(prop)
     }
     units = len(properties)
-    rows = [
-        row
-        for row in consolidated_reservations(db, reservation_batch).values()
-        if row.property_id in properties
-    ]
+    all_rows = list(consolidated_reservations(db, reservation_batch).values())
+    rows = [row for row in all_rows if row.property_id in properties]
     as_of = reservation_batch.created_at.date()
     year_list = list(range(as_of.year - years + 1, as_of.year + 1))
     windows = {year: (date(year, 1, 1), _same_day(year, as_of)) for year in year_list}
@@ -480,6 +518,9 @@ def reservation_analysis(db: Session, years: int = 4) -> dict:
         "segments": segments,
         "orphan_gaps": _orphan_gaps(rows, as_of - timedelta(days=365), as_of),
         "data_quality": quality,
+        # Every request in the export, like Avantio's own listing: inquiries are
+        # not tied to the rentable catalogue used for occupancy.
+        "conversion": conversion_funnel(all_rows, year_list, as_of),
     }
     result["insights"] = _insights(result)
     return result

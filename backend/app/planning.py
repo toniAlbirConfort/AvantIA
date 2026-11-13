@@ -49,12 +49,17 @@ STATUS = {
     "peticion informacion": "inquiry",
     "pagada": "paid",
     "cancelada": "cancelled",
+    "cancelada propietario": "owner_cancelled",
+    "peticiones desestimadas": "dismissed",
+    "peticion desestimada": "dismissed",
+    "abandono carrito": "abandoned_cart",
     "no disponible": "unavailable",
     "de propietario": "owner",
 }
 BLOCKING_STATUSES = frozenset(
     {"confirmed", "pre_reservation", "paid", "unavailable", "owner"}
 )
+CANCELLED_STATUSES = frozenset({"cancelled", "owner_cancelled", "dismissed"})
 RESERVATION_FIELDS = (
     "source_row", "row_hash", "locator", "property_id", "status_original", "status",
     "created_on", "start_date", "end_date", "nights", "adults", "children", "infants",
@@ -688,7 +693,7 @@ def planning_view(
         }
         if row.status == "inquiry":
             inquiries.append(item)
-        elif row.status == "cancelled":
+        elif row.status in CANCELLED_STATUSES:
             cancellations.append(item)
         elif row.status in BLOCKING_STATUSES:
             bars.append(item)

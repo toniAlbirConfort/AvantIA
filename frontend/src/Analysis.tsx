@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { AlertTriangle, Info, TrendingDown, TrendingUp } from 'lucide-react'
 import { api } from './api'
-import type { AnalysisInsight, AnalysisMonth, AnalysisSegmentRow, AnalysisYear, ReservationAnalysis } from './types'
+import type { AnalysisConversion, AnalysisInsight, ConversionGroup, AnalysisMonth, AnalysisSegmentRow, AnalysisYear, ReservationAnalysis } from './types'
 import { Alert } from './components/ui/alert'
 import { Button } from './components/ui/button'
 import { Card } from './components/ui/card'
@@ -104,6 +104,7 @@ function YearTable({ data }: { data: Ready }) {
     { label: 'Noches de estancias de 28+', render: year => pct(year.long_stay_share) },
     { label: 'Reservas creadas', render: year => num(year.bookings_created) },
     { label: 'Peticiones de información', render: year => num(year.inquiries) },
+    { label: 'Conversión de peticiones', render: year => pct(data.conversion.find(item => item.year === year.year)?.same_window.groups.converted.share) },
   ]
   return <Card className="overflow-hidden p-4 sm:p-6">
     <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">MISMA VENTANA · DEL {windowLabel(data.window.end).toUpperCase()}</p>
@@ -245,6 +246,67 @@ function DataQuality({ data }: { data: Ready }) {
   </Card>
 }
 
+const CONVERSION_STATUSES: [string, string][] = [
+  ['owner', 'De propietario'],
+  ['confirmed', 'Confirmada'],
+  ['pre_reservation', 'Prereserva'],
+  ['paid', 'Pagada'],
+  ['inquiry', 'Petición de información'],
+  ['dismissed', 'Peticiones desestimadas'],
+  ['cancelled', 'Cancelada'],
+  ['owner_cancelled', 'Cancelada propietario'],
+  ['unavailable', 'No disponible'],
+  ['abandoned_cart', 'Abandono carrito'],
+]
+const CONVERSION_GROUPS: { id: ConversionGroup; label: string; detail: string }[] = [
+  { id: 'converted', label: 'Conversión', detail: 'Prereserva + Confirmada + Pagada' },
+  { id: 'pending', label: 'Pendiente', detail: 'Petición de información' },
+  { id: 'lost', label: 'Cancelada', detail: 'Desestimada + Cancelada + Cancelada propietario' },
+  { id: 'other', label: 'Otros', detail: 'Abandono carrito + De propietario + No disponible' },
+]
+
+function ConversionTable({ conversion }: { conversion: AnalysisConversion[] }) {
+  const [year, setYear] = useState(conversion[conversion.length - 1].year)
+  const item = conversion.find(entry => entry.year === year) ?? conversion[conversion.length - 1]
+  const previous = conversion.find(entry => entry.year === item.year - 1)
+  const converted = item.groups.converted.share
+  const sameWindow = item.same_window.groups.converted.share
+  const before = previous?.same_window.groups.converted.share
+  const delta = sameWindow != null && before != null ? (sameWindow - before) * 100 : null
+  const statuses = CONVERSION_STATUSES.filter(([key]) => item.by_status[key])
+  const dismissedMissing = !item.by_status.dismissed && item.by_status.inquiry > 0
+  return <Card className="overflow-hidden p-4 sm:p-6">
+    <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+      <div><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">PETICIONES POR FECHA DE ALTA · {item.partial ? 'AÑO EN CURSO' : 'AÑO COMPLETO'}</p><h2 className="text-xl font-semibold">Conversión de peticiones</h2></div>
+      <label className="grid w-full gap-1.5 text-sm font-medium sm:w-36">Año<Select value={item.year} onChange={event => setYear(Number(event.target.value))}>{conversion.map(entry => <option key={entry.year} value={entry.year}>{entry.year}</option>)}</Select></label>
+    </div>
+    <div className="mb-5 flex flex-wrap items-baseline gap-x-4 gap-y-2">
+      <strong className="text-4xl font-semibold tabular-nums">{pct(converted)}</strong>
+      <span className="text-sm text-muted-foreground">{num(item.groups.converted.count)} de {num(item.total)} peticiones acabaron en reserva</span>
+      {previous && <span className="flex items-center gap-2"><Delta value={delta} suffix=" pts" /><span className="text-xs text-muted-foreground">vs {previous.year} a la misma fecha</span></span>}
+    </div>
+    <div className="grid items-start gap-6 lg:grid-cols-2">
+      <Table>
+        <TableHeader><TableRow><TableHead>Estado</TableHead><TableHead className="text-right">Recuento</TableHead><TableHead className="text-right">%</TableHead></TableRow></TableHeader>
+        <TableBody>
+          {statuses.map(([key, label]) => <TableRow key={key}><TableCell>{label}</TableCell><TableCell className="text-right tabular-nums">{num(item.by_status[key])}</TableCell><TableCell className="text-right tabular-nums">{pct(item.total ? item.by_status[key] / item.total : null)}</TableCell></TableRow>)}
+          <TableRow className="font-semibold"><TableCell>Total</TableCell><TableCell className="text-right tabular-nums">{num(item.total)}</TableCell><TableCell className="text-right tabular-nums">{item.total ? '100 %' : '—'}</TableCell></TableRow>
+        </TableBody>
+      </Table>
+      <Table>
+        <TableHeader><TableRow><TableHead>Grupo</TableHead><TableHead className="text-right">Recuento</TableHead><TableHead className="text-right">%</TableHead><TableHead className="hidden sm:table-cell">Incluye</TableHead></TableRow></TableHeader>
+        <TableBody>{CONVERSION_GROUPS.map(group => <TableRow key={group.id} className={group.id === 'converted' ? 'font-semibold' : undefined}>
+          <TableCell>{group.label}</TableCell>
+          <TableCell className="text-right tabular-nums">{num(item.groups[group.id].count)}</TableCell>
+          <TableCell className="text-right tabular-nums">{pct(item.groups[group.id].share)}</TableCell>
+          <TableCell className="hidden text-sm text-muted-foreground sm:table-cell">{group.detail}</TableCell>
+        </TableRow>)}</TableBody>
+      </Table>
+    </div>
+    {dismissedMissing && <p className="mt-4 text-sm leading-6 text-muted-foreground">El listado de Avantio exporta las peticiones desestimadas como «Petición de información», así que aquí cuentan como pendientes. La conversión no cambia.</p>}
+  </Card>
+}
+
 export function Analysis({ refreshVersion }: { refreshVersion: number }) {
   const [years, setYears] = useState(4)
   const [data, setData] = useState<ReservationAnalysis | null>(null)
@@ -286,6 +348,7 @@ export function Analysis({ refreshVersion }: { refreshVersion: number }) {
     </Card>
     <Kpis current={current} previous={previous} />
     <Insights insights={data.insights} />
+    {data.conversion.length > 0 && <ConversionTable conversion={data.conversion} />}
     <YearTable data={data} />
     <MonthlyTable data={data} />
     <div className="grid items-start gap-4 2xl:grid-cols-2"><PaceTable data={data} /><DataQuality data={data} /></div>
