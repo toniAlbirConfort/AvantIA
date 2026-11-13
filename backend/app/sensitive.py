@@ -9,13 +9,20 @@ from __future__ import annotations
 
 import re
 
+# A card number stands on its own: never glued to letters, hashes, HTML ids ("m_-123..."),
+# URLs ("?u=123...", "/123..."), decimals ("253.123...") or other identifiers.
+_ALONE_BEFORE = r"(?<![\w.\-=/%#&:+])"
+_ALONE_AFTER = r"(?![\w\-]|[.,]\d)"
 # 13-19 digits, optionally grouped with spaces or hyphens (same shape as customers.CARD).
-CARD = re.compile(r"(?<!\d)(?:\d[ -]?){12,18}\d(?!\d)")
+CARD = re.compile(_ALONE_BEFORE + r"(?:\d[ -]?){12,18}\d" + _ALONE_AFTER)
 # Four groups of four digits is a card even when the customer mistyped a digit (fails Luhn).
-GROUPED_CARD = re.compile(r"(?<![\d-])\d{4}([ -])\d{4}\1\d{4}\1\d{4}(?![\d-])")
+GROUPED_CARD = re.compile(_ALONE_BEFORE + r"\d{4}([ -])\d{4}\1\d{4}\1\d{4}" + _ALONE_AFTER)
+# Avantio locators ("24711566-1419339900") can pass Luhn by chance; they are not cards.
+LOCATOR = re.compile(r"\d{7,9}-\d{5,10}")
 EXPIRY_AFTER_CARD = re.compile(
     r"(\[tarjeta ••••\d{4}\])"
-    r"([\s,;:.-]*(?:(?:exp\w*|valid\w*|caduc\w*|vto|venc\w*|utl\w*|gyldig\w*)"
+    r"([\s,;:.-]*(?:(?:and|y|og|und|en|et)\s+)?"
+    r"(?:(?:exp\w*|valid\w*|caduc\w*|vto|venc\w*|utl\w*|gyldig\w*)"
     r"(?:\s+(?:thru|date|til|hasta))?\s*[:.]?\s*)?)"
     r"(\d{1,2}\s*/\s*\d{2,4})(?!\d)",
     re.IGNORECASE,
@@ -52,6 +59,8 @@ def iban_valid(compact: str) -> bool:
 
 def _mask_cards(text: str) -> str:
     def luhn_card(match: re.Match) -> str:
+        if LOCATOR.fullmatch(match.group().strip()):
+            return match.group()
         digits = re.sub(r"\D", "", match.group())
         if 13 <= len(digits) <= 19 and luhn(digits):
             return f"[tarjeta ••••{digits[-4:]}]"
