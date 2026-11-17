@@ -38,7 +38,7 @@ def _resolve_output(output: Path) -> Path:
 
 
 async def _click_visible_label(page, label: str, roles: tuple[str, ...]) -> None:
-    if label == "Más acciones":
+    if label in ("Más acciones", "Listado de reservas"):
         locator = page.get_by_text(label, exact=True)
         for _ in range(40):
             visible = False
@@ -91,28 +91,55 @@ async def _click_visible_label(page, label: str, roles: tuple[str, ...]) -> None
     raise ExportError(f"No se encontró el control «{label}» en Avantio.")
 
 
+MENU_TOGGLE_SELECTORS = (
+    'button[aria-label*="menu" i]',
+    'button[aria-label*="menú" i]',
+    'button[aria-label*="navigation" i]',
+    'button[aria-label*="navegación" i]',
+    'button[title*="menu" i]',
+    'button[title*="menú" i]',
+    'button.navbar-toggler',
+    'button.sidebar-toggle',
+    'button:has(.fa-bars)',
+    '[role="button"]:has(.fa-bars)',
+    'div.tabBarraSuperior.flexBarraSuperior',
+    '.fa-bars',
+)
+MENU_WAIT_STEPS = 40
+MENU_WAIT_MS = 250
+
+
+async def _any_visible(locator) -> bool:
+    for index in range(await locator.count()):
+        if await locator.nth(index).is_visible():
+            return True
+    return False
+
+
+async def _navigation_visible(page) -> bool:
+    for role in ("menuitem", "link", "button"):
+        if await _any_visible(page.get_by_role(role, name="Reservas", exact=True)):
+            return True
+    return await _any_visible(page.get_by_text("Reservas", exact=True))
+
+
 async def _open_menu(page) -> None:
-    selectors = (
-        'button[aria-label*="menu" i]',
-        'button[aria-label*="menú" i]',
-        'button[aria-label*="navigation" i]',
-        'button[aria-label*="navegación" i]',
-        'button[title*="menu" i]',
-        'button[title*="menú" i]',
-        'button.navbar-toggler',
-        'button.sidebar-toggle',
-        'button:has(.fa-bars)',
-        '[role="button"]:has(.fa-bars)',
-        'div.tabBarraSuperior.flexBarraSuperior',
-        '.fa-bars',
-    )
-    for selector in selectors:
-        locator = page.locator(selector)
-        for index in range(await locator.count()):
-            candidate = locator.nth(index)
-            if await candidate.is_visible():
-                await candidate.click()
-                return
+    """Make the «Reservas» entry reachable in either Avantio layout.
+
+    Narrow windows hide the navigation behind a ☰ button; wide windows show the side menu
+    permanently and have no such button. The page is a SPA, so wait for either to render.
+    """
+    for _ in range(MENU_WAIT_STEPS):
+        for selector in MENU_TOGGLE_SELECTORS:
+            locator = page.locator(selector)
+            for index in range(await locator.count()):
+                candidate = locator.nth(index)
+                if await candidate.is_visible():
+                    await candidate.click()
+                    return
+        if await _navigation_visible(page):
+            return
+        await page.wait_for_timeout(MENU_WAIT_MS)
     raise ExportError("No se encontró el menú de navegación de Avantio.")
 
 

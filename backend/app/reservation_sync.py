@@ -176,27 +176,53 @@ async def _login_if_needed(page, settings: Settings) -> None:
         ) from exc
 
 
+MENU_TOGGLE_SELECTORS = (
+    'button[aria-label*="menu" i]',
+    'button[aria-label*="menú" i]',
+    'button[aria-label*="navigation" i]',
+    'button[aria-label*="navegación" i]',
+    'button[title*="menu" i]',
+    'button[title*="menú" i]',
+    'button[title*="navigation" i]',
+    'button.navbar-toggler',
+    'button.sidebar-toggle',
+    'button:has(.fa-bars)',
+    '[role="button"]:has(.fa-bars)',
+    '.fa-bars',
+)
+MENU_WAIT_STEPS = 40
+MENU_WAIT_MS = 250
+
+
+async def _any_visible(locator) -> bool:
+    for index in range(await locator.count()):
+        if await locator.nth(index).is_visible():
+            return True
+    return False
+
+
+async def _navigation_visible(page) -> bool:
+    for role in ("menuitem", "link", "button"):
+        if await _any_visible(page.get_by_role(role, name="Reservas", exact=True)):
+            return True
+    return await _any_visible(page.get_by_text("Reservas", exact=True))
+
+
 async def _open_navigation_menu(page) -> None:
-    menu_button = await _visible_locator(
-        page,
-        (
-            'button[aria-label*="menu" i]',
-            'button[aria-label*="menú" i]',
-            'button[aria-label*="navigation" i]',
-            'button[aria-label*="navegación" i]',
-            'button[title*="menu" i]',
-            'button[title*="menú" i]',
-            'button[title*="navigation" i]',
-            'button.navbar-toggler',
-            'button.sidebar-toggle',
-            'button:has(.fa-bars)',
-            '[role="button"]:has(.fa-bars)',
-            '.fa-bars',
-        ),
-    )
-    if menu_button is None:
-        raise ReservationSyncError("No se encontró el menú de navegación de Avantio.")
-    await menu_button.click()
+    """Make the «Reservas» entry reachable in either Avantio layout.
+
+    Narrow windows hide the navigation behind a ☰ button; wide windows show the side menu
+    permanently and have no such button. The page is a SPA, so wait for either to render.
+    """
+    for _ in range(MENU_WAIT_STEPS):
+        menu_button = await _visible_locator(page, MENU_TOGGLE_SELECTORS)
+        if menu_button is not None:
+            await menu_button.click()
+            return
+        if await _navigation_visible(page):
+            return
+        await page.wait_for_timeout(MENU_WAIT_MS)
+    raise ReservationSyncError("No se encontró el menú de navegación de Avantio.")
 
 
 async def download_reservations_csv(settings: Settings) -> tuple[str, bytes]:

@@ -144,6 +144,10 @@ class FakePage:
         self.fills = []
         self.visited = []
         self.response_status = None
+        # Wide windows show Avantio's side menu permanently, without the ☰ button.
+        self.wide_layout = False
+        self.navigation_available = True
+        self.waits = []
 
     def set_default_timeout(self, timeout):
         self.timeout = timeout
@@ -154,7 +158,11 @@ class FakePage:
 
     def locator(self, selector: str):
         if selector == 'button[aria-label*="menu" i]':
-            return FakeLocator(self, "navigation menu", visible=self.logged_in)
+            return FakeLocator(
+                self,
+                "navigation menu",
+                visible=self.logged_in and self.navigation_available and not self.wide_layout,
+            )
         if selector == 'input[type="password"]':
             return FakeLocator(self, "password", visible=not self.logged_in)
         if selector == 'input[autocomplete="username"]' or selector == 'input[type="email"]':
@@ -167,7 +175,8 @@ class FakePage:
 
     def get_by_role(self, role, name, exact):
         if role == "menuitem" and name == "Reservas":
-            return FakeLocator(self, name, visible=self.menu_open)
+            side_menu = self.wide_layout and self.logged_in and self.navigation_available
+            return FakeLocator(self, name, visible=self.menu_open or side_menu)
         if role == "menuitem" and name == "Listado de reservas":
             return FakeLocator(self, name, visible=self.reservas_menu_open)
         if role == "button" and name == "Más acciones":
@@ -178,6 +187,9 @@ class FakePage:
 
     def get_by_text(self, label, exact):
         return FakeLocator(self, label, visible=False)
+
+    async def wait_for_timeout(self, milliseconds):
+        self.waits.append(milliseconds)
 
     def expect_download(self, timeout):
         self.download_future = asyncio.get_running_loop().create_future()
@@ -251,6 +263,46 @@ def test_playwright_login_clicks_export_and_reads_temporary_download(monkeypatch
     assert len(page.visited) == 2
     assert page.visited == ["https://app.avantio.pro/"] * 2
     assert browser.context_options == {"accept_downloads": True}
+
+
+def test_playwright_uses_the_side_menu_when_avantio_shows_it_without_toggle(monkeypatch):
+    raw = reservation_csv()
+    with tempfile.TemporaryDirectory(dir=Path(__file__).parents[1] / ".tmp") as directory:
+        path = Path(directory) / "download.csv"
+        path.write_bytes(raw)
+        page = FakePage(FakeDownload(path))
+        page.wide_layout = True
+        browser = FakeBrowser(FakeContext(page))
+        monkeypatch.setattr(
+            "app.reservation_sync.async_playwright",
+            lambda: FakePlaywrightManager(browser),
+        )
+
+        filename, downloaded = asyncio.run(download_reservations_csv(configured_settings()))
+
+    assert downloaded == raw
+    assert page.actions == [
+        "submit",
+        "Reservas",
+        "Listado de reservas",
+        "Más acciones",
+        "Descargar CSV",
+    ]
+
+
+def test_playwright_reports_missing_navigation_after_waiting(tmp_path, monkeypatch):
+    page = FakePage(FakeDownload(tmp_path / "unused.csv"))
+    page.navigation_available = False
+    browser = FakeBrowser(FakeContext(page))
+    monkeypatch.setattr(
+        "app.reservation_sync.async_playwright",
+        lambda: FakePlaywrightManager(browser),
+    )
+    monkeypatch.setattr("app.reservation_sync.MENU_WAIT_STEPS", 3)
+
+    with pytest.raises(ReservationSyncError, match="menú de navegación"):
+        asyncio.run(download_reservations_csv(configured_settings()))
+    assert len(page.waits) == 3
 
 
 def test_playwright_loads_saved_storage_state_without_printing_it(tmp_path, monkeypatch):
