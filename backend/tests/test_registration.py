@@ -490,6 +490,9 @@ def test_operator_links_or_dismisses_alerts_from_the_api(db, shadow, monkeypatch
     from app.main import app
 
     monkeypatch.setattr(shadow, "app_secret", "unit-test-secret-with-more-than-32-characters")
+    # The Integrations summary counts the last 7 days from "now"; pin it to the fixture dates
+    # so the test does not expire a week after RECEIVED.
+    monkeypatch.setattr("app.registration.now", lambda: LATER)
     reservations(
         db,
         ("40000020-130650", "OTRA PERSONA", "paid", DAY, *NEXT_YEAR),
