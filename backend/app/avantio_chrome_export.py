@@ -37,25 +37,64 @@ def _resolve_output(output: Path) -> Path:
     return resolved
 
 
+# True when a click at the element's centre would land on it. Avantio keeps folded submenus
+# in the DOM with zero height and overflow hidden: Playwright reports their entries as visible,
+# but the entries below cover them and a click times out. A closed side drawer keeps its
+# entries to the left of the viewport, where no scrolling reaches them. The menu lives in a
+# shadow root, so the hit test runs against the element's own root. Elements above or below
+# the viewport are left to Playwright, which scrolls them into view before clicking.
+RECEIVES_CLICKS_JS = """
+element => {
+    const box = element.getBoundingClientRect();
+    if (!box.width || !box.height) return false;
+    const x = box.left + box.width / 2;
+    const y = box.top + box.height / 2;
+    if (x < 0 || x >= window.innerWidth) return false;
+    if (y < 0 || y >= window.innerHeight) return true;
+    const root = element.getRootNode();
+    const hit = (root.elementFromPoint ? root : document).elementFromPoint(x, y);
+    return hit !== null && (hit === element || element.contains(hit));
+}
+"""
+
+
+async def _receives_clicks(candidate) -> bool:
+    try:
+        return bool(await candidate.evaluate(RECEIVES_CLICKS_JS))
+    except PlaywrightError:
+        # Without a hit test, keep the previous behaviour rather than hide the control.
+        return True
+
+
+async def _clickable(candidate) -> bool:
+    return await candidate.is_visible() and await _receives_clicks(candidate)
+
+
+# Labels that render after the page itself. The click waits until one of them can take it:
+# right after loading, the bookings list is still covered by a translucent loading layer.
+LATE_LABELS = frozenset({"Más acciones", "Listado de reservas", "Descargar CSV"})
+# Every row of the bookings list has an icon-only ⋮ button whose aria-label is also
+# «Más acciones». Only the toolbar button shows the text, so it is matched by text alone;
+# a role match could re-resolve to a row menu while the list re-renders.
+TEXT_ONLY_LABELS = frozenset({"Más acciones"})
+
+
 async def _click_visible_label(page, label: str, roles: tuple[str, ...]) -> None:
-    if label in ("Más acciones", "Listado de reservas"):
+    if label in TEXT_ONLY_LABELS:
+        roles = ()
+    if label in LATE_LABELS:
         locator = page.get_by_text(label, exact=True)
-        for _ in range(40):
-            visible = False
-            for index in range(await locator.count()):
-                if await locator.nth(index).is_visible():
-                    visible = True
-                    break
-            if visible:
+        for _ in range(MENU_WAIT_STEPS):
+            if await _any_clickable(locator):
                 break
-            await page.wait_for_timeout(250)
+            await page.wait_for_timeout(MENU_WAIT_MS)
 
     for role in roles:
         locator = page.get_by_role(role, name=label, exact=True)
         visible = []
         for index in range(await locator.count()):
             candidate = locator.nth(index)
-            if await candidate.is_visible():
+            if await _clickable(candidate):
                 visible.append(candidate)
         if visible:
             if label in ("Reservas", "Más acciones") and len(visible) > 1:
@@ -74,7 +113,7 @@ async def _click_visible_label(page, label: str, roles: tuple[str, ...]) -> None
     visible = []
     for index in range(await locator.count()):
         candidate = locator.nth(index)
-        if await candidate.is_visible():
+        if await _clickable(candidate):
             visible.append(candidate)
     if label in ("Reservas", "Más acciones") and len(visible) > 1:
         # These text-only controls can be duplicated by dashboard and row content.
@@ -141,6 +180,34 @@ async def _open_menu(page) -> None:
             return
         await page.wait_for_timeout(MENU_WAIT_MS)
     raise ExportError("No se encontró el menú de navegación de Avantio.")
+
+
+async def _any_clickable(locator) -> bool:
+    for index in range(await locator.count()):
+        if await _clickable(locator.nth(index)):
+            return True
+    return False
+
+
+async def _reveal_menu_entry(page, label: str) -> None:
+    """Reopen the side menu when ``label`` is rendered but out of reach.
+
+    «Reservas» now opens the bookings list itself, and that page keeps the side menu as a
+    closed drawer: «Listado de reservas» sits to the left of the viewport until ☰ opens it.
+    The toggle is only clicked when the entry is unreachable, because it also closes the menu.
+    """
+    locator = page.get_by_text(label, exact=True)
+    for _ in range(MENU_WAIT_STEPS):
+        if await _any_visible(locator):
+            break
+        await page.wait_for_timeout(MENU_WAIT_MS)
+    if await _any_clickable(locator):
+        return
+    await _open_menu(page)
+    for _ in range(MENU_WAIT_STEPS):
+        if await _any_clickable(locator):
+            return
+        await page.wait_for_timeout(MENU_WAIT_MS)
 
 
 async def _login_form_visible(page) -> bool:
@@ -271,6 +338,7 @@ async def export_reservations(output: Path) -> None:
 
             await _open_menu(page)
             await _click_visible_label(page, "Reservas", ("menuitem", "link", "button"))
+            await _reveal_menu_entry(page, "Listado de reservas")
             await _click_visible_label(
                 page, "Listado de reservas", ("menuitem", "link", "button")
             )
