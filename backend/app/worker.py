@@ -15,7 +15,7 @@ from app.db import SessionLocal
 from app.delivery import send_approved
 from app.mail import poll_mail
 from app.models import Conversation, Draft, Job, TariffStudy
-from app.notifications import notify_job_failed
+from app.notifications import notify_job_failed, notify_job_recovered, watch_gowa
 from app.notifications import scan as scan_notifications
 from app.processing import alert_conversation, analyze_message, schedule_overdue
 from app.registration import run_registration_check, watch_sync
@@ -23,6 +23,8 @@ from app.tariff_lab import run_study
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+# GOWA status is a network call; checking it every 5 minutes is enough for a notice.
+GOWA_CHECK_SECONDS = 300
 
 
 async def run_job() -> bool:
@@ -128,12 +130,18 @@ def recover_stale_jobs() -> None:
                         study.error = "El worker se interrumpió; el estudio se reintentará"
                 job.status = "pending"
                 job.run_at = datetime.now(UTC)
+            try:
+                with db.begin_nested():
+                    notify_job_recovered(db, job.kind, job.id)
+            except Exception:
+                logger.exception("Could not record notification for job %s", job.id)
         db.commit()
 
 
 async def main() -> None:
     last_mail = 0.0
     last_housekeeping = 0.0
+    last_gowa_check = 0.0
     settings = get_settings()
     while True:
         tick = time.monotonic()
@@ -157,6 +165,13 @@ async def main() -> None:
             with SessionLocal() as db:
                 scan_notifications(db)
             last_housekeeping = tick
+        if tick - last_gowa_check >= GOWA_CHECK_SECONDS:
+            with SessionLocal() as db:
+                try:
+                    await watch_gowa(db)
+                except Exception:
+                    logger.exception("WhatsApp notification check failed")
+            last_gowa_check = tick
         if not await run_job():
             await asyncio.sleep(settings.worker_poll_seconds)
 

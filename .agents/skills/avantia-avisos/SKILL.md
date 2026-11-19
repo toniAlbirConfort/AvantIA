@@ -23,7 +23,7 @@ Antes de dar por cerrado el diseño de un cambio, revisa si introduce alguno de 
 1. Si el cambio encaja en algún caso, **pregunta al usuario antes de implementarlo** si debe generar un aviso. Propón:
    - el `kind`;
    - la severidad: `critical`, `action` o `info`;
-   - la audiencia: `all` o `admin`;
+   - la audiencia: `all`, `admin` o `user` (una persona concreta, con `user_id`);
    - la clave de deduplicación;
    - si es una condición (se resuelve sola cuando desaparece la causa) o un evento (se acumulan ocurrencias);
    - cuándo se cierra.
@@ -41,4 +41,6 @@ Antes de dar por cerrado el diseño de un cambio, revisa si introduce alguno de 
 - Sin datos personales completos, datos de pago, tokens, contraseñas ni rutas internas. Referencia los objetos por su ID.
 - Un único aviso activo por episodio: si se repite, se actualiza o suma ocurrencias en lugar de duplicarse.
 - Todo aviso cuyo problema puede desaparecer debe resolverse solo cuando desaparezca. Un aviso descartado no reaparece hasta que su causa se resuelve.
-- Los avisos de sistema (infraestructura, integraciones, trabajos) van a `admin`; los operativos que cualquiera puede atender van a `all`.
+- Los avisos de sistema (infraestructura, integraciones, trabajos) van a `admin`; los operativos que cualquiera puede atender van a `all`; los que solo afectan a una persona (por ejemplo, una asignación) van a `user`.
+- Elige la severidad pensando en que los usuarios pueden silenciar los tipos `action` e `info`, pero no los `critical`: reserva `critical` para lo que no puede pasar desapercibido.
+- Si un tipo puede generar muchos avisos a la vez, agrúpalo en uno con el recuento en lugar de crear uno por objeto.

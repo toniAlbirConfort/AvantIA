@@ -544,7 +544,7 @@ class Notification(Base):
     status: open (visible), dismissed (hidden by a user), resolved (the cause went away).
     A row is "active" while ``resolved_at`` is null, so a dismissed condition stays quiet until
     its cause clears; ``dedupe_key`` keeps a single active row per episode.
-    audience: all (every user) or admin.
+    audience: all (every user), admin, or user (only ``user_id``).
     """
 
     __tablename__ = "notifications"
@@ -552,6 +552,7 @@ class Notification(Base):
     kind: Mapped[str] = mapped_column(String(60), index=True)
     severity: Mapped[str] = mapped_column(String(10))
     audience: Mapped[str] = mapped_column(String(10), default="all")
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
     title: Mapped[str] = mapped_column(String(200))
     body: Mapped[str | None] = mapped_column(String(500))
     link: Mapped[str | None] = mapped_column(String(300))
@@ -573,3 +574,12 @@ class NotificationRead(Base):
     )
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), primary_key=True)
     read_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class NotificationMute(Base):
+    """A notification kind a user silenced: it stays listed but does not count as unread."""
+
+    __tablename__ = "notification_mutes"
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(60), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
