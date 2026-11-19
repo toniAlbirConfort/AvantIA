@@ -83,6 +83,23 @@ export type InboxSenderGroup = {
 }
 export type InboxItem = InboxThread | InboxSenderGroup
 export type InboxResponse = { items: InboxItem[]; total: number; offset: number; limit: number }
+export type ReservationIssueKind = 'overlap' | 'amounts' | 'inactive' | 'unknown'
+export type IssueReservation = {
+  locator: string; property_id: string; status: string; status_original: string; created_on: string | null;
+  start_date: string; end_date: string; nights: number; guests: number; display_name: string; portal: string | null;
+  total: number; net: number; tax: number; paid: number; pending: number
+}
+export type IssueProperty = { id: string; name: string | null; known: boolean; active?: boolean; status_original?: string; building?: string | null; city?: string | null; category?: string }
+export type ReservationIssueReview = { by: string | null; at: string; note: string | null }
+type IssueBase = { key: string; current: boolean; review: ReservationIssueReview | null; property: IssueProperty }
+export type ReservationIssues = {
+  batch: { id: number; created_at: string } | null
+  overlap: (IssueBase & { reservations: IssueReservation[]; overlap_start: string; overlap_end: string; nights: number })[]
+  amounts: (IssueBase & { reservation: IssueReservation; balance_difference: number | null; tax_difference: number | null })[]
+  inactive: (IssueBase & { reservation: IssueReservation })[]
+  unknown: (IssueBase & { reservation: IssueReservation })[]
+  counts: Record<ReservationIssueKind, { total: number; current: number; pending: number }>
+}
 export type NotificationSeverity = 'critical' | 'action' | 'info'
 export type NotificationCounts = { unread: number; by_severity: Record<NotificationSeverity, number> }
 export type AppNotification = {
@@ -94,10 +111,10 @@ export type NotificationPreference = { kind: string; label: string; severity: No
 export type Summary = { pending: number; delivery_unknown: number; bookings: number; last_import_at: string | null; last_import_rows: number; notifications?: NotificationCounts }
 export type ImportIssue = { code: string; customer_id?: string; field?: string; locator?: string; property_id?: string; source_row?: number; source_batch_id?: number | null; locators?: string[] }
 export type ImportChange = { key: string; kind: string; fields?: string[] }
-export type ImportBatch = { id: number; dataset: string; filename: string; source: string; status: string; rows: number; error: string | null; created_at: string; actor_user_id: number | null; parser_version: string | null; warning_count: number; change_count: number }
-export type ImportDetail = ImportBatch & { checksum: string; warnings: ImportIssue[]; changes: ImportChange[] }
+export type ImportBatch = { id: number; dataset: string; filename: string; source: string; status: string; rows: number; error: string | null; created_at: string; actor_user_id: number | null; parser_version: string | null; warning_count: number; repair_count?: number; change_count: number }
+export type ImportDetail = ImportBatch & { checksum: string; warnings: ImportIssue[]; repairs?: ImportIssue[]; changes: ImportChange[] }
 export type ReservationCoverage = { first_arrival: string; last_departure: string; first_created: string | null; last_created: string | null; effective_rows?: number }
-export type ImportPreview = { dataset: string; checksum: string; rows: number; effective_rows: number; carried_rows: number; duplicate_of: number | null; coverage: ReservationCoverage | null; warnings: ImportIssue[]; changes: ImportChange[] }
+export type ImportPreview = { dataset: string; checksum: string; rows: number; effective_rows: number; carried_rows: number; duplicate_of: number | null; coverage: ReservationCoverage | null; warnings: ImportIssue[]; repairs?: ImportIssue[]; changes: ImportChange[] }
 export type Property = { id: string; name: string; capacity: number; active: boolean; category: string; building: string | null; city: string | null; address: string | null; status_original: string; source_row: number; batch_id: number }
 export type TariffSeason = { rate_plan: string; start_date: string; end_date: string; nightly_rate: string }
 export type TariffGroup = { name: string; seasons: TariffSeason[] }

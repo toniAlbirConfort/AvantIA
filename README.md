@@ -138,6 +138,18 @@ Un administrador puede cambiar cualquier precio con su motivo, guardar notas y *
 
 API: `GET|POST /api/tariff-lab/market-observations`, `DELETE /api/tariff-lab/market-observations/{id}`, `GET|POST /api/tariff-lab/projections`, `GET|PATCH|DELETE /api/tariff-lab/projections/{id}`, `POST /api/tariff-lab/projections/{id}/apply` y `GET /api/tariff-lab/projections/{id}/tariffs.csv`. Crear, cambiar, aplicar y borrar requiere administrador; los operadores consultan y descargan.
 
+## Incidencias de reservas
+
+La vista **Reservas → Incidencias** (`/reservation-issues`) reúne lo que conviene revisar en los datos de Avantio, recalculado sobre la última importación de reservas con las mismas reglas que el importador. Cada tipo tiene su pestaña:
+
+- **Posibles dobles reservas:** dos reservas que bloquean el mismo apartamento comparten noches. Cada caso muestra una línea de tiempo con la zona solapada resaltada, la comparación de las dos reservas y un enlace al Planning en esas fechas.
+- **Saldos descuadrados:** en estancias vendidas, el total no coincide con pagado + pendiente (o con neto + impuestos). Resume lo cobrado de más y lo que falta por cobrar, y compara cada reserva con una barra.
+- **Apartamentos inactivos** y **Apartamentos sin catálogo:** reservas futuras en apartamentos dados de baja o desconocidos, agrupadas por apartamento con su línea de tiempo.
+
+Por defecto se ven las vigentes y futuras; el histórico está en «Todo, incluido histórico». Una incidencia marcada como revisada (con nota opcional) se sigue viendo, pero deja de contar en los avisos. API: `GET /api/reservation-issues`, `POST /api/reservation-issues/review` (`key`, `note`) y `POST /api/reservation-issues/unreview` (`key`).
+
+En las importaciones, lo que el importador corrige con certeza (por ejemplo, un «;» en las observaciones de un cliente que desplaza las columnas) aparece como **reparación automática**: queda registrado en el detalle de la importación, pero no cuenta como incidencia ni genera avisos.
+
 ## Informes
 
 La vista **Informes** reúne, del más reciente al más antiguo, los informes HTML preparados con Claude y los estudios completos o parciales del Laboratorio de tarifas. Los informes HTML se abren en modo lectura a pantalla completa (Esc o «Volver a Informes» para salir), dentro de un visor aislado, sin scripts ni acceso a la sesión; los estudios enlazan a su PDF y al laboratorio. Los administradores añaden informes subiendo el archivo HTML (máximo 5 MB, UTF-8) y pueden borrarlos; los operadores los consultan.
@@ -170,7 +182,10 @@ El worker reevalúa las condiciones cada 30 segundos. Los avisos se resuelven so
 | Autorespuesta fallida o copia en Enviados fallida (suma ocurrencias) | Requiere acción | Admin | Se descarta a mano |
 | Conversaciones con la clasificación por revisar (últimos 7 días, un solo aviso con el recuento; cita las más recientes y «Abrir» filtra la bandeja por «Revisión pendiente» y esa fecha) | Informativo | Todos | No queda ninguna por revisar |
 | Estudio de tarifas completado o parcial / fallido (últimas 24 h) | Informativo / Crítico | Admin | Se descarta a mano |
-| Última importación válida de un conjunto de datos con advertencias (uno por conjunto) | Informativo | Admin | Una importación posterior llega sin advertencias |
+| Última importación válida de alojamientos o clientes con advertencias (uno por conjunto; las reparaciones automáticas no cuentan) | Informativo | Admin | Una importación posterior llega sin advertencias |
+| Posible doble reserva vigente o futura (una por solapamiento; «Abrir» lleva a su tarjeta en Incidencias) | Requiere acción | Todos | Se corrige en Avantio o se marca como revisada |
+| Reservas vigentes o futuras con importes descuadrados (un aviso con el recuento) | Informativo | Admin | Se corrigen en Avantio o se marcan como revisadas |
+| Reservas futuras en apartamentos inactivos o sin catálogo (un aviso por tipo) | Informativo / Requiere acción | Admin | Se corrigen en Avantio o se marcan como revisadas |
 | Trabajo interrumpido y recuperado por el worker (uno por tipo, suma ocurrencias) | Requiere acción | Admin | Se descarta a mano |
 | Mantenimiento: purga de WhatsApp o enmascarado de datos de pago (últimas 24 h) | Informativo | Admin | Se descarta a mano |
 

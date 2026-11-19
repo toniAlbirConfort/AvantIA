@@ -21,8 +21,8 @@ function dateParts(value: string) {
     monthYear: new Intl.DateTimeFormat('es-ES', { month: 'short', year: 'numeric', timeZone: 'UTC' }).format(date).replace('.', ''),
   }
 }
-const stateLabel: Record<string, string> = { confirmed: 'Confirmada', pre_reservation: 'Prereserva', paid: 'Pagada', unavailable: 'Bloqueado', stop_sell: 'StopSell', owner: 'De propietario', inquiry: 'Bajo petición', cancelled: 'Cancelada' }
-const stateStyle: Record<string, string> = {
+export const stateLabel: Record<string, string> = { confirmed: 'Confirmada', pre_reservation: 'Prereserva', paid: 'Pagada', unavailable: 'Bloqueado', stop_sell: 'StopSell', owner: 'De propietario', inquiry: 'Bajo petición', cancelled: 'Cancelada' }
+export const stateStyle: Record<string, string> = {
   confirmed: 'bg-plan-confirmada text-plan-confirmada-ink', paid: 'bg-plan-pagada text-plan-pagada-ink',
   pre_reservation: 'bg-plan-prereserva text-plan-prereserva-ink', owner: 'bg-plan-propietario text-plan-propietario-ink',
   unavailable: 'bg-plan-bloqueado text-plan-bloqueado-ink', stop_sell: 'bg-plan-stopsell text-plan-stopsell-ink',
@@ -39,11 +39,11 @@ const legendItems = [
   { label: 'Bajo petición', color: 'bg-plan-peticion' },
 ]
 
-export function Planning() {
+export function Planning({ initialStart, initialEnd, initialSearch }: { initialStart?: string; initialEnd?: string; initialSearch?: string } = {}) {
   const today = useMemo(() => isoDate(new Date()), [])
-  const [start, setStart] = useState(today)
-  const [end, setEnd] = useState(addDays(today, 60))
-  const [search, setSearch] = useState('')
+  const [start, setStart] = useState(initialStart || today)
+  const [end, setEnd] = useState(initialEnd || addDays(initialStart || today, 60))
+  const [search, setSearch] = useState(initialSearch || '')
   const [data, setData] = useState<PlanningData | null>(null)
   const [selected, setSelected] = useState<PlanningBar | null>(null)
   const [error, setError] = useState('')

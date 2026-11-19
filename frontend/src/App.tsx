@@ -1,13 +1,14 @@
 import { DragEvent, FormEvent, useCallback, useEffect, useRef, useState } from 'react'
 import { api, setToken, token } from './api'
 import { Planning } from './Planning'
+import { ReservationIssues, type PlanningTarget } from './ReservationIssues'
 import { ImportHistory, SourceImportForm } from './SourceImports'
 import { Reservations } from './Reservations'
 import { Customers } from './Customers'
 import { CustomerRetention } from './CustomerRetention'
 import { Tariffs } from './Tariffs'
 import type { ClassificationLabel, Conversation, InboxResponse, InboxThread, ImportBatch, Message, Property, Summary, User } from './types'
-import { ArrowLeft, ArrowRight, Bell, CalendarDays, ChartColumn, CalendarRange, Cable, ChevronDown, ClipboardList, Contact, FileText, FlaskConical, HeartHandshake, House, Inbox, LayoutDashboard, LogOut, Menu, RefreshCw, Reply, Search, Settings, Tag, Upload, Users, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Bell, TriangleAlert, CalendarDays, ChartColumn, CalendarRange, Cable, ChevronDown, ClipboardList, Contact, FileText, FlaskConical, HeartHandshake, House, Inbox, LayoutDashboard, LogOut, Menu, RefreshCw, Reply, Search, Settings, Tag, Upload, Users, X } from 'lucide-react'
 import { EmailPreviewDialog } from './EmailPreviewDialog'
 import { AutoReplyCard, type AutoReplyStatus } from './AutoReplyCard'
 import { EmailMessageContent } from './EmailMessageContent'
@@ -32,12 +33,13 @@ import { Analysis } from './Analysis'
 import { Reports } from './Reports'
 import { Notifications } from './Notifications'
 
-type View = 'notifications' | 'reservations' | 'customers' | 'customer-retention' | 'analysis' | 'summary' | 'inbox' | 'bookings' | 'properties' | 'tariffs' | 'tariff-lab' | 'reports' | 'planning' | 'imports' | 'integrations' | 'users'
+type View = 'reservation-issues' | 'notifications' | 'reservations' | 'customers' | 'customer-retention' | 'analysis' | 'summary' | 'inbox' | 'bookings' | 'properties' | 'tariffs' | 'tariff-lab' | 'reports' | 'planning' | 'imports' | 'integrations' | 'users'
 const navigation: { id: View; label: string; icon: typeof LayoutDashboard }[] = [
   { id: 'reservations', label: 'Reservas', icon: CalendarDays },
   { id: 'customers', label: 'Directorio', icon: Contact },
   { id: 'customer-retention', label: 'A recuperar', icon: HeartHandshake },
   { id: 'planning', label: 'Planning', icon: CalendarRange },
+  { id: 'reservation-issues', label: 'Incidencias', icon: TriangleAlert },
   { id: 'analysis', label: 'Análisis', icon: ChartColumn },
   { id: 'tariffs', label: 'Tarifas', icon: Tag },
   { id: 'tariff-lab', label: 'Laboratorio de tarifas', icon: FlaskConical },
@@ -54,7 +56,7 @@ const navigation: { id: View; label: string; icon: typeof LayoutDashboard }[] = 
 // The side menu lists sections; each section shows its views as tabs. Views keep their own URL.
 type SectionId = 'reservations' | 'customers' | 'communication' | 'performance' | 'notifications' | 'settings'
 const sections: { id: SectionId; label: string; icon: typeof LayoutDashboard; views: View[] }[] = [
-  { id: 'reservations', label: 'Reservas', icon: CalendarDays, views: ['reservations', 'planning', 'properties'] },
+  { id: 'reservations', label: 'Reservas', icon: CalendarDays, views: ['reservations', 'planning', 'reservation-issues', 'properties'] },
   { id: 'customers', label: 'Clientes', icon: Contact, views: ['customers', 'customer-retention'] },
   { id: 'communication', label: 'Comunicación', icon: Inbox, views: ['inbox', 'bookings', 'summary'] },
   { id: 'performance', label: 'Rendimiento', icon: ChartColumn, views: ['analysis', 'tariffs', 'tariff-lab', 'reports'] },
@@ -481,7 +483,14 @@ export default function App() {
     setComposerOpen(false)
     if (id) { setDetail(null); setDirectId(id) }
     navigate(next, id)
+    // Other views read their own parameters (e.g. /reservation-issues?tab=overlap&issue=...).
+    if (!id && next !== 'inbox' && url.search) window.history.replaceState({}, '', `${url.pathname}${url.search}`)
     if (id) api<Conversation>(`/api/conversations/${id}`).then(setDetail).catch(err => setError((err as Error).message))
+  }
+  const planningQuery = new URLSearchParams(view === 'planning' ? window.location.search : '')
+  const openPlanning = (target: PlanningTarget) => {
+    navigate('planning')
+    window.history.replaceState({}, '', `/planning?${new URLSearchParams({ start: target.start, end: target.end, q: target.search })}`)
   }
   const section = navigation.find(item => item.id === view)?.label || 'Reservas'
   // These views draw their own full-width heading.
@@ -570,7 +579,7 @@ export default function App() {
           <Button type="button" variant="ghost" size="icon" className="relative text-white hover:bg-white/10 hover:text-white" onClick={() => navigate('notifications')} aria-label={unreadNotifications ? `Avisos: ${unreadNotifications} sin leer` : 'Avisos'}><Bell size={20} />{!!unreadNotifications && <span className={`absolute right-1 top-1 min-w-4 rounded-full px-1 text-[0.6rem] font-semibold leading-4 ${criticalNotifications ? 'bg-error-bg text-error-ink' : 'bg-white text-brand-charcoal'}`} aria-hidden="true">{unreadNotifications}</span>}</Button>
         </header>
         <main className={`mx-auto w-full ${ownHeader ? 'max-w-none px-4 py-5 sm:px-6 lg:px-8' : 'max-w-screen-2xl px-4 py-6 sm:px-6 lg:px-10 lg:py-9'}`}>
-        {!ownHeader && <div className="mb-6 flex flex-wrap items-end justify-between gap-4"><div><p className="mb-2 text-xs font-semibold uppercase tracking-wide text-primary">TU ESPACIO DE HOSPITALIDAD <span className="px-1 text-muted-foreground">/</span> {activeSection.label.toUpperCase()}{activeSection.label !== section && <><span className="px-1 text-muted-foreground">/</span> {section.toUpperCase()}</>}</p><h1 className="mb-2 text-3xl font-semibold leading-tight sm:text-4xl">{section}</h1><p className="max-w-3xl text-sm leading-6 text-muted-foreground">{view === 'summary' ? 'Cada conversación, en su sitio. La atención empieza aquí.' : view === 'inbox' ? 'Lee el contexto, revisa el borrador y decide cómo responder.' : view === 'bookings' ? 'Prerreservas que necesitan una mirada y seguimiento humano.' : view === 'imports' ? 'Fuentes y disponibilidad, siempre con su origen a la vista.' : view === 'planning' ? 'Una vista clara de las estancias y los huecos disponibles.' : view === 'tariffs' ? 'Consulta los importes por temporada y grupo tarifario.' : view === 'tariff-lab' ? 'Contrasta el histórico, los precios de mercado y los festivos antes de preparar una propuesta.' : view === 'analysis' ? 'Compara los años sobre el listado de reservas importado y detecta qué ha cambiado.' : view === 'reports' ? 'Los informes preparados con Claude y los generados por AvantIA, del más reciente al más antiguo.' : view === 'notifications' ? 'Lo que está pasando en AvantIA y lo que necesita tu atención, ordenado por gravedad.' : 'La información operativa de AvantIA, reunida con cuidado.'}</p></div><Button variant="outline" onClick={() => view === 'tariffs' || view === 'tariff-lab' ? setTariffRefreshVersion(version => version + 1) : view === 'analysis' ? setAnalysisRefreshVersion(version => version + 1) : view === 'reports' ? setReportsRefreshVersion(version => version + 1) : void refresh()} disabled={busy}><RefreshCw size={15} /> {view === 'tariffs' || view === 'tariff-lab' ? 'Actualizar tarifas' : 'Actualizar'}</Button></div>}
+        {!ownHeader && <div className="mb-6 flex flex-wrap items-end justify-between gap-4"><div><p className="mb-2 text-xs font-semibold uppercase tracking-wide text-primary">TU ESPACIO DE HOSPITALIDAD <span className="px-1 text-muted-foreground">/</span> {activeSection.label.toUpperCase()}{activeSection.label !== section && <><span className="px-1 text-muted-foreground">/</span> {section.toUpperCase()}</>}</p><h1 className="mb-2 text-3xl font-semibold leading-tight sm:text-4xl">{section}</h1><p className="max-w-3xl text-sm leading-6 text-muted-foreground">{view === 'summary' ? 'Cada conversación, en su sitio. La atención empieza aquí.' : view === 'inbox' ? 'Lee el contexto, revisa el borrador y decide cómo responder.' : view === 'bookings' ? 'Prerreservas que necesitan una mirada y seguimiento humano.' : view === 'imports' ? 'Fuentes y disponibilidad, siempre con su origen a la vista.' : view === 'planning' ? 'Una vista clara de las estancias y los huecos disponibles.' : view === 'tariffs' ? 'Consulta los importes por temporada y grupo tarifario.' : view === 'tariff-lab' ? 'Contrasta el histórico, los precios de mercado y los festivos antes de preparar una propuesta.' : view === 'analysis' ? 'Compara los años sobre el listado de reservas importado y detecta qué ha cambiado.' : view === 'reports' ? 'Los informes preparados con Claude y los generados por AvantIA, del más reciente al más antiguo.' : view === 'notifications' ? 'Lo que está pasando en AvantIA y lo que necesita tu atención, ordenado por gravedad.' : view === 'reservation-issues' ? 'Dobles reservas, saldos descuadrados y apartamentos inactivos en los datos de Avantio.' : 'La información operativa de AvantIA, reunida con cuidado.'}</p></div><Button variant="outline" onClick={() => view === 'tariffs' || view === 'tariff-lab' ? setTariffRefreshVersion(version => version + 1) : view === 'analysis' ? setAnalysisRefreshVersion(version => version + 1) : view === 'reports' ? setReportsRefreshVersion(version => version + 1) : void refresh()} disabled={busy}><RefreshCw size={15} /> {view === 'tariffs' || view === 'tariff-lab' ? 'Actualizar tarifas' : 'Actualizar'}</Button></div>}
         {readOnlyMode && !ownHeader && <Alert variant="info" role="status" className="mb-5 flex flex-wrap items-center gap-x-4 gap-y-1"><strong className="text-xs">MODO DESARROLLO · SOLO LECTURA</strong><span>IMAP se consulta sin modificar correos. Los envíos de email y WhatsApp están bloqueados.</span></Alert>}
         {error && <Alert variant="destructive" className="mb-5 flex items-center justify-between gap-4"><span>{error}</span><Button variant="ghost" size="icon" onClick={() => setError('')} aria-label="Cerrar aviso"><X size={16} /></Button></Alert>}
         <EmailPreviewDialog message={expandedEmail} fallbackSubject={detail?.subject} onClose={() => setExpandedEmail(null)} />
@@ -656,7 +665,8 @@ export default function App() {
               ? <Empty>No hay alojamientos con esos filtros. <Button type="button" variant="link" onClick={clearPropertyFilters}>Restablecer filtros</Button></Empty>
               : <div className="max-w-full overflow-auto"><Table><TableHeader><TableRow><TableHead>ID</TableHead><TableHead>Alojamiento</TableHead><TableHead>Estado</TableHead><TableHead>Clase</TableHead><TableHead>Capacidad</TableHead><TableHead>Edificio / ubicación</TableHead></TableRow></TableHeader><TableBody>{filteredProperties.map(item => <TableRow key={item.id}><TableCell>{item.id}</TableCell><TableCell>{item.name}</TableCell><TableCell>{item.active ? 'Activo' : 'Inactivo'}</TableCell><TableCell>{item.category}</TableCell><TableCell>{item.capacity} plazas</TableCell><TableCell>{[item.building, item.city, item.address].filter(Boolean).join(' · ') || '—'}</TableCell></TableRow>)}</TableBody></Table></div>}
         </Card>}
-        {view === 'planning' && <Planning />}
+        {view === 'planning' && <Planning key={planningQuery.toString()} initialStart={planningQuery.get('start') || undefined} initialEnd={planningQuery.get('end') || undefined} initialSearch={planningQuery.get('q') || undefined} />}
+        {view === 'reservation-issues' && <ReservationIssues onOpenPlanning={openPlanning} onChanged={() => void refresh()} />}
         {view === 'analysis' && <Analysis refreshVersion={analysisRefreshVersion} />}
         {view === 'tariffs' && <Tariffs refreshVersion={tariffRefreshVersion} />}
         {view === 'tariff-lab' && <TariffLab role={user.role} refreshVersion={tariffRefreshVersion} />}
