@@ -85,6 +85,7 @@ from app.models import (
     now,
 )
 from app.analytics import reservation_analysis
+from app.retention import retention_csv, retention_view
 from app import notifications
 from app.planning import (
     DATASETS,
@@ -1744,6 +1745,68 @@ def customers(
     limit: int = Query(default=40, ge=1, le=100),
 ) -> dict:
     return customers_view(db, q=q, offset=offset, limit=limit)
+
+
+def _retention(db: Session, **filters) -> dict:
+    try:
+        return retention_view(db, **filters)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/api/customers/retention")
+def customers_retention(
+    db: Db,
+    user: Operator,
+    target_year: int | None = Query(default=None, ge=2000, le=2100),
+    base_years: Annotated[list[int] | None, Query()] = None,
+    min_stays: int = Query(default=1, ge=1, le=20),
+    channel: str | None = Query(default=None, max_length=40),
+    contact: Literal["any", "email", "phone", "opt_in"] = "any",
+    q: str = Query(default="", max_length=150),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=100),
+) -> dict:
+    return _retention(
+        db, target_year=target_year, base_years=base_years, min_stays=min_stays,
+        channel=channel, contact=contact, q=q, offset=offset, limit=limit,
+    )
+
+
+@app.get("/api/customers/retention.csv")
+def customers_retention_csv(
+    db: Db,
+    user: Operator,
+    target_year: int | None = Query(default=None, ge=2000, le=2100),
+    base_years: Annotated[list[int] | None, Query()] = None,
+    min_stays: int = Query(default=1, ge=1, le=20),
+    channel: str | None = Query(default=None, max_length=40),
+    contact: Literal["any", "email", "phone", "opt_in"] = "any",
+    q: str = Query(default="", max_length=150),
+) -> Response:
+    result = _retention(
+        db, target_year=target_year, base_years=base_years, min_stays=min_stays,
+        channel=channel, contact=contact, q=q, offset=0, limit=1_000_000,
+    )
+    # The file carries contact data, so who exported it and with which filters is audited.
+    db.add(AuditEvent(
+        actor_user_id=user.id, action="customers.retention_exported",
+        detail={
+            "rows": result["total"], "target_year": result["target_year"],
+            "base_years": result["base_years"], "min_stays": min_stays,
+            "channel": channel, "contact": contact, "q": bool(q),
+        },
+    ))
+    db.commit()
+    return Response(
+        content=retention_csv(result["items"]),
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="clientes-a-recuperar-{result["target_year"]}.csv"'
+            )
+        },
+    )
 
 
 @app.get("/api/customers/{avantio_id}")
