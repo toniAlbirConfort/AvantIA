@@ -38,6 +38,8 @@ export function CustomerRetention({ onImport }: { onImport: () => void }) {
   const currentYear = new Date().getFullYear()
   const yearOptions = Array.from({ length: YEARS_BACK }, (_, index) => currentYear - YEARS_BACK + index)
   const [baseYears, setBaseYears] = useState<number[]>([currentYear - 3, currentYear - 2, currentYear - 1])
+  // Clicking several years in a row sends one request, once the selection settles.
+  const [requestedYears, setRequestedYears] = useState<number[]>(baseYears)
   const [minStays, setMinStays] = useState('1')
   const [channel, setChannel] = useState('')
   const [contact, setContact] = useState<Contact>('any')
@@ -58,16 +60,21 @@ export function CustomerRetention({ onImport }: { onImport: () => void }) {
     return () => window.clearTimeout(timer)
   }, [search])
 
+  useEffect(() => {
+    const timer = window.setTimeout(() => setRequestedYears(baseYears), 400)
+    return () => window.clearTimeout(timer)
+  }, [baseYears])
+
   const parameters = useCallback((offset: number) => {
     const params = new URLSearchParams({ target_year: String(currentYear), min_stays: minStays, contact, offset: String(offset), limit: String(PAGE_SIZE) })
-    baseYears.forEach(year => params.append('base_years', String(year)))
+    requestedYears.forEach(year => params.append('base_years', String(year)))
     if (channel) params.set('channel', channel)
     if (query) params.set('q', query)
     return params
-  }, [currentYear, baseYears, minStays, channel, contact, query])
+  }, [currentYear, requestedYears, minStays, channel, contact, query])
 
   useEffect(() => {
-    if (!baseYears.length) return
+    if (!requestedYears.length) return
     const version = ++requestVersion.current
     setLoading(true); setError('')
     api<RetentionResponse>(`/api/customers/retention?${parameters(0)}`)
@@ -75,7 +82,7 @@ export function CustomerRetention({ onImport }: { onImport: () => void }) {
       .catch(err => { if (version === requestVersion.current) setError((err as Error).message) })
       .finally(() => { if (version === requestVersion.current) setLoading(false) })
     return () => { requestVersion.current += 1 }
-  }, [parameters, baseYears.length, retryKey])
+  }, [parameters, requestedYears.length, retryKey])
 
   async function loadMore() {
     if (!data || loadingMore || data.items.length >= data.total) return
@@ -109,6 +116,7 @@ export function CustomerRetention({ onImport }: { onImport: () => void }) {
     setSelected({ avantio_id: item.avantio_id, display_name: item.display_name, email: item.email, phone: item.phone, country: item.country, document_number: null, customer_class: null })
   }
 
+  const updating = loading || requestedYears.join() !== baseYears.join() || search.trim() !== query
   const yearsLabel = baseYears.length ? baseYears.join(', ') : 'ningún año'
   const filtersChanged = minStays !== '1' || !!channel || contact !== 'any' || !!search
 
@@ -143,7 +151,9 @@ export function CustomerRetention({ onImport }: { onImport: () => void }) {
     {!baseYears.length && <Alert variant="info" role="status">Elige al menos un año de referencia.</Alert>}
     {error && <Alert variant="destructive" className="flex items-center justify-between gap-4"><span>{error}</span><Button type="button" variant="outline" size="sm" onClick={() => setRetryKey(value => value + 1)}>Reintentar</Button></Alert>}
 
-    {data && data.has_snapshot && baseYears.length > 0 && <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+    {data && data.has_snapshot && baseYears.length > 0 && updating && <p role="status" className="-mb-2 flex items-center gap-2 text-sm font-medium text-info-ink"><RefreshCw size={15} aria-hidden="true" className="animate-spin motion-reduce:animate-none" />Actualizando resultados…</p>}
+
+    {data && data.has_snapshot && baseYears.length > 0 && <div aria-busy={updating} className={`grid grid-cols-2 gap-3 transition-opacity motion-reduce:transition-none xl:grid-cols-4 ${updating ? 'opacity-50' : ''}`}>
       <Metric label="Huéspedes" value={data.summary.guests} detail={`Sin reserva en ${currentYear}`} />
       <Metric label="Con ficha única" value={data.summary.linked} detail="Enlazados a un cliente" />
       <Metric label="Con email" value={data.summary.with_email} detail="Se les puede escribir" />
@@ -163,7 +173,7 @@ export function CustomerRetention({ onImport }: { onImport: () => void }) {
         <span>Huésped</span><span>Historial</span><span>Última estancia</span><span>Canal</span><span>Contacto</span>
       </div>
       {data.items.length === 0 && !loading && <Card className="px-5 py-10 text-center text-sm text-muted-foreground">Ningún huésped cumple estos filtros.</Card>}
-      <ul className={`grid gap-2 transition-opacity motion-reduce:transition-none ${loading ? 'opacity-60' : ''}`} aria-label="Clientes a recuperar">
+      <ul aria-busy={updating} className={`grid gap-2 transition-opacity motion-reduce:transition-none ${updating ? 'opacity-50' : ''}`} aria-label="Clientes a recuperar">
         {data.items.map(item => {
           const match = matchLabels[item.match]
           const linked = item.match === 'exact' && !!item.avantio_id
