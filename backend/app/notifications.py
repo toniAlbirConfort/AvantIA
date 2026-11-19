@@ -63,7 +63,7 @@ KINDS: dict[str, KindSpec] = {
     "job.failed": KindSpec("critical", "admin", "Trabajo en segundo plano"),
     "delivery.unknown": KindSpec("critical", "admin", "Envío incierto"),
     "inbox.overdue": KindSpec("action", "all", "Consultas sin responder"),
-    "booking.created": KindSpec("action", "all", "Prerreserva nueva"),
+    "booking.created": KindSpec("action", "all", "Prerreservas"),
     "registration.unregistered": KindSpec("action", "all", "Consulta sin registrar"),
     "import.invalid": KindSpec("action", "admin", "Importación inválida"),
 }
@@ -354,24 +354,28 @@ def _watch_overdue(db: Session, at: datetime) -> None:
 
 
 def _watch_bookings(db: Session, at: datetime) -> None:
-    rows = db.execute(
-        select(BookingTask.id, BookingTask.conversation_id).where(
-            BookingTask.status == "open", BookingTask.created_at >= at - BOOKING_WINDOW
+    """One notification with the count of open prerreservas from the last days.
+
+    The key carries the newest prerreserva of the window (open or not), so a new one reopens
+    the notice even after a dismissal, while closing prerreservas only updates the count.
+    """
+    since = at - BOOKING_WINDOW
+    count = db.scalar(
+        select(func.count(BookingTask.id)).where(
+            BookingTask.status == "open", BookingTask.created_at >= since
         )
-    ).all()
-    _sync_set(
-        db,
-        "booking.created",
-        {
-            f"booking.created:{id}": (
-                f"Prerreserva nueva en la conversación #{conversation_id}",
-                "Llegó un correo de un dominio de reservas. Compruébala en Avantio.",
-                f"/bookings/{conversation_id}",
-            )
-            for id, conversation_id in rows
-        },
-        at,
     )
+    wanted = {}
+    if count:
+        newest = db.scalar(select(func.max(BookingTask.id)).where(BookingTask.created_at >= since))
+        wanted[f"booking.open:{newest}"] = (
+            f"{count} prerreserva{'s' if count != 1 else ''} pendiente"
+            f"{'s' if count != 1 else ''} de revisar",
+            "Llegaron desde dominios de reservas en los últimos 7 días. Compruébalas en "
+            "Avantio y ciérralas en Prerreservas.",
+            "/bookings",
+        )
+    _sync_set(db, "booking.created", wanted, at)
 
 
 def _watch_registration(db: Session, at: datetime) -> None:

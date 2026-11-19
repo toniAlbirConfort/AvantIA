@@ -160,17 +160,56 @@ def test_scan_aggregates_overdue_consultations(db):
     assert active(db, "inbox.overdue") is None
 
 
-def test_scan_raises_new_bookings_until_closed(db):
+def add_booking(db, created_at=NOW):
     conv, message = add_conversation(db, kind="booking")
-    task = BookingTask(conversation_id=conv.id, message_id=message.id, created_at=NOW)
+    task = BookingTask(conversation_id=conv.id, message_id=message.id, created_at=created_at)
     db.add(task)
     db.commit()
+    return task
+
+
+def open_bookings(db):
+    return db.scalars(
+        select(Notification).where(
+            Notification.kind == "booking.created", Notification.resolved_at.is_(None)
+        )
+    ).all()
+
+
+def test_scan_groups_open_bookings_in_one_notification(db):
+    first = add_booking(db)
+    second = add_booking(db)
+    add_booking(db, created_at=NOW - timedelta(days=10))  # outside the window
     notifications.scan(db, NOW)
-    assert active(db, f"booking.created:{task.id}").link == f"/bookings/{conv.id}"
-    task.status = "closed"
+    [item] = open_bookings(db)
+    assert item.title == "2 prerreservas pendientes de revisar"
+    assert item.link == "/bookings" and item.dedupe_key == f"booking.open:{second.id}"
+
+    second.status = "closed"
     db.commit()
     notifications.scan(db, NOW)
-    assert active(db, f"booking.created:{task.id}") is None
+    [same] = open_bookings(db)
+    assert same.id == item.id and same.title == "1 prerreserva pendiente de revisar"
+
+    first.status = "closed"
+    db.commit()
+    notifications.scan(db, NOW)
+    assert open_bookings(db) == [] and item.status == "resolved"
+
+
+def test_new_booking_reopens_a_dismissed_group(db):
+    add_booking(db)
+    notifications.scan(db, NOW)
+    [item] = open_bookings(db)
+    notifications.dismiss(db, add_user(db), item)
+    notifications.scan(db, NOW)
+    assert open_bookings(db)[0].status == "dismissed"
+
+    newest = add_booking(db)
+    notifications.scan(db, NOW)
+    [fresh] = open_bookings(db)
+    assert fresh.status == "open" and fresh.dedupe_key == f"booking.open:{newest.id}"
+    assert fresh.title.startswith("2 prerreservas")
 
 
 def test_scan_follows_registration_alerts(db):
