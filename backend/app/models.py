@@ -597,3 +597,34 @@ class ReservationIssueReview(Base):
     reviewed_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
     reviewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     note: Mapped[str | None] = mapped_column(String(300))
+
+
+class ReservationDetail(Base):
+    """Latest extra columns of the Avantio export for each reservation (one row per locator).
+
+    Kept apart from ReservationSnapshot so free text and contact data are stored once, not
+    copied by every import. Emails are only used to match email consultations; comments are
+    masked for payment data before storing. Document numbers, phones and birth dates are
+    never imported.
+    """
+
+    __tablename__ = "reservation_details"
+    locator: Mapped[str] = mapped_column(String(150), primary_key=True)
+    batch_id: Mapped[int | None] = mapped_column(ForeignKey("import_batches.id"))
+    rent_total: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    rent_net: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    rent_tax: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    extras_total: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    extras_net: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    extras_tax: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    commission: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    invoice_number: Mapped[str | None] = mapped_column(Text)
+    invoice_date: Mapped[date | None] = mapped_column(Date)
+    invoice_total: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    agent_locator: Mapped[str | None] = mapped_column(String(150))
+    comments: Mapped[str | None] = mapped_column(Text)
+    customer_avantio_id: Mapped[str | None] = mapped_column(String(40), index=True)
+    customer_email: Mapped[str | None] = mapped_column(String(255), index=True)
+    occupant_email: Mapped[str | None] = mapped_column(String(255), index=True)
+    handled_by: Mapped[str | None] = mapped_column(String(150))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)

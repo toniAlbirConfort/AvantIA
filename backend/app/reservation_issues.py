@@ -14,22 +14,36 @@ Kinds:
 
 from __future__ import annotations
 
+import re
 from datetime import date, datetime
 from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import PropertySnapshot, ReservationIssueReview, ReservationSnapshot, User, now
+from app.models import (
+    PropertySnapshot,
+    ReservationDetail,
+    ReservationIssueReview,
+    ReservationSnapshot,
+    User,
+    now,
+)
 from app.planning import (
     RESERVATION_FIELDS,
     _warnings,
     consolidated_reservations,
+    details_for,
     latest_source_batch,
 )
 
 KINDS = ("overlap", "amounts", "inactive", "unknown")
 NOTE_MAX = 300
+# A difference within this margin is explained (rounding in Avantio's percentage calculator).
+EXPLAIN_TOLERANCE = Decimal("1.00")
+PERCENT = r"([+-]?\s*\d{1,2}(?:[.,]\d{1,2})?)\s*%\s*(?:de\s+)?"
+COMMISSION_NOTE = re.compile(PERCENT + r"comisi", re.IGNORECASE)
+DISCOUNT_NOTE = re.compile(PERCENT + r"(?:dto|desc)", re.IGNORECASE)
 
 
 class ReservationIssueError(ValueError):
@@ -40,8 +54,9 @@ def _money(value: Decimal | None) -> float:
     return float(value or 0)
 
 
-def _reservation(row: ReservationSnapshot) -> dict:
+def _reservation(row: ReservationSnapshot, detail: ReservationDetail | None = None) -> dict:
     return {
+        **_detail_view(detail),
         "locator": row.locator,
         "property_id": row.property_id,
         "status": row.status,
@@ -59,6 +74,71 @@ def _reservation(row: ReservationSnapshot) -> dict:
         "paid": _money(row.paid),
         "pending": _money(row.pending),
     }
+
+
+def _detail_view(detail: ReservationDetail | None) -> dict:
+    """Context from the extra export columns (never emails: they are only for matching)."""
+    if detail is None:
+        return {"comments": None, "handled_by": None, "agent_locator": None}
+    return {
+        "comments": detail.comments,
+        "handled_by": detail.handled_by,
+        "agent_locator": detail.agent_locator,
+        "commission": _money(detail.commission) if detail.commission else None,
+        "extras_total": _money(detail.extras_total) if detail.extras_total else None,
+        "invoice_total": _money(detail.invoice_total) if detail.invoice_total else None,
+        "invoice_number": detail.invoice_number,
+    }
+
+
+def _percentages(pattern: re.Pattern, text: str | None) -> list[Decimal]:
+    found = []
+    for value in pattern.findall(text or ""):
+        try:
+            found.append(abs(Decimal(value.replace(" ", "").replace(",", "."))))
+        except ArithmeticError:
+            continue
+    return [value for value in dict.fromkeys(found) if 0 < value < 100]
+
+
+def explain_balance(row: ReservationSnapshot, detail: ReservationDetail | None) -> dict | None:
+    """Why paid + pending differs from the total, when the export says so with certainty.
+
+    Avantio's pending amount is what the customer pays; when the channel's commission is
+    entered as an offer, the total is what is left after it. Checked in this order: the
+    commission column, then a percentage noted in the comments ("+18% COMISION",
+    "11% DTO"), then extras.
+    """
+    if detail is None:
+        return None
+    asked, total = row.paid + row.pending, row.total
+
+    def close(a: Decimal, b: Decimal) -> bool:
+        return abs(a - b) <= EXPLAIN_TOLERANCE
+
+    if detail.commission and close(asked - detail.commission, total):
+        return {
+            "source": "commission",
+            "text": f"Comisión del canal registrada en Avantio ({detail.commission:.2f} €)",
+        }
+    for value in _percentages(COMMISSION_NOTE, detail.comments):
+        if close(asked * (1 - value / 100), total):
+            return {
+                "source": "comment_commission",
+                "text": f"Comisión del {value.normalize():f} % anotada en los comentarios",
+            }
+    for value in _percentages(DISCOUNT_NOTE, detail.comments):
+        if close(asked * (1 - value / 100), total) or close(total * (1 - value / 100), asked):
+            return {
+                "source": "comment_discount",
+                "text": f"Descuento del {value.normalize():f} % anotado en los comentarios",
+            }
+    if detail.extras_total and close(asked, total + detail.extras_total):
+        return {
+            "source": "extras",
+            "text": f"Extras de {detail.extras_total:.2f} € fuera del total",
+        }
+    return None
 
 
 def _property(row: PropertySnapshot | None, property_id: str) -> dict:
@@ -126,6 +206,10 @@ def collect(db: Session, today: date | None = None) -> dict:
     )
     reviews = _reviews(db)
     result = _empty(batch)
+    referenced = set()
+    for warning in warnings:
+        referenced.update(warning.get("locators") or [warning.get("locator")])
+    details = details_for(db, referenced - {None})
 
     amounts: dict[str, dict] = {}
     for warning in warnings:
@@ -143,7 +227,10 @@ def collect(db: Session, today: date | None = None) -> dict:
                     "property": _property(
                         by_property.get(warning["property_id"]), warning["property_id"]
                     ),
-                    "reservations": [_reservation(first), _reservation(second)],
+                    "reservations": [
+                        _reservation(first, details.get(first.locator)),
+                        _reservation(second, details.get(second.locator)),
+                    ],
                     "overlap_start": start,
                     "overlap_end": end,
                     "nights": (end - start).days,
@@ -159,15 +246,17 @@ def collect(db: Session, today: date | None = None) -> dict:
                 row.locator,
                 {
                     "key": f"amounts:{row.locator}",
-                    "reservation": _reservation(row),
+                    "reservation": _reservation(row, details.get(row.locator)),
                     "property": _property(by_property.get(row.property_id), row.property_id),
                     "balance_difference": None,
                     "tax_difference": None,
+                    "explanation": None,
                     "current": row.end_date >= today,
                 },
             )
             if code == "balance_mismatch":
                 item["balance_difference"] = _money(row.paid + row.pending - row.total)
+                item["explanation"] = explain_balance(row, details.get(row.locator))
             else:
                 item["tax_difference"] = _money(row.net + row.tax - row.total)
         elif code in {"inactive_property", "unknown_property"}:
@@ -175,7 +264,7 @@ def collect(db: Session, today: date | None = None) -> dict:
             result[kind].append(
                 {
                     "key": f"{kind}:{row.locator}",
-                    "reservation": _reservation(row),
+                    "reservation": _reservation(row, details.get(row.locator)),
                     "property": _property(by_property.get(row.property_id), row.property_id),
                     "current": row.end_date >= today,
                 }
@@ -190,7 +279,8 @@ def collect(db: Session, today: date | None = None) -> dict:
         result["counts"][kind] = {
             "total": len(items),
             "current": sum(1 for item in items if item["current"]),
-            "pending": sum(1 for item in items if item["current"] and not item["review"]),
+            "pending": sum(1 for item in items if needs_attention(item)),
+            "explained": sum(1 for item in items if item.get("explanation")),
         }
     return result
 
@@ -199,7 +289,7 @@ def _sort_key(kind: str):
     """Current and unreviewed first, then the most relevant: largest gap, nearest dates."""
 
     def key(item: dict):
-        weight = (item["current"], item["review"] is None)
+        weight = (item["current"], item["review"] is None, not item.get("explanation"))
         if kind == "overlap":
             return (*weight, item["overlap_end"])
         if kind == "amounts":
@@ -210,13 +300,15 @@ def _sort_key(kind: str):
     return key
 
 
+def needs_attention(item: dict) -> bool:
+    """Current, not reviewed and not explained by the export (what notifications count)."""
+    return item["current"] and not item["review"] and not item.get("explanation")
+
+
 def pending_summary(db: Session, today: date | None = None) -> dict[str, list[dict]]:
     """Current, unreviewed incidents by kind (what notifications count)."""
     data = collect(db, today)
-    return {
-        kind: [item for item in data[kind] if item["current"] and not item["review"]]
-        for kind in KINDS
-    }
+    return {kind: [item for item in data[kind] if needs_attention(item)] for kind in KINDS}
 
 
 def _check_key(key: str) -> str:

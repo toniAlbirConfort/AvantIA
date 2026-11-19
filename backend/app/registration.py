@@ -36,6 +36,7 @@ from app.models import (
     Conversation,
     Message,
     RegistrationCheck,
+    ReservationDetail,
     ReservationSnapshot,
     ReservationSyncState,
     now,
@@ -172,6 +173,7 @@ class Identity:
     signature: set[str] = field(default_factory=set)
     has_name: bool = False
     known_locators: set[str] = field(default_factory=set)
+    email: str = ""  # lowercased address of the customer, when known
 
 
 def identity_for(name: str | None, email: str | None, text: str) -> Identity:
@@ -189,6 +191,7 @@ def identity_for(name: str | None, email: str | None, text: str) -> Identity:
         local_part=local,
         signature=signature,
         has_name=bool(name_words),
+        email=(email or "").strip().lower(),
     )
 
 
@@ -202,15 +205,24 @@ class Reservation:
     display_name: str
     tokens: set[str]  # skeletons of every name word, at least 4 letters
     last: str  # last name word, folded
+    emails: frozenset[str] = frozenset()  # customer and occupant emails from the export
 
     @property
     def prefix(self) -> str:
         return self.locator.split("-")[0]
 
 
-def reservation_from(row: ReservationSnapshot) -> Reservation:
+def reservation_from(
+    row: ReservationSnapshot, detail: ReservationDetail | None = None
+) -> Reservation:
     name_words = words(row.display_name)
+    emails = (
+        frozenset(filter(None, (detail.customer_email, detail.occupant_email)))
+        if detail
+        else frozenset()
+    )
     return Reservation(
+        emails=emails,
         locator=row.locator,
         status=row.status,
         created_on=row.created_on,
@@ -220,6 +232,10 @@ def reservation_from(row: ReservationSnapshot) -> Reservation:
         tokens={skeleton(token) for token in name_words if len(token) >= 4},
         last=name_words[-1] if name_words else "",
     )
+
+
+def same_email(reservation: Reservation, who: Identity) -> bool:
+    return bool(who.email) and who.email in reservation.emails
 
 
 def same_person(reservation: Reservation, who: Identity) -> bool:
@@ -234,7 +250,7 @@ def same_person(reservation: Reservation, who: Identity) -> bool:
 
 def is_current_guest(reservation: Reservation, who: Identity) -> bool:
     """Stricter than same_person: a shared surname alone is too common to say 'already a guest'."""
-    if reservation.locator in who.known_locators:
+    if reservation.locator in who.known_locators or same_email(reservation, who):
         return True
     if not who.has_name:
         # "gthyge@" for THYGESEN: only when the email carries no name to compare with.
@@ -461,6 +477,16 @@ def registration_for(
     day = received.date()
     window_start = day - timedelta(days=REGISTERED_BEFORE_DAYS)
     window_end = day + timedelta(days=REGISTERED_AFTER_DAYS)
+    in_window = [
+        item
+        for item in reservations
+        if item.created_on is not None and window_start <= item.created_on <= window_end
+    ]
+    # The export's customer/occupant email is the strongest proof: no name guessing.
+    by_email = [item for item in in_window if same_email(item, who)]
+    if by_email:
+        best = min(by_email, key=lambda item: abs((item.created_on - day).days))
+        return Decision("registered", "email", best.locator)
     matches = [
         item
         for item in reservations
@@ -526,8 +552,17 @@ def latest_reservations(db: Session) -> list[Reservation]:
     batch = latest_source_batch(db, "reservations")
     if batch is None:
         return []
-    rows = db.scalars(select(ReservationSnapshot).where(ReservationSnapshot.batch_id == batch.id))
-    return [reservation_from(row) for row in rows if row.status not in {"owner", "unavailable"}]
+    from app.planning import details_for
+
+    rows = [
+        row
+        for row in db.scalars(
+            select(ReservationSnapshot).where(ReservationSnapshot.batch_id == batch.id)
+        )
+        if row.status not in {"owner", "unavailable"}
+    ]
+    details = details_for(db, (row.locator for row in rows))
+    return [reservation_from(row, details.get(row.locator)) for row in rows]
 
 
 def first_inbound_messages(db: Session, since: datetime) -> list[tuple[Conversation, Message]]:
@@ -678,8 +713,17 @@ def watch_sync(db: Session, current_time: datetime | None = None) -> bool:
     return True
 
 
-def check_view(check: RegistrationCheck) -> dict:
+def handled_by(db: Session, locator: str | None) -> str | None:
+    """Who handled the matched reservation in Avantio ("Atendido por" in the export)."""
+    if not locator:
+        return None
+    detail = db.get(ReservationDetail, locator)
+    return detail.handled_by if detail else None
+
+
+def check_view(check: RegistrationCheck, handled: str | None = None) -> dict:
     return {
+        "handled_by": handled,
         "id": check.id,
         "conversation_id": check.conversation_id,
         "message_id": check.message_id,

@@ -6,6 +6,7 @@ import csv
 import hashlib
 import io
 import json
+import re
 import unicodedata
 from collections import defaultdict
 from datetime import date, datetime
@@ -14,7 +15,7 @@ from decimal import Decimal, InvalidOperation
 from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 
-from app.models import ImportBatch, PropertySnapshot, ReservationSnapshot
+from app.models import ImportBatch, PropertySnapshot, ReservationDetail, ReservationSnapshot
 
 PARSER_VERSION = "2"
 MAX_BYTES = 10_000_000
@@ -130,6 +131,129 @@ def _money(row: dict, key: str) -> Decimal:
     if not value.is_finite() or value.as_tuple().exponent < -2 or abs(value) >= 10**10:
         raise ValueError(f"{key} no es un importe válido")
     return value
+
+
+# Optional columns of the reservation export, stored per locator in ReservationDetail.
+# Missing columns or unreadable values are left empty: they never invalidate an import.
+DETAIL_MONEY = {
+    "rent_total": "Alquiler con tasas",
+    "rent_net": "Alquiler sin tasas",
+    "rent_tax": "Tasas del alquiler",
+    "extras_total": "Extras con tasas",
+    "extras_net": "Extras sin tasas",
+    "extras_tax": "Tasas de los extras",
+    "commission": "Comisión Portal/Intermediario: Comisión calculada",
+    "invoice_total": "Total factura",
+}
+DETAIL_TEXT = {
+    "invoice_number": ("Factura", 1000),
+    "agent_locator": ("Localizador agente", 150),
+    "customer_avantio_id": ("Cliente: Id Cliente", 40),
+    "handled_by": ("Atendido por", 150),
+}
+DETAIL_EMAILS = {"customer_email": "Cliente: E-mail", "occupant_email": "Ocupante: E-mail"}
+COMMENT_COLUMN = "Mis comentarios"
+COMMENT_MAX = 4000
+DATE_IN_TEXT = re.compile(r"\b(\d{2})/(\d{2})/(\d{4})\b")
+EMAIL_IN_TEXT = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+
+
+def _optional_money(row: dict, key: str) -> Decimal | None:
+    value = (row.get(key) or "").strip()
+    if not value:
+        return None
+    try:
+        amount = Decimal(value.replace(",", "."))
+    except InvalidOperation:
+        return None
+    return amount if amount.is_finite() and abs(amount) < 10**10 else None
+
+
+def _latest_date(text: str) -> date | None:
+    found = []
+    for day, month, year in DATE_IN_TEXT.findall(text or ""):
+        try:
+            found.append(date(int(year), int(month), int(day)))
+        except ValueError:
+            continue
+    return max(found, default=None)
+
+
+def _email(value: str | None) -> str | None:
+    match = EMAIL_IN_TEXT.search(value or "")
+    return match.group(0).lower()[:255] if match else None
+
+
+def _details(row: dict) -> dict:
+    from app.sensitive import redact_payment_data
+
+    details: dict = {key: _optional_money(row, column) for key, column in DETAIL_MONEY.items()}
+    for key, (column, size) in DETAIL_TEXT.items():
+        details[key] = (row.get(column) or "").strip()[:size] or None
+    for key, column in DETAIL_EMAILS.items():
+        details[key] = _email(row.get(column))
+    details["invoice_date"] = _latest_date(row.get("Fecha factura") or "")
+    comments = (row.get(COMMENT_COLUMN) or "").replace("\r\n", "\n").strip()
+    details["comments"] = redact_payment_data(comments[:COMMENT_MAX]) or None
+    return details
+
+
+def parse_details(raw: bytes) -> dict[str, dict]:
+    """Optional columns of a reservation export by locator (empty if the export lacks them)."""
+    reader = _reader(raw, "reservations")
+    wanted = (
+        set(DETAIL_MONEY.values())
+        | {column for column, _ in DETAIL_TEXT.values()}
+        | set(DETAIL_EMAILS.values())
+        | {COMMENT_COLUMN, "Fecha factura"}
+    )
+    if not wanted & set(reader.fieldnames or []):
+        return {}
+    details = {}
+    for row in reader:
+        locator = (row.get("Localizador") or "").strip()
+        if locator:
+            details[locator] = _details(row)
+    return details
+
+
+def store_details(db: Session, batch: ImportBatch, details: dict[str, dict]) -> int:
+    """Upsert the latest extra columns of each reservation in the export."""
+    if not details:
+        return 0
+    existing = {
+        item.locator: item
+        for item in db.scalars(
+            select(ReservationDetail).where(ReservationDetail.locator.in_(list(details)))
+        )
+    }
+    stamp = datetime.now().astimezone()
+    for locator, values in details.items():
+        item = existing.get(locator)
+        if item is None:
+            item = ReservationDetail(locator=locator)
+            db.add(item)
+        for key, value in values.items():
+            setattr(item, key, value)
+        item.batch_id = batch.id
+        item.updated_at = stamp
+    return len(details)
+
+
+def details_for(db: Session, locators) -> dict[str, ReservationDetail]:
+    locators = list(locators)
+    if not locators:
+        return {}
+    found: dict[str, ReservationDetail] = {}
+    for start in range(0, len(locators), 1000):
+        chunk = locators[start : start + 1000]
+        found.update(
+            (item.locator, item)
+            for item in db.scalars(
+                select(ReservationDetail).where(ReservationDetail.locator.in_(chunk))
+            )
+        )
+    return found
 
 
 def _status(value: str) -> str:
@@ -479,6 +603,8 @@ def commit_import(
             merged = rows
         model = PropertySnapshot if dataset == "properties" else ReservationSnapshot
         db.add_all(model(batch_id=batch.id, **row) for row in merged)
+        if dataset == "reservations":
+            store_details(db, batch, parse_details(raw))
         batch.row_count = len(rows)
         batch.warnings = _warnings(merged, dataset, _current_rows(db, "properties"))
         batch.changes = preview["changes"]

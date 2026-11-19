@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import { CalendarRange, CircleCheck, CircleSlash, Undo2 } from 'lucide-react'
 import { api } from './api'
 import { stateLabel, stateStyle } from './Planning'
@@ -82,8 +82,20 @@ function ReservationFacts({ reservation }: { reservation: IssueReservation }) {
     ['Fechas', `${fmt(reservation.start_date)} → ${fmt(reservation.end_date)} · ${reservation.nights} noches`],
     ['Creada', reservation.created_on ? fmt(reservation.created_on) : '—'],
     ['Total', money.format(reservation.total)],
+    ...(reservation.handled_by ? [['Atendido por', reservation.handled_by] as [string, string]] : []),
   ]
-  return <dl className="grid gap-1 text-sm">{rows.map(([label, value]) => <div key={label} className="grid grid-cols-[6.5rem_1fr] gap-2"><dt className="text-muted-foreground">{label}</dt><dd className="min-w-0 break-words">{value}</dd></div>)}</dl>
+  return <div className="grid gap-2">
+    <dl className="grid gap-1 text-sm">{rows.map(([label, value]) => <div key={label} className="grid grid-cols-[6.5rem_1fr] gap-2"><dt className="text-muted-foreground">{label}</dt><dd className="min-w-0 break-words">{value}</dd></div>)}</dl>
+    <AvantioComments text={reservation.comments} />
+  </div>
+}
+
+function AvantioComments({ text, compact = false }: { text: string | null; compact?: boolean }) {
+  if (!text) return null
+  return <details className={`rounded-md bg-muted/60 text-xs ${compact ? 'mt-1 px-2 py-1' : 'px-3 py-2'}`}>
+    <summary className="cursor-pointer font-medium text-muted-foreground">Comentarios en Avantio</summary>
+    <p className="mt-1 whitespace-pre-line break-words leading-5">{text}</p>
+  </details>
 }
 
 function HistoryBadge({ current }: { current: boolean }) {
@@ -190,18 +202,31 @@ function OverlapTab({ items, onOpenPlanning, ring, ...review }: ReviewProps & { 
 
 function AmountsTab({ items, ring, ...review }: ReviewProps & { items: IssuesData['amounts'] }) {
   if (!items.length) return <EmptyTab text="No hay importes descuadrados en este periodo." />
+  const unexplained = items.filter(item => !item.explanation)
+  const explained = items.filter(item => item.explanation)
+  return <div className="grid gap-4">
+    {unexplained.length ? <AmountsTable items={unexplained} ring={ring} {...review} /> : <EmptyTab text="Todos los descuadres de este periodo tienen explicación en la exportación de Avantio." />}
+    {explained.length > 0 && <details className="grid gap-3">
+      <summary className="cursor-pointer text-sm font-semibold">Explicados por la exportación ({explained.length})<span className="ml-2 font-normal text-muted-foreground">comisión del canal o descuento registrados en Avantio o anotados en sus comentarios</span></summary>
+      <div className="mt-3"><AmountsTable items={explained} ring={ring} {...review} /></div>
+    </details>}
+  </div>
+}
+
+function AmountsTable({ items, ring, ...review }: ReviewProps & { items: IssuesData['amounts'] }) {
   const balance = items.filter(item => item.balance_difference !== null)
   const over = balance.filter(item => (item.balance_difference || 0) > 0)
   const under = balance.filter(item => (item.balance_difference || 0) < 0)
   const sum = (list: typeof items) => list.reduce((total, item) => total + (item.balance_difference || 0), 0)
   const reservations = (count: number) => `${count} reserva${count === 1 ? '' : 's'}`
+  const isExplained = items.every(item => item.explanation)
   const stats: [string, string, string][] = [
-    ['Reservas afectadas', String(items.length), 'con algún importe descuadrado'],
+    [isExplained ? 'Reservas explicadas' : 'Sin explicar', String(items.length), isExplained ? 'la diferencia cuadra con lo registrado' : 'ni la comisión ni los comentarios lo explican'],
     ['Cobrado de más', money.format(sum(over)), `${reservations(over.length)}: pagado + pendiente supera el total`],
     ['Falta por cobrar', money.format(Math.abs(sum(under))), `${reservations(under.length)}: pagado + pendiente no llega al total`],
   ]
   return <div className="grid gap-4">
-    <div className="grid gap-3 sm:grid-cols-3">{stats.map(([label, value, hint]) => <Card key={label} className="p-4"><p className="text-xs text-muted-foreground">{label}</p><p className="text-xl font-semibold">{value}</p><p className="text-xs text-muted-foreground">{hint}</p></Card>)}</div>
+    {!isExplained && <div className="grid gap-3 sm:grid-cols-3">{stats.map(([label, value, hint]) => <Card key={label} className="p-4"><p className="text-xs text-muted-foreground">{label}</p><p className="text-xl font-semibold">{value}</p><p className="text-xs text-muted-foreground">{hint}</p></Card>)}</div>}
     <p className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground" aria-hidden="true">Comparación:
       <span className="inline-flex items-center gap-1.5"><span className="size-3 rounded-sm bg-success-ink/60" />pagado</span>
       <span className="inline-flex items-center gap-1.5"><span className="size-3 rounded-sm bg-warning-ink/50" />pendiente</span>
@@ -214,8 +239,9 @@ function AmountsTab({ items, ring, ...review }: ReviewProps & { items: IssuesDat
           const r = item.reservation
           const diff = item.balance_difference
           const scale = Math.max(r.total, r.paid + r.pending, 1)
-          return <TableRow key={item.key} id={`issue-${item.key}`} className={ring(item.key)}>
-            <TableCell><strong className="block text-sm">{r.locator}</strong><span className="text-xs text-muted-foreground">{r.display_name} · {stateLabel[r.status] || r.status_original}</span> <HistoryBadge current={item.current} /></TableCell>
+          const context = item.explanation || r.comments || r.handled_by || r.portal
+          return <Fragment key={item.key}><TableRow id={`issue-${item.key}`} className={`${ring(item.key)} ${context ? 'border-b-0' : ''}`}>
+            <TableCell><strong className="block text-sm whitespace-nowrap">{r.locator}</strong><span className="text-xs text-muted-foreground">{r.display_name} · {stateLabel[r.status] || r.status_original}</span> <HistoryBadge current={item.current} /></TableCell>
             <TableCell className="text-sm">{item.property.name || r.property_id}</TableCell>
             <TableCell className="text-sm whitespace-nowrap">{fmt(r.start_date)} → {fmt(r.end_date)}</TableCell>
             <TableCell className="text-right tabular-nums">{money.format(r.total)}</TableCell>
@@ -234,6 +260,15 @@ function AmountsTab({ items, ring, ...review }: ReviewProps & { items: IssuesDat
             </TableCell>
             <TableCell><ReviewControl issueKey={item.key} review={item.review} {...review} /></TableCell>
           </TableRow>
+          {context && <TableRow className={ring(item.key)}><TableCell colSpan={9} className="pt-0">
+            <div className="flex flex-wrap items-start gap-x-4 gap-y-2 text-xs text-muted-foreground">
+              {item.explanation && <Badge className="whitespace-normal bg-info-bg text-info-ink">{item.explanation.text}</Badge>}
+              {r.portal && <span>Canal: {r.portal}</span>}
+              {r.handled_by && <span>Atendido por {r.handled_by}</span>}
+              {r.comments && <div className="min-w-64 flex-1"><AvantioComments text={r.comments} compact /></div>}
+            </div>
+          </TableCell></TableRow>}
+          </Fragment>
         })}</TableBody>
       </Table>
     </Card>
