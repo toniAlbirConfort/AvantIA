@@ -583,3 +583,17 @@ class NotificationMute(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), primary_key=True)
     kind: Mapped[str] = mapped_column(String(60), primary_key=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class ReservationIssueReview(Base):
+    """Someone looked at a reservation incident (see app/reservation_issues.py).
+
+    ``issue_key`` identifies the incident (``overlap:<locator>|<locator>``, ``amounts:<locator>``...)
+    so it stays reviewed across imports while the same incident persists.
+    """
+
+    __tablename__ = "reservation_issue_reviews"
+    issue_key: Mapped[str] = mapped_column(String(320), primary_key=True)
+    reviewed_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    reviewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    note: Mapped[str | None] = mapped_column(String(300))

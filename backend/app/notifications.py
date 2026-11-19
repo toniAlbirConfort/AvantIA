@@ -85,6 +85,10 @@ KINDS: dict[str, KindSpec] = {
     "import.warnings": KindSpec("info", "admin", "Advertencias de importación"),
     "job.recovered": KindSpec("action", "admin", "Trabajo interrumpido"),
     "maintenance.done": KindSpec("info", "admin", "Mantenimiento"),
+    "reservations.overlap": KindSpec("action", "all", "Posible doble reserva"),
+    "reservations.amounts": KindSpec("info", "admin", "Importes descuadrados"),
+    "reservations.inactive": KindSpec("info", "admin", "Reservas en apartamentos inactivos"),
+    "reservations.unknown": KindSpec("action", "admin", "Reservas en apartamentos sin catálogo"),
 }
 
 JOB_LABELS = {
@@ -617,15 +621,24 @@ def _watch_tariff_studies(db: Session, at: datetime) -> None:
 
 
 def _watch_import_warnings(db: Session, at: datetime) -> None:
-    """One notice per dataset while its latest valid import carries warnings."""
+    """One notice per dataset while its latest valid import carries warnings.
+
+    Reservation warnings have their own notices and view (incidencias); automatic repairs
+    (see app/import_issues.py) are not warnings.
+    """
+    from app.import_issues import split_issues
+
     for dataset, label in DATASET_LABELS.items():
+        if dataset == "reservations":
+            clear_condition(db, "import.warnings:reservations", at)
+            continue
         batch = db.scalar(
             select(ImportBatch)
             .where(ImportBatch.dataset == dataset, ImportBatch.status == "valid")
             .order_by(ImportBatch.created_at.desc(), ImportBatch.id.desc())
         )
         key = f"import.warnings:{dataset}"
-        count = len(batch.warnings or []) if batch else 0
+        count = len(split_issues(batch.warnings)[0]) if batch else 0
         if count:
             raise_condition(
                 db,
@@ -640,6 +653,109 @@ def _watch_import_warnings(db: Session, at: datetime) -> None:
             )
         else:
             clear_condition(db, key, at)
+
+
+ISSUES_LINK = "/reservation-issues?tab={tab}"
+_issues_cache: dict = {"signature": None, "summary": None}
+
+
+def _issues_signature(db: Session, at: datetime) -> tuple:
+    from app.models import ReservationIssueReview
+
+    latest = {
+        dataset: db.scalar(
+            select(func.max(ImportBatch.id)).where(
+                ImportBatch.dataset == dataset, ImportBatch.status == "valid"
+            )
+        )
+        for dataset in ("reservations", "properties")
+    }
+    reviews = db.execute(select(func.count(), func.max(ReservationIssueReview.reviewed_at))).one()
+    return (latest["reservations"], latest["properties"], tuple(reviews), at.date())
+
+
+def _property_name(item: dict) -> str:
+    prop = item["property"]
+    return prop.get("name") or f"apartamento {prop['id']}"
+
+
+def _watch_reservation_issues(db: Session, at: datetime) -> None:
+    """Current, unreviewed incidents of the reservation data (see the Incidencias view).
+
+    Recomputing them reads every reservation, so it only runs when a new import arrives,
+    someone reviews an incident or the day changes.
+    """
+    from app.reservation_issues import describe_dates, pending_summary
+
+    signature = _issues_signature(db, at)
+    if _issues_cache["signature"] == signature:
+        return
+    summary = pending_summary(db, at.date())
+
+    overlaps = {}
+    for item in summary["overlap"]:
+        first, second = item["reservations"]
+        overlaps[f"reservations.overlap:{item['key']}"] = (
+            f"Posible doble reserva en {_property_name(item)}",
+            f"{first['locator']} y {second['locator']} bloquean las mismas noches "
+            f"({item['nights']} noches, "
+            f"{describe_dates(item['overlap_start'], item['overlap_end'])}). "
+            "Compruébalo en Avantio; si es correcto, márcala como revisada.",
+            ISSUES_LINK.format(tab="overlap") + f"&issue={item['key']}",
+        )
+    _sync_set(db, "reservations.overlap", overlaps, at)
+
+    amounts = summary["amounts"]
+    _sync_set(
+        db,
+        "reservations.amounts",
+        {
+            "reservations.amounts": (
+                f"{len(amounts)} reserva{'s' if len(amounts) != 1 else ''} vigente"
+                f"{'s' if len(amounts) != 1 else ''} o futura{'s' if len(amounts) != 1 else ''} "
+                "con importes descuadrados",
+                "El total no coincide con pagado + pendiente (o con neto + impuestos). Revisa los "
+                "cobros en Avantio: "
+                + _id_list_text([a["reservation"]["locator"] for a in amounts]),
+                ISSUES_LINK.format(tab="amounts"),
+            )
+        }
+        if amounts
+        else {},
+        at,
+    )
+
+    for kind, tab, text in (
+        ("inactive", "inactive", "en apartamentos marcados como inactivos"),
+        ("unknown", "unknown", "en apartamentos que no están en el catálogo"),
+    ):
+        items = summary[kind]
+        names = sorted({_property_name(item) for item in items})
+        _sync_set(
+            db,
+            f"reservations.{kind}",
+            {
+                f"reservations.{kind}": (
+                    f"{len(items)} reserva{'s' if len(items) != 1 else ''} futura"
+                    f"{'s' if len(items) != 1 else ''} {text}",
+                    "Puede que el apartamento se diera de baja por error o que la reserva esté en "
+                    "el apartamento equivocado. Afecta a: "
+                    + ", ".join(names[:4])
+                    + (f" y {len(names) - 4} más" if len(names) > 4 else "")
+                    + ".",
+                    ISSUES_LINK.format(tab=tab),
+                )
+            }
+            if items
+            else {},
+            at,
+        )
+    _issues_cache["signature"] = signature
+
+
+def _id_list_text(locators: list[str]) -> str:
+    shown = ", ".join(locators[:5])
+    return shown + (f" y {len(locators) - 5} más." if len(locators) > 5 else ".")
 
 
 MAINTENANCE_TEXT = {
@@ -694,6 +810,7 @@ WATCHERS: tuple[Callable[[Session, datetime], None], ...] = (
     _watch_tariff_studies,
     _watch_import_warnings,
     _watch_maintenance,
+    _watch_reservation_issues,
 )
 
 
