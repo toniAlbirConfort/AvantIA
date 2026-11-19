@@ -640,3 +640,47 @@ def test_operator_links_or_dismisses_alerts_from_the_api(db, shadow, monkeypatch
     run_registration_check(db, LATER + timedelta(days=1))
     db.refresh(two)
     assert two.status == "excluded"
+
+
+def detail(db, locator, **values):
+    from app.models import ReservationDetail
+
+    db.add(ReservationDetail(locator=locator, **values))
+    db.commit()
+
+
+def test_export_email_registers_even_under_another_name(db):
+    # Booked by a colleague under the travelling partner's name: only the email links them.
+    reservations(db, ("40000101-130650", "INGRID SOLBERG", "inquiry", DAY, *NEXT_YEAR))
+    detail(db, "40000101-130650", customer_email="per.hansen@example.test", handled_by="Ana")
+    conv = email(db, "Per Hansen <Per.Hansen@example.test>", "Leilighet i mars", "1.-15. mars?")
+    run_registration_check(db, LATER)
+    check = check_for(db, conv)
+    assert (check.status, check.reason, check.locator) == ("registered", "email", "40000101-130650")
+
+    from app.registration import check_view, handled_by
+
+    assert check_view(check, handled_by(db, check.locator))["handled_by"] == "Ana"
+
+
+def test_export_email_identifies_a_current_guest(db):
+    reservations(
+        db,
+        (
+            "40000102-130650",
+            "MARTA RUIZ",
+            "confirmed",
+            DAY - timedelta(days=60),
+            DAY + timedelta(days=30),
+            DAY + timedelta(days=80),
+        ),
+    )
+    detail(db, "40000102-130650", occupant_email="otra.persona@example.test")
+    conv = email(
+        db, "Familia <otra.persona@example.test>", "Apartment question", "Can we add 2 nights?"
+    )
+    run_registration_check(db, LATER)
+    assert (check_for(db, conv).status, check_for(db, conv).reason) == (
+        "excluded",
+        "huesped_con_reserva",
+    )

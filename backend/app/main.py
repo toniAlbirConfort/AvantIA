@@ -100,6 +100,7 @@ from app.registration import DISMISS_REASONS as REGISTRATION_DISMISS_REASONS
 from app.registration import RegistrationActionError
 from app.registration import alert_mode as registration_alert_mode
 from app.registration import check_view as registration_check_view
+from app.registration import handled_by as registration_handled_by
 from app.registration import dismiss_check as dismiss_registration_check
 from app.registration import link_check as link_registration_check
 from app.registration import simulate as simulate_registration
@@ -418,7 +419,11 @@ def _conversation(conv: Conversation, db: Session, detail: bool = False) -> dict
         check = db.scalar(
             select(RegistrationCheck).where(RegistrationCheck.conversation_id == conv.id)
         )
-        data["registration"] = registration_check_view(check) if check else None
+        data["registration"] = (
+            registration_check_view(check, registration_handled_by(db, check.locator))
+            if check
+            else None
+        )
         data["auto_replies"] = [
             _auto_reply(item)
             for item in db.scalars(
@@ -1949,7 +1954,10 @@ def registration_checks(
     return {
         "mode": registration_alert_mode(),
         "dismiss_reasons": REGISTRATION_DISMISS_REASONS,
-        "items": [registration_check_view(item) for item in db.scalars(query).all()],
+        "items": [
+            registration_check_view(item, registration_handled_by(db, item.locator))
+            for item in db.scalars(query).all()
+        ],
     }
 
 
@@ -1968,7 +1976,7 @@ def link_registration(id: int, body: RegistrationLinkIn, db: Db, user: Operator)
         link_registration_check(db, check, body.locator, user.id)
     except RegistrationActionError as exc:
         raise HTTPException(422, str(exc)) from exc
-    return registration_check_view(check)
+    return registration_check_view(check, registration_handled_by(db, check.locator))
 
 
 @app.post("/api/registration-checks/{id}/dismiss")
@@ -1979,7 +1987,7 @@ def dismiss_registration(id: int, body: RegistrationDismissIn, db: Db, user: Ope
         dismiss_registration_check(db, check, body.reason, body.note, user.id)
     except RegistrationActionError as exc:
         raise HTTPException(422, str(exc)) from exc
-    return registration_check_view(check)
+    return registration_check_view(check, registration_handled_by(db, check.locator))
 
 
 @app.get("/api/registration-checks/simulation")

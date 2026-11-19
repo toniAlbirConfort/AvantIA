@@ -132,7 +132,7 @@ def test_collect_groups_incidents_with_current_flags(data):
     assert result["inactive"][0]["property"]["active"] is False
     assert keys(result["unknown"]) == ["unknown:U1"]
     assert result["unknown"][0]["property"]["known"] is False
-    assert result["counts"]["overlap"] == {"total": 2, "current": 1, "pending": 1}
+    assert result["counts"]["overlap"] == {"total": 2, "current": 1, "pending": 1, "explained": 0}
 
 
 def test_reviews_stop_counting_and_can_be_undone(data):

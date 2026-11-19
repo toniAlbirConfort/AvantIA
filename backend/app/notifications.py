@@ -713,9 +713,9 @@ def _watch_reservation_issues(db: Session, at: datetime) -> None:
             "reservations.amounts": (
                 f"{len(amounts)} reserva{'s' if len(amounts) != 1 else ''} vigente"
                 f"{'s' if len(amounts) != 1 else ''} o futura{'s' if len(amounts) != 1 else ''} "
-                "con importes descuadrados",
-                "El total no coincide con pagado + pendiente (o con neto + impuestos). Revisa los "
-                "cobros en Avantio: "
+                "con importes descuadrados sin explicar",
+                "El total no coincide con pagado + pendiente y ni la comisión registrada en "
+                "Avantio ni los comentarios lo explican. Revísalos en Avantio: "
                 + _id_list_text([a["reservation"]["locator"] for a in amounts]),
                 ISSUES_LINK.format(tab="amounts"),
             )
