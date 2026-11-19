@@ -146,6 +146,27 @@ La migración `0013` crea la tabla `reports` e incorpora el estudio de precios d
 
 API: `GET|POST /api/reports`, `GET /api/reports/{id}/content` y `DELETE /api/reports/{id}`.
 
+## Avisos
+
+La vista **Avisos** (`/notifications`) reúne lo que está pasando en AvantIA y lo que necesita atención. El contador de la barra lateral y la campana del móvil muestran los avisos sin leer de cada usuario, y se resaltan si hay alguno crítico. Cada aviso tiene una gravedad (crítico, requiere acción o informativo), un enlace a la vista donde se resuelve y las acciones «Marcar leído» y «Descartar». Los avisos de sistema solo los ven los administradores.
+
+El worker reevalúa las condiciones cada 30 segundos. Los avisos se resuelven solos cuando desaparece la causa, y uno descartado no vuelve hasta que la causa se resuelve. Los avisos cerrados se borran pasados `NOTIFICATION_RETENTION_DAYS` días (90 por defecto). Por ahora no se envían fuera de la app.
+
+| Aviso | Gravedad | Para | Se resuelve cuando |
+| --- | --- | --- | --- |
+| No se puede leer el buzón (error IMAP o sin lectura correcta desde hace `NOTIFICATION_IMAP_STALE_MINUTES`, 30 por defecto) | Crítico | Admin | La lectura vuelve a funcionar |
+| Falló la descarga de reservas de Avantio | Crítico | Admin | Una sincronización termina bien |
+| Reservas de Avantio sin actualizar durante más del doble del intervalo | Requiere acción | Admin | Llega una sincronización correcta |
+| CSV de disponibilidad más antiguo que `AVAILABILITY_MAX_AGE_HOURS` | Requiere acción | Admin | Se importa un CSV válido |
+| Trabajo en segundo plano fallido (uno por tipo, suma ocurrencias) | Crítico | Admin | Se descarta a mano |
+| Envío incierto en una conversación | Crítico | Admin | Se registra «enviado» o «no enviado» |
+| Consultas sin responder tras `OVERDUE_MINUTES` (recibidas en las últimas 48 h) | Requiere acción | Todos | No queda ninguna pendiente |
+| Prerreserva nueva (últimos 7 días) | Requiere acción | Todos | Se cierra la prerreserva |
+| Consulta sin registrar en Avantio | Requiere acción | Todos | Se registra, se vincula o se marca «no procede» |
+| Importación rechazada (últimas 24 h) | Requiere acción | Admin | Se descarta a mano |
+
+API: `GET /api/notifications?status=open|dismissed|resolved|all`, `POST /api/notifications/read` (con `ids` o sin cuerpo para marcar todos) y `POST /api/notifications/{id}/dismiss`. `GET /api/summary` incluye el recuento de no leídos. Antes de añadir un aviso nuevo, sigue `.agents/skills/avantia-avisos/SKILL.md`.
+
 ## Operación diaria
 
 - El webhook firmado de GOWA guarda consultas 1 a 1, ignora grupos y mensajes propios y deduplica por ID del proveedor.

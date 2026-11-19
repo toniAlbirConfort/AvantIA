@@ -536,3 +536,40 @@ class Customer(Base):
     stay_period: Mapped[str | None] = mapped_column(String(120))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class Notification(Base):
+    """In-app notice about something that happened or needs attention (see app/notifications.py).
+
+    status: open (visible), dismissed (hidden by a user), resolved (the cause went away).
+    A row is "active" while ``resolved_at`` is null, so a dismissed condition stays quiet until
+    its cause clears; ``dedupe_key`` keeps a single active row per episode.
+    audience: all (every user) or admin.
+    """
+
+    __tablename__ = "notifications"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    kind: Mapped[str] = mapped_column(String(60), index=True)
+    severity: Mapped[str] = mapped_column(String(10))
+    audience: Mapped[str] = mapped_column(String(10), default="all")
+    title: Mapped[str] = mapped_column(String(200))
+    body: Mapped[str | None] = mapped_column(String(500))
+    link: Mapped[str | None] = mapped_column(String(300))
+    dedupe_key: Mapped[str] = mapped_column(String(200), index=True)
+    status: Mapped[str] = mapped_column(String(12), default="open", index=True)
+    occurrences: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    dismissed_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+
+
+class NotificationRead(Base):
+    """When each user read a notification (absence means unread)."""
+
+    __tablename__ = "notification_reads"
+    notification_id: Mapped[int] = mapped_column(
+        ForeignKey("notifications.id", ondelete="CASCADE"), primary_key=True
+    )
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    read_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)

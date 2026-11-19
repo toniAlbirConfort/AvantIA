@@ -85,6 +85,7 @@ from app.models import (
     now,
 )
 from app.analytics import reservation_analysis
+from app import notifications
 from app.planning import (
     DATASETS,
     commit_import,
@@ -518,7 +519,43 @@ def summary(db: Db, user: Operator) -> dict:
         ),
         "last_import_at": batch.created_at if batch else None,
         "last_import_rows": batch.row_count if batch else 0,
+        "notifications": notifications.counts(db, user),
     }
+
+
+class NotificationReadIn(BaseModel):
+    ids: list[int] | None = Field(default=None, max_length=500)
+
+
+@app.get("/api/notifications")
+def list_notifications(
+    db: Db,
+    user: Operator,
+    status: Literal["open", "dismissed", "resolved", "all"] = "open",
+    limit: int = Query(100, ge=1, le=500),
+) -> dict:
+    """Notifications the user can see (admins also see system ones), open first."""
+    return {
+        "items": notifications.list_for_user(db, user, status, limit),
+        "counts": notifications.counts(db, user),
+    }
+
+
+@app.post("/api/notifications/read")
+def read_notifications(body: NotificationReadIn, db: Db, user: Operator) -> dict:
+    """Mark the given notifications, or every open one when ``ids`` is omitted, as read."""
+    marked = notifications.mark_read(db, user, body.ids)
+    return {"marked": marked, "counts": notifications.counts(db, user)}
+
+
+@app.post("/api/notifications/{notification_id}/dismiss")
+def dismiss_notification(notification_id: int, db: Db, user: Operator) -> dict:
+    """Hide a notification; a condition stays quiet until its cause clears."""
+    item = notifications.get_visible(db, user, notification_id)
+    if item is None:
+        raise HTTPException(404, "Aviso no encontrado")
+    notifications.dismiss(db, user, item)
+    return notifications.view(item, True)
 
 
 @app.get("/api/conversations")

@@ -15,6 +15,8 @@ from app.db import SessionLocal
 from app.delivery import send_approved
 from app.mail import poll_mail
 from app.models import Conversation, Draft, Job, TariffStudy
+from app.notifications import notify_job_failed
+from app.notifications import scan as scan_notifications
 from app.processing import alert_conversation, analyze_message, schedule_overdue
 from app.registration import run_registration_check, watch_sync
 from app.tariff_lab import run_study
@@ -69,6 +71,10 @@ async def run_job() -> bool:
                     study.error = job.error
             if job.kind == "send" or job.attempts >= 5:
                 job.status = "failed"
+                try:
+                    notify_job_failed(db, job.kind, job.id, job.error)
+                except Exception:
+                    logger.exception("Could not record notification for job %s", job.id)
             else:
                 job.status = "pending"
                 job.run_at = datetime.now(UTC) + timedelta(seconds=min(300, 2**job.attempts * 5))
@@ -148,6 +154,8 @@ async def main() -> None:
                     logger.exception("Avantio sync watchdog failed")
             recover_stale_jobs()
             watch_csv()
+            with SessionLocal() as db:
+                scan_notifications(db)
             last_housekeeping = tick
         if not await run_job():
             await asyncio.sleep(settings.worker_poll_seconds)

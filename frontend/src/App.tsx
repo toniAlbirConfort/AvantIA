@@ -6,7 +6,7 @@ import { Reservations } from './Reservations'
 import { Customers } from './Customers'
 import { Tariffs } from './Tariffs'
 import type { ClassificationLabel, Conversation, InboxResponse, InboxThread, ImportBatch, Message, Property, Summary, User } from './types'
-import { ArrowLeft, ArrowRight, CalendarDays, ChartColumn, CalendarRange, Cable, ChevronDown, ClipboardList, Contact, FileText, FlaskConical, House, Inbox, LayoutDashboard, LogOut, Menu, RefreshCw, Reply, Search, Tag, Upload, Users, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Bell, CalendarDays, ChartColumn, CalendarRange, Cable, ChevronDown, ClipboardList, Contact, FileText, FlaskConical, House, Inbox, LayoutDashboard, LogOut, Menu, RefreshCw, Reply, Search, Tag, Upload, Users, X } from 'lucide-react'
 import { EmailPreviewDialog } from './EmailPreviewDialog'
 import { AutoReplyCard, type AutoReplyStatus } from './AutoReplyCard'
 import { EmailMessageContent } from './EmailMessageContent'
@@ -29,8 +29,9 @@ import { RegistrationAlertCard, type RegistrationAlertStatus } from './Registrat
 import { TariffLab } from './TariffLab'
 import { Analysis } from './Analysis'
 import { Reports } from './Reports'
+import { Notifications } from './Notifications'
 
-type View = 'reservations' | 'customers' | 'analysis' | 'summary' | 'inbox' | 'bookings' | 'properties' | 'tariffs' | 'tariff-lab' | 'reports' | 'planning' | 'imports' | 'integrations' | 'users'
+type View = 'notifications' | 'reservations' | 'customers' | 'analysis' | 'summary' | 'inbox' | 'bookings' | 'properties' | 'tariffs' | 'tariff-lab' | 'reports' | 'planning' | 'imports' | 'integrations' | 'users'
 const navigation: { id: View; label: string; icon: typeof LayoutDashboard }[] = [
   { id: 'reservations', label: 'Reservas', icon: CalendarDays },
   { id: 'customers', label: 'Clientes', icon: Contact },
@@ -39,6 +40,7 @@ const navigation: { id: View; label: string; icon: typeof LayoutDashboard }[] = 
   { id: 'tariffs', label: 'Tarifas', icon: Tag },
   { id: 'tariff-lab', label: 'Laboratorio de tarifas', icon: FlaskConical },
   { id: 'reports', label: 'Informes', icon: FileText },
+  { id: 'notifications', label: 'Avisos', icon: Bell },
   { id: 'inbox', label: 'Bandeja', icon: Inbox },
   { id: 'bookings', label: 'Prerreservas', icon: ClipboardList },
   { id: 'properties', label: 'Alojamientos', icon: House },
@@ -437,9 +439,20 @@ export default function App() {
     setRegistrationFilter('alerted')
     navigate('inbox')
   }
+  const unreadNotifications = summary?.notifications?.unread || 0
+  const criticalNotifications = summary?.notifications?.by_severity.critical || 0
+  const openNotificationLink = (link: string) => {
+    const next = viewFromPath(link)
+    const id = Number(link.split('/')[2]) || undefined
+    if (next === 'inbox' && !id) { clearInboxFilters(); setStatusFilter('pending') }
+    setComposerOpen(false)
+    if (id) setDetail(null)
+    navigate(next, id)
+    if (id) api<Conversation>(`/api/conversations/${id}`).then(setDetail).catch(err => setError((err as Error).message))
+  }
   const section = navigation.find(item => item.id === view)?.label || 'Reservas'
   const visibleNavigation = navigation.filter(item => item.id !== 'users' || user.role === 'admin')
-  const renderNavigation = () => visibleNavigation.map(item => <Button key={item.id} type="button" variant="ghost" aria-current={view === item.id ? 'page' : undefined} className={`min-h-11 w-full justify-start gap-3 px-3 text-left text-sm ${view === item.id ? 'bg-brand-orange text-white hover:bg-brand-orange/90 hover:text-white' : 'text-white/80 hover:bg-white/10 hover:text-white'}`} onClick={() => navigate(item.id)}><item.icon size={17} strokeWidth={1.8} /><span className="min-w-0 flex-1 truncate">{item.label}</span>{item.id === 'inbox' && !!summary?.pending && <span className={`rounded-full px-1.5 py-0.5 text-[0.65rem] ${view === item.id ? 'bg-background text-primary' : 'bg-white/15 text-white'}`}>{summary.pending}</span>}</Button>)
+  const renderNavigation = () => visibleNavigation.map(item => <Button key={item.id} type="button" variant="ghost" aria-current={view === item.id ? 'page' : undefined} className={`min-h-11 w-full justify-start gap-3 px-3 text-left text-sm ${view === item.id ? 'bg-brand-orange text-white hover:bg-brand-orange/90 hover:text-white' : 'text-white/80 hover:bg-white/10 hover:text-white'}`} onClick={() => navigate(item.id)}><item.icon size={17} strokeWidth={1.8} /><span className="min-w-0 flex-1 truncate">{item.label}</span>{item.id === 'inbox' && !!summary?.pending && <span className={`rounded-full px-1.5 py-0.5 text-[0.65rem] ${view === item.id ? 'bg-background text-primary' : 'bg-white/15 text-white'}`}>{summary.pending}</span>}{item.id === 'notifications' && !!unreadNotifications && <span className={`rounded-full px-1.5 py-0.5 text-[0.65rem] font-semibold ${criticalNotifications ? 'bg-error-bg text-error-ink' : view === item.id ? 'bg-background text-primary' : 'bg-white/15 text-white'}`} aria-label={`${unreadNotifications} avisos sin leer${criticalNotifications ? `, ${criticalNotifications} críticos` : ''}`}>{unreadNotifications}</span>}</Button>)
   const renderAccount = () => <div className="flex min-w-0 items-center gap-3">
     <span className="grid size-9 shrink-0 place-items-center rounded bg-brand-turquoise text-sm font-semibold text-brand-charcoal">{user.username.slice(0, 1).toUpperCase()}</span>
     <span className="min-w-0 flex-1"><span className="block truncate text-sm">{user.username}</span><small className="block text-xs text-white/65">{user.role === 'admin' ? 'Administradora' : 'Operador'}</small></span>
@@ -488,15 +501,17 @@ export default function App() {
       <div className="min-h-screen min-w-0 lg:ml-64">
         <header className="sticky top-0 z-30 flex h-14 items-center gap-3 bg-brand-charcoal px-3 text-white shadow-sm lg:hidden">
           <Button id="mobile-menu-trigger" type="button" variant="ghost" size="icon" className="text-white hover:bg-white/10 hover:text-white" onClick={() => setMobileMenu(true)} aria-expanded={mobileMenu} aria-controls={mobileMenu ? 'mobile-primary-navigation' : undefined} aria-label="Abrir menú de navegación"><Menu size={20} /></Button>
-          <span className="text-sm font-semibold">AvantIA</span>
+          <span className="flex-1 text-sm font-semibold">AvantIA</span>
+          <Button type="button" variant="ghost" size="icon" className="relative text-white hover:bg-white/10 hover:text-white" onClick={() => navigate('notifications')} aria-label={unreadNotifications ? `Avisos: ${unreadNotifications} sin leer` : 'Avisos'}><Bell size={20} />{!!unreadNotifications && <span className={`absolute right-1 top-1 min-w-4 rounded-full px-1 text-[0.6rem] font-semibold leading-4 ${criticalNotifications ? 'bg-error-bg text-error-ink' : 'bg-white text-brand-charcoal'}`} aria-hidden="true">{unreadNotifications}</span>}</Button>
         </header>
         <main className={`mx-auto w-full ${view === 'reservations' || view === 'customers' ? 'max-w-none px-4 py-5 sm:px-6 lg:px-8' : 'max-w-screen-2xl px-4 py-6 sm:px-6 lg:px-10 lg:py-9'}`}>
-        {view !== 'reservations' && view !== 'customers' && <div className="mb-6 flex flex-wrap items-end justify-between gap-4"><div><p className="mb-2 text-xs font-semibold uppercase tracking-wide text-primary">TU ESPACIO DE HOSPITALIDAD <span className="px-1 text-muted-foreground">/</span> {section.toUpperCase()}</p><h1 className="mb-2 text-3xl font-semibold leading-tight sm:text-4xl">{section}</h1><p className="max-w-3xl text-sm leading-6 text-muted-foreground">{view === 'summary' ? 'Cada conversación, en su sitio. La atención empieza aquí.' : view === 'inbox' ? 'Lee el contexto, revisa el borrador y decide cómo responder.' : view === 'bookings' ? 'Prerreservas que necesitan una mirada y seguimiento humano.' : view === 'imports' ? 'Fuentes y disponibilidad, siempre con su origen a la vista.' : view === 'planning' ? 'Una vista clara de las estancias y los huecos disponibles.' : view === 'tariffs' ? 'Consulta los importes por temporada y grupo tarifario.' : view === 'tariff-lab' ? 'Contrasta el histórico, los precios de mercado y los festivos antes de preparar una propuesta.' : view === 'analysis' ? 'Compara los años sobre el listado de reservas importado y detecta qué ha cambiado.' : view === 'reports' ? 'Los informes preparados con Claude y los generados por AvantIA, del más reciente al más antiguo.' : 'La información operativa de AvantIA, reunida con cuidado.'}</p></div><Button variant="outline" onClick={() => view === 'tariffs' || view === 'tariff-lab' ? setTariffRefreshVersion(version => version + 1) : view === 'analysis' ? setAnalysisRefreshVersion(version => version + 1) : view === 'reports' ? setReportsRefreshVersion(version => version + 1) : void refresh()} disabled={busy}><RefreshCw size={15} /> {view === 'tariffs' || view === 'tariff-lab' ? 'Actualizar tarifas' : 'Actualizar'}</Button></div>}
+        {view !== 'reservations' && view !== 'customers' && <div className="mb-6 flex flex-wrap items-end justify-between gap-4"><div><p className="mb-2 text-xs font-semibold uppercase tracking-wide text-primary">TU ESPACIO DE HOSPITALIDAD <span className="px-1 text-muted-foreground">/</span> {section.toUpperCase()}</p><h1 className="mb-2 text-3xl font-semibold leading-tight sm:text-4xl">{section}</h1><p className="max-w-3xl text-sm leading-6 text-muted-foreground">{view === 'summary' ? 'Cada conversación, en su sitio. La atención empieza aquí.' : view === 'inbox' ? 'Lee el contexto, revisa el borrador y decide cómo responder.' : view === 'bookings' ? 'Prerreservas que necesitan una mirada y seguimiento humano.' : view === 'imports' ? 'Fuentes y disponibilidad, siempre con su origen a la vista.' : view === 'planning' ? 'Una vista clara de las estancias y los huecos disponibles.' : view === 'tariffs' ? 'Consulta los importes por temporada y grupo tarifario.' : view === 'tariff-lab' ? 'Contrasta el histórico, los precios de mercado y los festivos antes de preparar una propuesta.' : view === 'analysis' ? 'Compara los años sobre el listado de reservas importado y detecta qué ha cambiado.' : view === 'reports' ? 'Los informes preparados con Claude y los generados por AvantIA, del más reciente al más antiguo.' : view === 'notifications' ? 'Lo que está pasando en AvantIA y lo que necesita tu atención, ordenado por gravedad.' : 'La información operativa de AvantIA, reunida con cuidado.'}</p></div><Button variant="outline" onClick={() => view === 'tariffs' || view === 'tariff-lab' ? setTariffRefreshVersion(version => version + 1) : view === 'analysis' ? setAnalysisRefreshVersion(version => version + 1) : view === 'reports' ? setReportsRefreshVersion(version => version + 1) : void refresh()} disabled={busy}><RefreshCw size={15} /> {view === 'tariffs' || view === 'tariff-lab' ? 'Actualizar tarifas' : 'Actualizar'}</Button></div>}
         {readOnlyMode && view !== 'reservations' && view !== 'customers' && <Alert variant="info" role="status" className="mb-5 flex flex-wrap items-center gap-x-4 gap-y-1"><strong className="text-xs">MODO DESARROLLO · SOLO LECTURA</strong><span>IMAP se consulta sin modificar correos. Los envíos de email y WhatsApp están bloqueados.</span></Alert>}
         {error && <Alert variant="destructive" className="mb-5 flex items-center justify-between gap-4"><span>{error}</span><Button variant="ghost" size="icon" onClick={() => setError('')} aria-label="Cerrar aviso"><X size={16} /></Button></Alert>}
         <EmailPreviewDialog message={expandedEmail} fallbackSubject={detail?.subject} onClose={() => setExpandedEmail(null)} />
         {detail && detail.kind !== 'booking' && <ReplyComposerDialog open={composerOpen} conversation={detail} readOnlyMode={readOnlyMode} onClose={() => setComposerOpen(false)} onChanged={refresh} />}
 
+        {view === 'notifications' && <Notifications onOpen={openNotificationLink} onChanged={() => void refresh()} />}
         {view === 'reservations' && <Reservations onImport={() => navigate('imports')} />}
         {view === 'customers' && <Customers onImport={() => navigate('imports')} />}
         {view === 'summary' && <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-12">

@@ -83,7 +83,14 @@ export type InboxSenderGroup = {
 }
 export type InboxItem = InboxThread | InboxSenderGroup
 export type InboxResponse = { items: InboxItem[]; total: number; offset: number; limit: number }
-export type Summary = { pending: number; delivery_unknown: number; bookings: number; last_import_at: string | null; last_import_rows: number }
+export type NotificationSeverity = 'critical' | 'action' | 'info'
+export type NotificationCounts = { unread: number; by_severity: Record<NotificationSeverity, number> }
+export type AppNotification = {
+  id: number; kind: string; label: string; severity: NotificationSeverity; audience: 'all' | 'admin';
+  title: string; body: string | null; link: string | null; status: 'open' | 'dismissed' | 'resolved';
+  occurrences: number; created_at: string; last_seen_at: string; resolved_at: string | null; read: boolean
+}
+export type Summary = { pending: number; delivery_unknown: number; bookings: number; last_import_at: string | null; last_import_rows: number; notifications?: NotificationCounts }
 export type ImportIssue = { code: string; customer_id?: string; field?: string; locator?: string; property_id?: string; source_row?: number; source_batch_id?: number | null; locators?: string[] }
 export type ImportChange = { key: string; kind: string; fields?: string[] }
 export type ImportBatch = { id: number; dataset: string; filename: string; source: string; status: string; rows: number; error: string | null; created_at: string; actor_user_id: number | null; parser_version: string | null; warning_count: number; change_count: number }

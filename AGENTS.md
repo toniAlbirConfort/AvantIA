@@ -1,5 +1,10 @@
 # Instrucciones de trabajo para AvantIA
 
+## Normas del proyecto
+
+- `.agents/skills/avantia-design/SKILL.md`: diseño de la interfaz. Se aplica a cualquier cambio de frontend.
+- `.agents/skills/avantia-avisos/SKILL.md`: sistema de avisos. En cada implementación nueva, evalúa si genera eventos que convenga notificar y, si es así, pregunta antes de añadir el aviso.
+
 ## Servidor de producción e integración
 
 - El servidor local de producción es `DESKTOP-4597Q79`, accesible por SSH como `informatica2@192.168.0.158`.
