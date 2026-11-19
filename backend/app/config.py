@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     availability_max_age_hours: int = 6
     availability_source: str = "csv"
     overdue_minutes: int = 15
+    notification_imap_stale_minutes: int = 30
+    notification_retention_days: int = 90
     worker_poll_seconds: int = 5
     csv_watch_dir: str = "/data/imports"
     csv_column_map: str = ""
