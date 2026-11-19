@@ -85,6 +85,22 @@ FORM_SURNAME = re.compile(
     r"(?:e-?mail|e-post|correo|phone|telefon|tel)",
     re.IGNORECASE,
 )
+# "Book it for me, here are my documents": phishing sent as a booking request (November 2026,
+# "Max Mustermann" / "Miguel Sanchez" from unrelated domains, same text in two languages).
+SCAM = re.compile(
+    r"(?:photos?|fotos?|cop(?:y|ies|ias?)|scans?|escaneos?)\s+(?:of\s+|de\s+)?(?:my|mis)\s+"
+    r"(?:documents?|documentos?|id\b|passport|pasaporte|dni)|"
+    r"(?:link|enlace)\s*:\s*(?:my|mis)\s+(?:documents?|documentos?)",
+    re.IGNORECASE,
+)
+# Companies offering or asking for business services; only consulted when the classifier
+# could not decide (an "uncertain" message), since consultations can mention these words too.
+VENDOR = re.compile(
+    r"administra(?:dor(?:es)?|ci[oó]n)\s+de\s+fincas|comunidad(?:es)?\s+de\s+propietarios|"
+    r"\bpromotora\b|propuesta\s+(?:de\s+colaboraci[oó]n|comercial)|nuestros\s+servicios|"
+    r"our\s+services|partnership|solicitud\s+de\s+presupuesto|request\s+for\s+(?:a\s+)?quot",
+    re.IGNORECASE,
+)
 LOCATOR_NUMBER = re.compile(r"\b(\d{7,9})(?:-\d{5,10})?\b")
 URL = re.compile(r"<?https?://\S+|www\.\S+")
 SPECIAL = str.maketrans(
@@ -349,11 +365,19 @@ def decide(
         return Decision("excluded", "no_demanda")
     if label == "guest_service" and not relayed:
         return Decision("excluded", "atencion_huesped")
-    if not relayed and REPLY_SUBJECT.search(message.subject or ""):
+    if (
+        not relayed
+        and REPLY_SUBJECT.search(message.subject or "")
+        and not new_request_in_reply(message, label)
+    ):
         return Decision("excluded", "respuesta")
 
     text = f"{message.subject or ''}\n{new_part(message.body or '')}"
     plain = URL.sub(" ", text)
+    if SCAM.search(plain):
+        return Decision("excluded", "posible_fraude")
+    if label == "uncertain" and not relayed and VENDOR.search(plain):
+        return Decision("excluded", "proveedor")
     if INVITE.search(message.subject or "") or not (
         ACCOM.search(plain) or DATE_RANGE.search(plain)
     ):
@@ -388,9 +412,25 @@ def decide(
         for item in reservations
     ):
         return Decision("excluded", "huesped_con_reserva")
-    if EXISTING_GUEST.search(text):
+    # A reply keeps the subject of the mail it answers ("Re: Reminder: Check in online"), which
+    # says nothing about whether the customer is a guest now: judge only what they wrote.
+    replied = REPLY_SUBJECT.search(message.subject or "")
+    if EXISTING_GUEST.search(new_part(message.body or "") if replied else text):
         return Decision("excluded", "parece_huesped")
     return Decision("pending")
+
+
+def new_request_in_reply(message: Message, label: str | None) -> bool:
+    """A reply that still opens a new consultation, e.g. answering a newsletter or a check-in
+    reminder with "do you have an apartment from 24 April?".
+
+    Only when the classifier is sure it is demand (high confidence or confirmed by a person), and
+    never for replies to Avantio's own offers, which already prove the request was entered. A
+    reply continuing an earlier consultation is still caught later as a follow-up.
+    """
+    if label != "demand" or TEMPLATE.search(message.subject or ""):
+        return False
+    return bool(message.classification_override) or message.classification_confidence == "high"
 
 
 def customer_identity(
