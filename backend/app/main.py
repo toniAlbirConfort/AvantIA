@@ -1820,12 +1820,15 @@ def customers_retention(
     channel: str | None = Query(default=None, max_length=40),
     contact: Literal["any", "email", "phone", "opt_in"] = "any",
     q: str = Query(default="", max_length=150),
+    month_from: int | None = Query(default=None, ge=1, le=12),
+    month_to: int | None = Query(default=None, ge=1, le=12),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=100),
 ) -> dict:
     return _retention(
         db, target_year=target_year, base_years=base_years, min_stays=min_stays,
-        channel=channel, contact=contact, q=q, offset=offset, limit=limit,
+        channel=channel, contact=contact, q=q, month_from=month_from, month_to=month_to,
+        offset=offset, limit=limit,
     )
 
 
@@ -1839,10 +1842,13 @@ def customers_retention_csv(
     channel: str | None = Query(default=None, max_length=40),
     contact: Literal["any", "email", "phone", "opt_in"] = "any",
     q: str = Query(default="", max_length=150),
+    month_from: int | None = Query(default=None, ge=1, le=12),
+    month_to: int | None = Query(default=None, ge=1, le=12),
 ) -> Response:
     result = _retention(
         db, target_year=target_year, base_years=base_years, min_stays=min_stays,
-        channel=channel, contact=contact, q=q, offset=0, limit=1_000_000,
+        channel=channel, contact=contact, q=q, month_from=month_from, month_to=month_to,
+        offset=0, limit=1_000_000,
     )
     # The file carries contact data, so who exported it and with which filters is audited.
     db.add(AuditEvent(
@@ -1851,6 +1857,7 @@ def customers_retention_csv(
             "rows": result["total"], "target_year": result["target_year"],
             "base_years": result["base_years"], "min_stays": min_stays,
             "channel": channel, "contact": contact, "q": bool(q),
+            "months": result["months"],
         },
     ))
     db.commit()

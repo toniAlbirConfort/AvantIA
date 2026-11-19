@@ -66,6 +66,19 @@ def _mode(values: list[str]) -> str | None:
     return Counter(values).most_common(1)[0][0] if values else None
 
 
+def month_span(month_from: int | None, month_to: int | None) -> set[int] | None:
+    """Arrival months to keep; a range like December-February wraps over the new year."""
+    if month_from is None and month_to is None:
+        return None
+    if month_from is None or month_to is None:
+        raise ValueError("Indica el mes inicial y el final")
+    if not (1 <= month_from <= 12 and 1 <= month_to <= 12):
+        raise ValueError("Los meses van del 1 al 12")
+    if month_from <= month_to:
+        return set(range(month_from, month_to + 1))
+    return set(range(month_from, 13)) | set(range(1, month_to + 1))
+
+
 def retention_view(
     db: Session,
     *,
@@ -75,9 +88,12 @@ def retention_view(
     channel: str | None = None,
     contact: str = "any",
     q: str = "",
+    month_from: int | None = None,
+    month_to: int | None = None,
     offset: int = 0,
     limit: int = 50,
 ) -> dict:
+    months = month_span(month_from, month_to)
     target = target_year or date.today().year
     years = sorted(set(base_years or range(target - 3, target)))
     if not years or any(year >= target for year in years):
@@ -94,6 +110,7 @@ def retention_view(
         "target_year": target, "base_years": years, "channels": list(CHANNELS),
         "summary": {"guests": 0, "linked": 0, "with_email": 0, "opt_in": 0},
         "years_available": [],
+        "months": None if months is None else [month_from, month_to],
     }
     batch = latest_source_batch(db, "reservations")
     if batch is None:
@@ -101,20 +118,34 @@ def retention_view(
 
     stays: dict[str, list] = defaultdict(list)
     returning: set[str] = set()
+    # With a month range, only a booking for those months in the target year means the
+    # guest is back; bookings for other months are listed so the offer can mention them.
+    other_bookings: dict[str, list] = defaultdict(list)
     # Active bookings (pre-reservations included) per arrival year, so the view can
     # show which years have data, future ones too.
     per_year: Counter[int] = Counter()
+
+    def in_months(day: date) -> bool:
+        return months is None or day.month in months
+
     for row in consolidated_reservations(db, batch).values():
         key = fold(row.display_name)
         if not key or key in PLACEHOLDER_NAMES:
             continue
-        if row.status in ACTIVE_STATUSES:
+        active = row.status in ACTIVE_STATUSES
+        if active and in_months(row.start_date):
             per_year[row.start_date.year] += 1
-        if row.status in ACTIVE_STATUSES and (
-            row.start_date.year == target or (row.created_on and row.created_on.year == target)
-        ):
+        if active and row.start_date.year == target:
+            if in_months(row.start_date):
+                returning.add(key)
+            else:
+                other_bookings[key].append(row)
+        elif active and months is None and row.created_on and row.created_on.year == target:
             returning.add(key)
-        elif row.status in SOLD_STATUSES and row.start_date.year in years:
+        elif (
+            row.status in SOLD_STATUSES and row.start_date.year in years
+            and in_months(row.start_date)
+        ):
             stays[key].append(row)
 
     property_batch = latest_source_batch(db, "properties")
@@ -161,6 +192,13 @@ def retention_view(
             "property_name": property_names.get(main_property, main_property),
             "match": link["match"],
             "candidates": link["candidates"],
+            "target_bookings": [
+                {
+                    "locator": row.locator, "start_date": row.start_date,
+                    "end_date": row.end_date, "status": row.status,
+                }
+                for row in sorted(other_bookings.get(key, []), key=lambda row: row.start_date)
+            ],
             # Every counted stay, newest first, so the row can unfold its history.
             "history": [
                 {

@@ -175,3 +175,38 @@ def test_future_target_year_and_years_with_data(data):
         {"year": 2024, "reservations": 2}, {"year": 2025, "reservations": 3},
         {"year": 2026, "reservations": 1}, {"year": 2027, "reservations": 1},
     ]
+
+
+def test_month_range(data):
+    from app.retention import month_span
+
+    assert month_span(None, None) is None
+    assert month_span(12, 2) == {12, 1, 2}
+    with pytest.raises(ValueError):
+        month_span(7, None)
+
+    def keys(**filters):
+        result = retention_view(data, target_year=TARGET, **filters)
+        return [item["key"] for item in result["items"]]
+
+    # July: Ana came in July 2023; Luis came in July 2024 but already booked July 2026.
+    assert keys(month_from=7, month_to=7) == ["ana garcia"]
+    assert keys(month_from=8, month_to=9) == ["ana garcia", "mar sol"]
+    # Booking 2027 during 2026 counts for the whole year, not for May 2026.
+    assert keys(month_from=5, month_to=5) == ["eva ruiz"]
+
+    # Mar Sol booked February 2026: still missing September, and the row says so.
+    batch = data.scalar(select(ImportBatch.id).where(ImportBatch.dataset == "reservations"))
+    data.add(ReservationSnapshot(
+        batch_id=batch, source_row=99, row_hash="h", locator="MAR-2026", property_id="P1",
+        status_original="Confirmada", status="confirmed", created_on=date(TARGET, 1, 3),
+        start_date=date(TARGET, 2, 1), end_date=date(TARGET, 2, 5), nights=4, adults=2,
+        children=0, infants=0, display_name="Mar Sol", portal="Airbnb",
+        total=400, net=360, tax=40, paid=400, pending=0,
+    ))
+    data.commit()
+    result = retention_view(data, target_year=TARGET, month_from=9, month_to=9)
+    mar = next(item for item in result["items"] if item["key"] == "mar sol")
+    assert [booking["locator"] for booking in mar["target_bookings"]] == ["MAR-2026"]
+    assert result["months"] == [9, 9]
+    assert "mar sol" not in keys()  # for the whole year she is already back
