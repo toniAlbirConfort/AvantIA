@@ -78,7 +78,7 @@ function ContactLink({ href, children, className = 'text-foreground hover:text-p
   return <a className={`break-all underline underline-offset-2 ${className}`} href={href}>{children}</a>
 }
 
-function CustomerPanel({ summary, onClose }: { summary: CustomerSummary; onClose: () => void }) {
+export function CustomerPanel({ summary, onClose }: { summary: CustomerSummary; onClose: () => void }) {
   const [detail, setDetail] = useState<CustomerDetail | null>(null)
   const [error, setError] = useState('')
   const [showReservations, setShowReservations] = useState(false)
