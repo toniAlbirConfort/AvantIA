@@ -85,6 +85,10 @@ def test_lists_past_guests_without_a_booking_this_year(data):
     assert ana["stays"] == 2 and ana["years"] == [2023, 2025] and ana["nights"] == 8
     assert ana["match"] == "exact" and ana["email"] == "ana@example.test"
     assert ana["channel"] == "Directo" and ana["last_stay_start"] == date(2025, 8, 1)
+    assert [(stay["start_date"], stay["status"], stay["nights"]) for stay in ana["history"]] == [
+        (date(2025, 8, 1), "confirmed", 4), (date(2023, 7, 1), "paid", 4),
+    ]
+    assert ana["history"][0]["guests"] == 2 and ana["history"][0]["channel"] == "Directo"
     assert result["items"][0]["key"] == "ana garcia"  # most stays first
 
     assert by_name["mar sol"]["match"] == "ambiguous"

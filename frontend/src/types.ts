@@ -182,6 +182,12 @@ export type RetentionGuest = {
   property_id: string | null; property_name: string | null; match: RetentionMatch; candidates: number
   avantio_id: string | null; email: string | null; phone: string | null; language: string | null
   country: string | null; email_opt_in: boolean | null
+  history: RetentionStay[]
+}
+export type RetentionStay = {
+  locator: string; start_date: string; end_date: string; nights: number; guests: number
+  property_id: string; property_name: string | null; status: string; channel: string
+  portal: string | null; created_on: string | null; total: string
 }
 export type RetentionResponse = {
   items: RetentionGuest[]; total: number; offset: number; limit: number; has_snapshot: boolean

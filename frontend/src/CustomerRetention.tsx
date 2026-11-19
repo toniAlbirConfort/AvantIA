@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ArrowRight, Download, RefreshCw, Search } from 'lucide-react'
+import { ArrowRight, ChevronDown, Download, RefreshCw, Search } from 'lucide-react'
 import { api, apiDownload } from './api'
 import { CustomerPanel } from './Customers'
+import { Status } from './Reservations'
 import type { CustomerSummary, RetentionGuest, RetentionMatch, RetentionResponse } from './types'
 import { Alert } from './components/ui/alert'
 import { Badge } from './components/ui/badge'
@@ -10,6 +11,7 @@ import { Card } from './components/ui/card'
 import { Input } from './components/ui/input'
 import { Select } from './components/ui/select'
 import { Skeleton } from './components/ui/skeleton'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './components/ui/table'
 
 const PAGE_SIZE = 50
 const YEARS_BACK = 6
@@ -60,6 +62,7 @@ export function CustomerRetention({ onImport }: { onImport: () => void }) {
   const [error, setError] = useState('')
   const [retryKey, setRetryKey] = useState(0)
   const [selected, setSelected] = useState<CustomerSummary | null>(null)
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const requestVersion = useRef(0)
   const closePanel = useCallback(() => setSelected(null), [])
 
@@ -125,6 +128,14 @@ export function CustomerRetention({ onImport }: { onImport: () => void }) {
 
   function toggleYear(year: number) {
     setBaseYears(current => current.includes(year) ? current.filter(item => item !== year) : [...current, year].sort())
+  }
+
+  function toggleGuest(key: string) {
+    setExpanded(current => {
+      const next = new Set(current)
+      if (!next.delete(key)) next.add(key)
+      return next
+    })
   }
 
   function openCustomer(item: RetentionGuest) {
@@ -206,7 +217,7 @@ export function CustomerRetention({ onImport }: { onImport: () => void }) {
     </Card>}
 
     {data && data.has_snapshot && baseYears.length > 0 && <>
-      <div className="hidden grid-cols-[minmax(12rem,2fr)_minmax(8rem,1fr)_minmax(10rem,1.4fr)_minmax(7rem,0.8fr)_minmax(12rem,1.6fr)] gap-4 px-5 text-sm text-muted-foreground xl:grid" aria-hidden="true">
+      <div className="hidden grid-cols-[minmax(12rem,2fr)_minmax(8rem,1fr)_minmax(10rem,1.4fr)_minmax(7rem,0.8fr)_minmax(12rem,1.6fr)_1.5rem] gap-4 px-5 text-sm text-muted-foreground xl:grid" aria-hidden="true">
         <span>Huésped</span><span>Historial</span><span>Última estancia</span><span>Canal</span><span>Contacto</span>
       </div>
       {data.items.length === 0 && !loading && <Card className="px-5 py-10 text-center text-sm text-muted-foreground">Ningún huésped cumple estos filtros.</Card>}
@@ -227,11 +238,41 @@ export function CustomerRetention({ onImport }: { onImport: () => void }) {
               {linked && <span className="truncate text-muted-foreground" title={item.email || undefined}>{item.email || item.phone || 'Sin email ni teléfono'}</span>}
             </span>
           </>
-          const layout = 'grid w-full gap-2 rounded-md border border-border border-l-4 bg-card px-5 py-4 text-left xl:grid-cols-[minmax(12rem,2fr)_minmax(8rem,1fr)_minmax(10rem,1.4fr)_minmax(7rem,0.8fr)_minmax(12rem,1.6fr)] xl:items-center xl:gap-4'
-          return <li key={item.key}>
-            {linked
-              ? <button type="button" className={`${layout} border-l-border transition-colors hover:border-l-brand-orange hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none`} onClick={() => openCustomer(item)} aria-label={`Abrir ficha de ${item.display_name}`}>{content}</button>
-              : <div className={`${layout} border-l-border`}>{content}</div>}
+          const open = expanded.has(item.key)
+          const panelId = `stays-${item.key.replace(/[^a-z0-9]+/g, '-')}`
+          const layout = 'grid w-full gap-2 px-5 py-4 text-left xl:grid-cols-[minmax(12rem,2fr)_minmax(8rem,1fr)_minmax(10rem,1.4fr)_minmax(7rem,0.8fr)_minmax(12rem,1.6fr)_1.5rem] xl:items-center xl:gap-4'
+          return <li key={item.key} className={`overflow-hidden rounded-md border border-border border-l-4 bg-card transition-colors motion-reduce:transition-none ${open ? 'border-l-brand-orange' : 'border-l-border hover:border-l-brand-orange'}`}>
+            <button type="button" className={`${layout} rounded-md hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring`} aria-expanded={open} aria-controls={panelId} onClick={() => toggleGuest(item.key)}>
+              {content}
+              <ChevronDown size={18} aria-hidden="true" className={`hidden justify-self-end text-muted-foreground transition-transform motion-reduce:transition-none xl:block ${open ? 'rotate-180' : ''}`} />
+              <span className="flex items-center gap-1 text-xs font-medium text-primary xl:hidden">{open ? 'Ocultar estancias' : 'Ver estancias'}<ChevronDown size={14} aria-hidden="true" className={open ? 'rotate-180' : ''} /></span>
+            </button>
+            {open && <div id={panelId} className="border-t border-border bg-background/60 px-5 py-4">
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Estancias contadas ({item.history.length})</p>
+              <div className="overflow-x-auto">
+                <Table className="min-w-[48rem]">
+                  <TableHeader><TableRow>
+                    <TableHead>Entrada – salida</TableHead><TableHead className="text-right">Noches</TableHead><TableHead className="text-right">Personas</TableHead><TableHead>Alojamiento</TableHead><TableHead>Localizador</TableHead><TableHead>Canal</TableHead><TableHead>Estado</TableHead><TableHead className="text-right">Importe</TableHead><TableHead>Reservada el</TableHead>
+                  </TableRow></TableHeader>
+                  <TableBody>{item.history.map(stay => <TableRow key={stay.locator}>
+                    <TableCell className="whitespace-nowrap">{shortDate(stay.start_date)} – {shortDate(stay.end_date)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{stay.nights}</TableCell>
+                    <TableCell className="text-right tabular-nums">{stay.guests}</TableCell>
+                    <TableCell className="max-w-56 truncate" title={stay.property_name || undefined}>{stay.property_name || stay.property_id}</TableCell>
+                    <TableCell className="whitespace-nowrap font-mono text-xs">{stay.locator}</TableCell>
+                    <TableCell title={stay.portal || undefined}>{stay.channel}</TableCell>
+                    <TableCell><Status value={stay.status} /></TableCell>
+                    <TableCell className="text-right tabular-nums">{euros.format(Number(stay.total))}</TableCell>
+                    <TableCell className="whitespace-nowrap text-muted-foreground">{stay.created_on ? shortDate(stay.created_on) : '—'}</TableCell>
+                  </TableRow>)}</TableBody>
+                </Table>
+              </div>
+              <div className="mt-3 flex flex-wrap items-center gap-3">
+                {linked && <Button type="button" variant="outline" size="sm" onClick={() => openCustomer(item)}>Abrir ficha del cliente</Button>}
+                {item.match === 'ambiguous' && <p className="text-xs text-muted-foreground">Hay {item.candidates} fichas de cliente con este nombre: búscala en el Directorio antes de contactar.</p>}
+                {item.match === 'none' && <p className="text-xs text-muted-foreground">Ninguna ficha de cliente tiene exactamente este nombre.</p>}
+              </div>
+            </div>}
           </li>
         })}
       </ul>
