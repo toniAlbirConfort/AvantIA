@@ -170,4 +170,5 @@ export type RetentionResponse = {
   items: RetentionGuest[]; total: number; offset: number; limit: number; has_snapshot: boolean
   target_year: number; base_years: number[]; channels: string[]
   summary: { guests: number; linked: number; with_email: number; opt_in: number }
+  years_available: { year: number; reservations: number }[]
 }

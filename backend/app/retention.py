@@ -28,7 +28,7 @@ ACTIVE_STATUSES = SOLD_STATUSES | {"pre_reservation"}
 PLACEHOLDER_NAMES = {"huesped sin nombre", "no disponible", "uso de propietario"}
 CHANNELS = ("Directo", "Booking", "Expedia / Hotelbeds", "Airbnb", "Agencias y otros")
 CONTACT_FILTERS = ("any", "email", "phone", "opt_in")
-MAX_BASE_YEARS = 6
+MAX_BASE_YEARS = 12
 
 
 def _customer_index(db: Session) -> dict[str, list[dict]]:
@@ -93,6 +93,7 @@ def retention_view(
         "items": [], "total": 0, "offset": offset, "limit": limit, "has_snapshot": False,
         "target_year": target, "base_years": years, "channels": list(CHANNELS),
         "summary": {"guests": 0, "linked": 0, "with_email": 0, "opt_in": 0},
+        "years_available": [],
     }
     batch = latest_source_batch(db, "reservations")
     if batch is None:
@@ -100,10 +101,15 @@ def retention_view(
 
     stays: dict[str, list] = defaultdict(list)
     returning: set[str] = set()
+    # Active bookings (pre-reservations included) per arrival year, so the view can
+    # show which years have data, future ones too.
+    per_year: Counter[int] = Counter()
     for row in consolidated_reservations(db, batch).values():
         key = fold(row.display_name)
         if not key or key in PLACEHOLDER_NAMES:
             continue
+        if row.status in ACTIVE_STATUSES:
+            per_year[row.start_date.year] += 1
         if row.status in ACTIVE_STATUSES and (
             row.start_date.year == target or (row.created_on and row.created_on.year == target)
         ):
@@ -175,6 +181,9 @@ def retention_view(
             "with_email": sum(1 for item in items if item["email"]),
             "opt_in": sum(1 for item in items if item["email"] and item["email_opt_in"]),
         },
+        "years_available": [
+            {"year": year, "reservations": count} for year, count in sorted(per_year.items())
+        ],
     }
 
 
