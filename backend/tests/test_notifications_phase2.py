@@ -148,6 +148,7 @@ def test_llm_failing_needs_several_failures_without_success(db):
 
 def test_classification_review_is_one_counted_notice(db):
     conv = add_conversation(db)
+    conv.classification_open = True
     for index, confidence in enumerate(("low", "medium", "high")):
         db.add(
             Message(
@@ -163,7 +164,15 @@ def test_classification_review_is_one_counted_notice(db):
         )
     db.commit()
     notifications.scan(db, NOW)
-    assert active(db, "classification.review").title.startswith("2 mensajes")
+    item = active(db, "classification.review")
+    assert item.title == "1 conversación con la clasificación por revisar"
+    assert item.body.endswith("Recibidas desde el 12/11: #1.")
+    assert item.link == "/inbox?classification=review&from=2026-11-12"
+
+    conv.classification_open = False
+    db.commit()
+    notifications.scan(db, NOW)
+    assert active(db, "classification.review") is None
 
 
 def add_study(db, status, error=None):

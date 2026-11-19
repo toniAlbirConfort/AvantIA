@@ -20,6 +20,7 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import case, delete, exists, func, select
 from sqlalchemy.orm import Session
@@ -363,24 +364,58 @@ def _watch_delivery(db: Session, at: datetime) -> None:
     )
 
 
+def _local_window_start(at: datetime, window: timedelta) -> datetime:
+    """Local midnight of the day the window starts: what the inbox "Desde" filter uses."""
+    zone = ZoneInfo(get_settings().auto_reply_timezone)
+    day = (at - window).astimezone(zone).date()
+    return datetime(day.year, day.month, day.day, tzinfo=zone).astimezone(UTC)
+
+
+def _inbox_link(window_start: datetime, **filters: str) -> str:
+    zone = ZoneInfo(get_settings().auto_reply_timezone)
+    params = {**filters, "from": window_start.astimezone(zone).date().isoformat()}
+    return "/inbox?" + "&".join(f"{key}={value}" for key, value in params.items())
+
+
+def _since_text(window_start: datetime) -> str:
+    zone = ZoneInfo(get_settings().auto_reply_timezone)
+    return window_start.astimezone(zone).strftime("%d/%m")
+
+
+def _conversations(count: int) -> str:
+    return f"{count} {'conversación' if count == 1 else 'conversaciones'}"
+
+
+def _id_list(ids: list[int], total: int) -> str:
+    shown = ", ".join(f"#{id}" for id in ids)
+    return shown + (f" y {total - len(ids)} más" if total > len(ids) else "")
+
+
 def _watch_overdue(db: Session, at: datetime) -> None:
+    """Pending conversations nobody answered: counted exactly as the inbox filter shows them."""
     minutes = get_settings().overdue_minutes
-    count, oldest = db.execute(
-        select(func.count(Conversation.id), func.min(Conversation.last_inbound_at)).where(
+    window_start = _local_window_start(at, OVERDUE_WINDOW)
+    rows = db.execute(
+        select(Conversation.id, Conversation.last_inbound_at)
+        .where(
             Conversation.status == "pending",
             Conversation.last_inbound_at <= at - timedelta(minutes=minutes),
-            Conversation.last_inbound_at >= at - OVERDUE_WINDOW,
+            Conversation.last_inbound_at >= window_start,
         )
-    ).one()
+        .order_by(Conversation.last_inbound_at, Conversation.id)
+    ).all()
     wanted = {}
-    if count:
-        waited = int((at - _aware(oldest)).total_seconds() // 60)
+    if rows:
+        count = len(rows)
+        waited = int((at - _aware(rows[0][1])).total_seconds() // 60)
         wait_text = f"{waited // 60} h" if waited >= 120 else f"{waited} min"
         wanted["inbox.overdue"] = (
-            f"{count} consulta{'s' if count != 1 else ''} sin responder desde hace más de "
-            f"{minutes} min",
-            f"La más antigua espera desde hace {wait_text}.",
-            "/inbox",
+            f"{_conversations(count)} pendiente{'s' if count != 1 else ''} de responder",
+            f"Llevan más de {minutes} min en estado Pendiente; la más antigua, {wait_text}. "
+            "Respóndelas o, si no necesitan respuesta, ciérralas desde la bandeja. "
+            f"Recibidas desde el {_since_text(window_start)}; las que más esperan: "
+            f"{_id_list([row[0] for row in rows[:5]], count)}.",
+            _inbox_link(window_start, status="pending"),
         )
     _sync_set(db, "inbox.overdue", wanted, at)
 
@@ -517,18 +552,29 @@ def _watch_assignments(db: Session, at: datetime) -> None:
 
 
 def _watch_classification_review(db: Session, at: datetime) -> None:
-    count = db.scalar(
-        select(func.count(Message.id)).where(
-            classification_review_clause(), Message.created_at >= at - RECENT_WINDOW
+    """Conversations whose automatic classification needs a human, as the inbox filter shows."""
+    window_start = _local_window_start(at, RECENT_WINDOW)
+    ids = db.scalars(
+        select(Conversation.id)
+        .where(
+            Conversation.classification_open.is_(True),
+            Conversation.id.in_(
+                select(Message.conversation_id).where(classification_review_clause()).distinct()
+            ),
+            Conversation.last_inbound_at >= window_start,
         )
-    )
+        .order_by(Conversation.last_inbound_at.desc(), Conversation.id.desc())
+    ).all()
     wanted = {}
-    if count:
+    if ids:
+        count = len(ids)
         wanted["classification.review"] = (
-            f"{count} mensaje{'s' if count != 1 else ''} con la clasificación por revisar",
-            "La clasificación automática no está segura. Confírmala o corrígela desde la "
-            "bandeja. Cuenta los recibidos en los últimos 7 días.",
-            "/inbox",
+            f"{_conversations(count)} con la clasificación por revisar",
+            "La IA no está segura de si piden alojamiento (demanda), son de un huésped con "
+            "reserva o no son demanda. Abre cada una y confirma o corrige la clasificación "
+            "en sus mensajes. "
+            f"Recibidas desde el {_since_text(window_start)}: {_id_list(ids[:5], count)}.",
+            _inbox_link(window_start, classification="review"),
         )
     _sync_set(db, "classification.review", wanted, at)
 
