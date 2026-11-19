@@ -4,9 +4,10 @@ import { Planning } from './Planning'
 import { ImportHistory, SourceImportForm } from './SourceImports'
 import { Reservations } from './Reservations'
 import { Customers } from './Customers'
+import { CustomerRetention } from './CustomerRetention'
 import { Tariffs } from './Tariffs'
 import type { ClassificationLabel, Conversation, InboxResponse, InboxThread, ImportBatch, Message, Property, Summary, User } from './types'
-import { ArrowLeft, ArrowRight, Bell, CalendarDays, ChartColumn, CalendarRange, Cable, ChevronDown, ClipboardList, Contact, FileText, FlaskConical, House, Inbox, LayoutDashboard, LogOut, Menu, RefreshCw, Reply, Search, Settings, Tag, Upload, Users, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Bell, CalendarDays, ChartColumn, CalendarRange, Cable, ChevronDown, ClipboardList, Contact, FileText, FlaskConical, HeartHandshake, House, Inbox, LayoutDashboard, LogOut, Menu, RefreshCw, Reply, Search, Settings, Tag, Upload, Users, X } from 'lucide-react'
 import { EmailPreviewDialog } from './EmailPreviewDialog'
 import { AutoReplyCard, type AutoReplyStatus } from './AutoReplyCard'
 import { EmailMessageContent } from './EmailMessageContent'
@@ -31,10 +32,11 @@ import { Analysis } from './Analysis'
 import { Reports } from './Reports'
 import { Notifications } from './Notifications'
 
-type View = 'notifications' | 'reservations' | 'customers' | 'analysis' | 'summary' | 'inbox' | 'bookings' | 'properties' | 'tariffs' | 'tariff-lab' | 'reports' | 'planning' | 'imports' | 'integrations' | 'users'
+type View = 'notifications' | 'reservations' | 'customers' | 'customer-retention' | 'analysis' | 'summary' | 'inbox' | 'bookings' | 'properties' | 'tariffs' | 'tariff-lab' | 'reports' | 'planning' | 'imports' | 'integrations' | 'users'
 const navigation: { id: View; label: string; icon: typeof LayoutDashboard }[] = [
   { id: 'reservations', label: 'Reservas', icon: CalendarDays },
-  { id: 'customers', label: 'Clientes', icon: Contact },
+  { id: 'customers', label: 'Directorio', icon: Contact },
+  { id: 'customer-retention', label: 'A recuperar', icon: HeartHandshake },
   { id: 'planning', label: 'Planning', icon: CalendarRange },
   { id: 'analysis', label: 'Análisis', icon: ChartColumn },
   { id: 'tariffs', label: 'Tarifas', icon: Tag },
@@ -53,7 +55,7 @@ const navigation: { id: View; label: string; icon: typeof LayoutDashboard }[] = 
 type SectionId = 'reservations' | 'customers' | 'communication' | 'performance' | 'notifications' | 'settings'
 const sections: { id: SectionId; label: string; icon: typeof LayoutDashboard; views: View[] }[] = [
   { id: 'reservations', label: 'Reservas', icon: CalendarDays, views: ['reservations', 'planning', 'properties'] },
-  { id: 'customers', label: 'Clientes', icon: Contact, views: ['customers'] },
+  { id: 'customers', label: 'Clientes', icon: Contact, views: ['customers', 'customer-retention'] },
   { id: 'communication', label: 'Comunicación', icon: Inbox, views: ['inbox', 'bookings', 'summary'] },
   { id: 'performance', label: 'Rendimiento', icon: ChartColumn, views: ['analysis', 'tariffs', 'tariff-lab', 'reports'] },
   { id: 'notifications', label: 'Avisos', icon: Bell, views: ['notifications'] },
@@ -469,6 +471,8 @@ export default function App() {
     if (id) api<Conversation>(`/api/conversations/${id}`).then(setDetail).catch(err => setError((err as Error).message))
   }
   const section = navigation.find(item => item.id === view)?.label || 'Reservas'
+  // These views draw their own full-width heading.
+  const ownHeader = view === 'reservations' || view === 'customers' || view === 'customer-retention'
   const visibleView = (id: View) => id !== 'users' || user.role === 'admin'
   const activeSection = sectionOf(view)
   const sectionTabs = navigation.filter(item => activeSection.views.includes(item.id) && visibleView(item.id))
@@ -536,10 +540,10 @@ export default function App() {
           <span className="flex-1 text-sm font-semibold">AvantIA</span>
           <Button type="button" variant="ghost" size="icon" className="relative text-white hover:bg-white/10 hover:text-white" onClick={() => navigate('notifications')} aria-label={unreadNotifications ? `Avisos: ${unreadNotifications} sin leer` : 'Avisos'}><Bell size={20} />{!!unreadNotifications && <span className={`absolute right-1 top-1 min-w-4 rounded-full px-1 text-[0.6rem] font-semibold leading-4 ${criticalNotifications ? 'bg-error-bg text-error-ink' : 'bg-white text-brand-charcoal'}`} aria-hidden="true">{unreadNotifications}</span>}</Button>
         </header>
-        <main className={`mx-auto w-full ${view === 'reservations' || view === 'customers' ? 'max-w-none px-4 py-5 sm:px-6 lg:px-8' : 'max-w-screen-2xl px-4 py-6 sm:px-6 lg:px-10 lg:py-9'}`}>
+        <main className={`mx-auto w-full ${ownHeader ? 'max-w-none px-4 py-5 sm:px-6 lg:px-8' : 'max-w-screen-2xl px-4 py-6 sm:px-6 lg:px-10 lg:py-9'}`}>
         {renderSectionTabs()}
-        {view !== 'reservations' && view !== 'customers' && <div className="mb-6 flex flex-wrap items-end justify-between gap-4"><div><p className="mb-2 text-xs font-semibold uppercase tracking-wide text-primary">TU ESPACIO DE HOSPITALIDAD <span className="px-1 text-muted-foreground">/</span> {activeSection.label.toUpperCase()}{activeSection.label !== section && <><span className="px-1 text-muted-foreground">/</span> {section.toUpperCase()}</>}</p><h1 className="mb-2 text-3xl font-semibold leading-tight sm:text-4xl">{section}</h1><p className="max-w-3xl text-sm leading-6 text-muted-foreground">{view === 'summary' ? 'Cada conversación, en su sitio. La atención empieza aquí.' : view === 'inbox' ? 'Lee el contexto, revisa el borrador y decide cómo responder.' : view === 'bookings' ? 'Prerreservas que necesitan una mirada y seguimiento humano.' : view === 'imports' ? 'Fuentes y disponibilidad, siempre con su origen a la vista.' : view === 'planning' ? 'Una vista clara de las estancias y los huecos disponibles.' : view === 'tariffs' ? 'Consulta los importes por temporada y grupo tarifario.' : view === 'tariff-lab' ? 'Contrasta el histórico, los precios de mercado y los festivos antes de preparar una propuesta.' : view === 'analysis' ? 'Compara los años sobre el listado de reservas importado y detecta qué ha cambiado.' : view === 'reports' ? 'Los informes preparados con Claude y los generados por AvantIA, del más reciente al más antiguo.' : view === 'notifications' ? 'Lo que está pasando en AvantIA y lo que necesita tu atención, ordenado por gravedad.' : 'La información operativa de AvantIA, reunida con cuidado.'}</p></div><Button variant="outline" onClick={() => view === 'tariffs' || view === 'tariff-lab' ? setTariffRefreshVersion(version => version + 1) : view === 'analysis' ? setAnalysisRefreshVersion(version => version + 1) : view === 'reports' ? setReportsRefreshVersion(version => version + 1) : void refresh()} disabled={busy}><RefreshCw size={15} /> {view === 'tariffs' || view === 'tariff-lab' ? 'Actualizar tarifas' : 'Actualizar'}</Button></div>}
-        {readOnlyMode && view !== 'reservations' && view !== 'customers' && <Alert variant="info" role="status" className="mb-5 flex flex-wrap items-center gap-x-4 gap-y-1"><strong className="text-xs">MODO DESARROLLO · SOLO LECTURA</strong><span>IMAP se consulta sin modificar correos. Los envíos de email y WhatsApp están bloqueados.</span></Alert>}
+        {!ownHeader && <div className="mb-6 flex flex-wrap items-end justify-between gap-4"><div><p className="mb-2 text-xs font-semibold uppercase tracking-wide text-primary">TU ESPACIO DE HOSPITALIDAD <span className="px-1 text-muted-foreground">/</span> {activeSection.label.toUpperCase()}{activeSection.label !== section && <><span className="px-1 text-muted-foreground">/</span> {section.toUpperCase()}</>}</p><h1 className="mb-2 text-3xl font-semibold leading-tight sm:text-4xl">{section}</h1><p className="max-w-3xl text-sm leading-6 text-muted-foreground">{view === 'summary' ? 'Cada conversación, en su sitio. La atención empieza aquí.' : view === 'inbox' ? 'Lee el contexto, revisa el borrador y decide cómo responder.' : view === 'bookings' ? 'Prerreservas que necesitan una mirada y seguimiento humano.' : view === 'imports' ? 'Fuentes y disponibilidad, siempre con su origen a la vista.' : view === 'planning' ? 'Una vista clara de las estancias y los huecos disponibles.' : view === 'tariffs' ? 'Consulta los importes por temporada y grupo tarifario.' : view === 'tariff-lab' ? 'Contrasta el histórico, los precios de mercado y los festivos antes de preparar una propuesta.' : view === 'analysis' ? 'Compara los años sobre el listado de reservas importado y detecta qué ha cambiado.' : view === 'reports' ? 'Los informes preparados con Claude y los generados por AvantIA, del más reciente al más antiguo.' : view === 'notifications' ? 'Lo que está pasando en AvantIA y lo que necesita tu atención, ordenado por gravedad.' : 'La información operativa de AvantIA, reunida con cuidado.'}</p></div><Button variant="outline" onClick={() => view === 'tariffs' || view === 'tariff-lab' ? setTariffRefreshVersion(version => version + 1) : view === 'analysis' ? setAnalysisRefreshVersion(version => version + 1) : view === 'reports' ? setReportsRefreshVersion(version => version + 1) : void refresh()} disabled={busy}><RefreshCw size={15} /> {view === 'tariffs' || view === 'tariff-lab' ? 'Actualizar tarifas' : 'Actualizar'}</Button></div>}
+        {readOnlyMode && !ownHeader && <Alert variant="info" role="status" className="mb-5 flex flex-wrap items-center gap-x-4 gap-y-1"><strong className="text-xs">MODO DESARROLLO · SOLO LECTURA</strong><span>IMAP se consulta sin modificar correos. Los envíos de email y WhatsApp están bloqueados.</span></Alert>}
         {error && <Alert variant="destructive" className="mb-5 flex items-center justify-between gap-4"><span>{error}</span><Button variant="ghost" size="icon" onClick={() => setError('')} aria-label="Cerrar aviso"><X size={16} /></Button></Alert>}
         <EmailPreviewDialog message={expandedEmail} fallbackSubject={detail?.subject} onClose={() => setExpandedEmail(null)} />
         {detail && detail.kind !== 'booking' && <ReplyComposerDialog open={composerOpen} conversation={detail} readOnlyMode={readOnlyMode} onClose={() => setComposerOpen(false)} onChanged={refresh} />}
@@ -547,6 +551,7 @@ export default function App() {
         {view === 'notifications' && <Notifications onOpen={openNotificationLink} onChanged={() => void refresh()} />}
         {view === 'reservations' && <Reservations onImport={() => navigate('imports')} />}
         {view === 'customers' && <Customers onImport={() => navigate('imports')} />}
+        {view === 'customer-retention' && <CustomerRetention onImport={() => navigate('imports')} />}
         {view === 'summary' && <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-12">
           {[{ title: 'PENDIENTES', value: summary?.pending ?? '—', description: 'Consultas por atender', action: 'Abrir bandeja →', onClick: () => navigate('inbox') }, { title: 'PRERRESERVAS', value: summary?.bookings ?? '—', description: 'Booking · revisión humana', action: 'Ver tareas →', onClick: () => navigate('bookings') }, { title: 'ENVÍOS INCIERTOS', value: summary?.delivery_unknown ?? '—', description: 'Comprobar antes de reenviar' }].map((metric, index) => <Card key={metric.title} className={`relative overflow-hidden p-5 sm:p-6 xl:col-span-4 ${index === 1 ? 'border-primary/30' : ''}`}><span className="text-xs font-semibold tracking-wide text-muted-foreground">{metric.title}</span><strong className="my-3 block text-5xl font-semibold tabular-nums text-foreground">{metric.value}</strong><small className="block text-sm text-muted-foreground">{metric.description}</small>{metric.action && <Button variant="link" className="mt-3 h-auto p-0" onClick={metric.onClick}>{metric.action}</Button>}</Card>)}
           <Card className="p-5 sm:p-6 xl:col-span-7"><div className="mb-4 flex items-start justify-between gap-3"><div><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">COLA ACTIVA</p><h2 className="text-xl font-semibold">Consultas recientes</h2></div><Button variant="link" size="sm" className="shrink-0 px-1" onClick={() => navigate('inbox')}>Ver todas →</Button></div>{items.length ? items.slice(0, 5).map(item => <Button variant="ghost" className="h-auto w-full justify-start gap-3 rounded-none border-t border-border px-1 py-3 text-left whitespace-normal" key={item.id} onClick={() => void select(item.id)}><span className="text-xs text-primary">#{item.id}</span><span className="min-w-0 flex-1 truncate text-sm">{item.customer_name || item.customer_address || 'Cliente'}<small className="block truncate text-xs text-muted-foreground">{item.subject || label(item.channel)}</small></span><Badge value={item.status} /><span className="hidden shrink-0 text-xs text-muted-foreground lg:inline">{date(item.last_inbound_at)}</span></Button>) : <Empty>Aún no hay consultas. Conecta un canal para empezar.</Empty>}</Card>

@@ -158,3 +158,16 @@ export type CustomerDetail = CustomerSummary & {
   source: { batch_id: number; filename: string | null; imported_at: string | null }
   reservations: ReservationRecord[]
 }
+export type RetentionMatch = 'exact' | 'ambiguous' | 'none'
+export type RetentionGuest = {
+  key: string; display_name: string; years: number[]; stays: number; nights: number; total: string
+  last_stay_start: string; last_stay_end: string; last_locator: string; channel: string | null
+  property_id: string | null; property_name: string | null; match: RetentionMatch; candidates: number
+  avantio_id: string | null; email: string | null; phone: string | null; language: string | null
+  country: string | null; email_opt_in: boolean | null
+}
+export type RetentionResponse = {
+  items: RetentionGuest[]; total: number; offset: number; limit: number; has_snapshot: boolean
+  target_year: number; base_years: number[]; channels: string[]
+  summary: { guests: number; linked: number; with_email: number; opt_in: number }
+}
