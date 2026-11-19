@@ -260,9 +260,13 @@ export default function App() {
   const inboxFilterVersion = useRef(0)
   const [mobileMenu, setMobileMenu] = useState(false)
   const wasMobileMenuOpen = useRef(false)
-  const lastViews = useRef<Partial<Record<SectionId, View>>>({})
+  const [expandedSections, setExpandedSections] = useState<Set<SectionId>>(() => new Set([sectionOf(viewFromPath(path)).id]))
 
-  useEffect(() => { lastViews.current[sectionOf(view).id] = view }, [view])
+  // The group holding the current view is always unfolded, also after links and back/forward.
+  useEffect(() => {
+    const id = sectionOf(view).id
+    setExpandedSections(current => current.has(id) ? current : new Set(current).add(id))
+  }, [view])
 
   useEffect(() => {
     if (mobileMenu) document.getElementById('mobile-menu-close')?.focus()
@@ -484,20 +488,36 @@ export default function App() {
   const ownHeader = view === 'reservations' || view === 'customers' || view === 'customer-retention'
   const visibleView = (id: View) => id !== 'users' || user.role === 'admin'
   const activeSection = sectionOf(view)
-  const sectionTabs = navigation.filter(item => activeSection.views.includes(item.id) && visibleView(item.id))
-    .sort((left, right) => activeSection.views.indexOf(left.id) - activeSection.views.indexOf(right.id))
-  const openSection = (id: SectionId) => {
-    const target = sections.find(item => item.id === id)!
-    const remembered = lastViews.current[id]
-    navigate(remembered && visibleView(remembered) ? remembered : target.views.find(visibleView) || target.views[0])
-  }
-  const renderNavigation = () => sections.map(item => {
-    const active = activeSection.id === item.id
-    return <Button key={item.id} type="button" variant="ghost" aria-current={active ? 'page' : undefined} className={`min-h-11 w-full justify-start gap-3 px-3 text-left text-sm ${active ? 'bg-brand-orange text-white hover:bg-brand-orange/90 hover:text-white' : 'text-white/80 hover:bg-white/10 hover:text-white'}`} onClick={() => openSection(item.id)}><item.icon size={17} strokeWidth={1.8} /><span className="min-w-0 flex-1 truncate">{item.label}</span>{item.id === 'communication' && !!summary?.pending && <span className={`rounded-full px-1.5 py-0.5 text-[0.65rem] ${active ? 'bg-background text-primary' : 'bg-white/15 text-white'}`} aria-label={`${summary.pending} consultas pendientes`}>{summary.pending}</span>}{item.id === 'notifications' && !!unreadNotifications && <span className={`rounded-full px-1.5 py-0.5 text-[0.65rem] font-semibold ${criticalNotifications ? 'bg-error-bg text-error-ink' : active ? 'bg-background text-primary' : 'bg-white/15 text-white'}`} aria-label={`${unreadNotifications} avisos sin leer${criticalNotifications ? `, ${criticalNotifications} críticos` : ''}`}>{unreadNotifications}</span>}</Button>
+  const toggleSection = (id: SectionId) => setExpandedSections(current => {
+    const next = new Set(current)
+    if (!next.delete(id)) next.add(id)
+    return next
   })
-  const renderSectionTabs = () => sectionTabs.length > 1 && <nav aria-label={`Vistas de ${activeSection.label}`} className="-mx-1 mb-5 overflow-x-auto border-b border-border">
-    <div className="flex min-w-max gap-1 px-1">{sectionTabs.map(item => <button key={item.id} type="button" aria-current={view === item.id ? 'page' : undefined} onClick={() => navigate(item.id)} className={`-mb-px flex min-h-11 items-center gap-2 border-b-2 px-3 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background ${view === item.id ? 'border-brand-orange text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'}`}><item.icon size={16} strokeWidth={1.8} aria-hidden="true" />{item.label}{item.id === 'inbox' && !!summary?.pending && <span className="rounded-full bg-muted px-1.5 py-0.5 text-[0.65rem] text-foreground" aria-label={`${summary.pending} pendientes`}>{summary.pending}</span>}</button>)}</div>
-  </nav>
+  const pendingBadge = (selected: boolean) => !!summary?.pending && <span className={`rounded-full px-1.5 py-0.5 text-[0.65rem] ${selected ? 'bg-background text-primary' : 'bg-white/15 text-white'}`} aria-label={`${summary.pending} consultas pendientes`}>{summary.pending}</span>
+  const notificationsBadge = (selected: boolean) => !!unreadNotifications && <span className={`rounded-full px-1.5 py-0.5 text-[0.65rem] font-semibold ${criticalNotifications ? 'bg-error-bg text-error-ink' : selected ? 'bg-background text-primary' : 'bg-white/15 text-white'}`} aria-label={`${unreadNotifications} avisos sin leer${criticalNotifications ? `, ${criticalNotifications} críticos` : ''}`}>{unreadNotifications}</span>
+  const itemClass = (selected: boolean) => `min-h-11 w-full justify-start gap-3 px-3 text-left text-sm ${selected ? 'bg-brand-orange text-white hover:bg-brand-orange/90 hover:text-white' : 'text-white/80 hover:bg-white/10 hover:text-white'}`
+  // Avantio-style side menu: a group per section that unfolds its views; one-view sections are plain links.
+  const renderNavigation = (prefix: string) => sections.map(item => {
+    const children = navigation.filter(entry => item.views.includes(entry.id) && visibleView(entry.id))
+      .sort((left, right) => item.views.indexOf(left.id) - item.views.indexOf(right.id))
+    const active = activeSection.id === item.id
+    if (children.length === 1) {
+      const only = children[0]
+      return <Button key={item.id} type="button" variant="ghost" aria-current={view === only.id ? 'page' : undefined} className={itemClass(view === only.id)} onClick={() => navigate(only.id)}><item.icon size={17} strokeWidth={1.8} /><span className="min-w-0 flex-1 truncate">{item.label}</span>{item.id === 'notifications' && notificationsBadge(view === only.id)}</Button>
+    }
+    const open = expandedSections.has(item.id)
+    const groupId = `${prefix}-nav-${item.id}`
+    return <div key={item.id}>
+      <Button type="button" variant="ghost" aria-expanded={open} aria-controls={groupId} className={`min-h-11 w-full justify-start gap-3 px-3 text-left text-sm hover:bg-white/10 hover:text-white ${active ? 'font-semibold text-white' : 'text-white/80'}`} onClick={() => toggleSection(item.id)}>
+        <item.icon size={17} strokeWidth={1.8} /><span className="min-w-0 flex-1 truncate">{item.label}</span>
+        {!open && item.id === 'communication' && pendingBadge(false)}
+        <ChevronDown size={16} aria-hidden="true" className={`shrink-0 text-white/60 transition-transform motion-reduce:transition-none ${open ? 'rotate-180' : ''}`} />
+      </Button>
+      {open && <ul id={groupId} className="mb-1 mt-0.5 grid gap-0.5 border-l border-white/15 pl-2 ml-5">{children.map(entry => <li key={entry.id}>
+        <Button type="button" variant="ghost" aria-current={view === entry.id ? 'page' : undefined} className={`${itemClass(view === entry.id)} min-h-10 gap-2.5`} onClick={() => navigate(entry.id)}><entry.icon size={15} strokeWidth={1.8} /><span className="min-w-0 flex-1 truncate">{entry.label}</span>{entry.id === 'inbox' && pendingBadge(view === entry.id)}</Button>
+      </li>)}</ul>}
+    </div>
+  })
   const renderAccount = () => <div className="flex min-w-0 items-center gap-3">
     <span className="grid size-9 shrink-0 place-items-center rounded bg-brand-turquoise text-sm font-semibold text-brand-charcoal">{user.username.slice(0, 1).toUpperCase()}</span>
     <span className="min-w-0 flex-1"><span className="block truncate text-sm">{user.username}</span><small className="block text-xs text-white/65">{user.role === 'admin' ? 'Administradora' : 'Operador'}</small></span>
@@ -529,7 +549,7 @@ export default function App() {
         <div className="flex h-20 shrink-0 items-center border-b border-white/10 px-4">
           <Button type="button" variant="ghost" className="h-12 min-w-0 px-1.5 text-white hover:bg-white/10 hover:text-white" onClick={() => navigate('reservations')} aria-label="Ir a Reservas"><BrandLogo className="text-white" /></Button>
         </div>
-        <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto px-3 py-4" aria-label="Principal">{renderNavigation()}</nav>
+        <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto px-3 py-4" aria-label="Principal">{renderNavigation('desktop')}</nav>
         <div className="shrink-0 border-t border-white/10 p-4">{renderAccount()}</div>
       </aside>
       {mobileMenu && <>
@@ -539,7 +559,7 @@ export default function App() {
             <Button type="button" variant="ghost" className="h-12 min-w-0 px-1.5 text-white hover:bg-white/10 hover:text-white" onClick={() => navigate('reservations')} aria-label="Ir a Reservas"><BrandLogo className="text-white" /></Button>
             <Button id="mobile-menu-close" type="button" variant="ghost" size="icon" className="shrink-0 text-white hover:bg-white/10 hover:text-white" onClick={() => setMobileMenu(false)} aria-label="Cerrar menú"><X size={20} /></Button>
           </div>
-          <nav id="mobile-primary-navigation" className="min-h-0 flex-1 space-y-1 overflow-y-auto px-3 py-4" aria-label="Principal">{renderNavigation()}</nav>
+          <nav id="mobile-primary-navigation" className="min-h-0 flex-1 space-y-1 overflow-y-auto px-3 py-4" aria-label="Principal">{renderNavigation('mobile')}</nav>
           <div className="shrink-0 border-t border-white/10 p-4">{renderAccount()}</div>
         </aside>
       </>}
@@ -550,7 +570,6 @@ export default function App() {
           <Button type="button" variant="ghost" size="icon" className="relative text-white hover:bg-white/10 hover:text-white" onClick={() => navigate('notifications')} aria-label={unreadNotifications ? `Avisos: ${unreadNotifications} sin leer` : 'Avisos'}><Bell size={20} />{!!unreadNotifications && <span className={`absolute right-1 top-1 min-w-4 rounded-full px-1 text-[0.6rem] font-semibold leading-4 ${criticalNotifications ? 'bg-error-bg text-error-ink' : 'bg-white text-brand-charcoal'}`} aria-hidden="true">{unreadNotifications}</span>}</Button>
         </header>
         <main className={`mx-auto w-full ${ownHeader ? 'max-w-none px-4 py-5 sm:px-6 lg:px-8' : 'max-w-screen-2xl px-4 py-6 sm:px-6 lg:px-10 lg:py-9'}`}>
-        {renderSectionTabs()}
         {!ownHeader && <div className="mb-6 flex flex-wrap items-end justify-between gap-4"><div><p className="mb-2 text-xs font-semibold uppercase tracking-wide text-primary">TU ESPACIO DE HOSPITALIDAD <span className="px-1 text-muted-foreground">/</span> {activeSection.label.toUpperCase()}{activeSection.label !== section && <><span className="px-1 text-muted-foreground">/</span> {section.toUpperCase()}</>}</p><h1 className="mb-2 text-3xl font-semibold leading-tight sm:text-4xl">{section}</h1><p className="max-w-3xl text-sm leading-6 text-muted-foreground">{view === 'summary' ? 'Cada conversación, en su sitio. La atención empieza aquí.' : view === 'inbox' ? 'Lee el contexto, revisa el borrador y decide cómo responder.' : view === 'bookings' ? 'Prerreservas que necesitan una mirada y seguimiento humano.' : view === 'imports' ? 'Fuentes y disponibilidad, siempre con su origen a la vista.' : view === 'planning' ? 'Una vista clara de las estancias y los huecos disponibles.' : view === 'tariffs' ? 'Consulta los importes por temporada y grupo tarifario.' : view === 'tariff-lab' ? 'Contrasta el histórico, los precios de mercado y los festivos antes de preparar una propuesta.' : view === 'analysis' ? 'Compara los años sobre el listado de reservas importado y detecta qué ha cambiado.' : view === 'reports' ? 'Los informes preparados con Claude y los generados por AvantIA, del más reciente al más antiguo.' : view === 'notifications' ? 'Lo que está pasando en AvantIA y lo que necesita tu atención, ordenado por gravedad.' : 'La información operativa de AvantIA, reunida con cuidado.'}</p></div><Button variant="outline" onClick={() => view === 'tariffs' || view === 'tariff-lab' ? setTariffRefreshVersion(version => version + 1) : view === 'analysis' ? setAnalysisRefreshVersion(version => version + 1) : view === 'reports' ? setReportsRefreshVersion(version => version + 1) : void refresh()} disabled={busy}><RefreshCw size={15} /> {view === 'tariffs' || view === 'tariff-lab' ? 'Actualizar tarifas' : 'Actualizar'}</Button></div>}
         {readOnlyMode && !ownHeader && <Alert variant="info" role="status" className="mb-5 flex flex-wrap items-center gap-x-4 gap-y-1"><strong className="text-xs">MODO DESARROLLO · SOLO LECTURA</strong><span>IMAP se consulta sin modificar correos. Los envíos de email y WhatsApp están bloqueados.</span></Alert>}
         {error && <Alert variant="destructive" className="mb-5 flex items-center justify-between gap-4"><span>{error}</span><Button variant="ghost" size="icon" onClick={() => setError('')} aria-label="Cerrar aviso"><X size={16} /></Button></Alert>}
