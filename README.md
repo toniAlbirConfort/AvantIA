@@ -160,7 +160,7 @@ El worker reevalúa las condiciones cada 30 segundos. Los avisos se resuelven so
 | CSV de disponibilidad más antiguo que `AVAILABILITY_MAX_AGE_HOURS` | Requiere acción | Admin | Se importa un CSV válido |
 | Trabajo en segundo plano fallido (uno por tipo, suma ocurrencias) | Crítico | Admin | Se descarta a mano |
 | Envío incierto en una conversación | Crítico | Admin | Se registra «enviado» o «no enviado» |
-| Consultas sin responder tras `OVERDUE_MINUTES` (recibidas en las últimas 48 h) | Requiere acción | Todos | No queda ninguna pendiente |
+| Conversaciones pendientes de responder tras `OVERDUE_MINUTES` (recibidas desde las 0:00 de hace dos días; cita las que más esperan y «Abrir» filtra la bandeja por Pendiente y esa fecha) | Requiere acción | Todos | No queda ninguna pendiente |
 | Prerreservas abiertas de los últimos 7 días (un solo aviso con el recuento; vuelve a salir si llega una nueva) | Requiere acción | Todos | Se cierran todas |
 | Consulta sin registrar en Avantio | Requiere acción | Todos | Se registra, se vincula o se marca «no procede» |
 | Importación rechazada (últimas 24 h) | Requiere acción | Admin | Se descarta a mano |
@@ -168,7 +168,7 @@ El worker reevalúa las condiciones cada 30 segundos. Los avisos se resuelven so
 | Análisis con IA fallando (3 o más clasificaciones fallidas en 30 min sin ningún éxito después) | Requiere acción | Admin | Vuelve a clasificar un mensaje |
 | Conversación asignada por un compañero (pendiente, últimos 7 días) | Informativo | La persona asignada | Se reasigna o deja de estar pendiente |
 | Autorespuesta fallida o copia en Enviados fallida (suma ocurrencias) | Requiere acción | Admin | Se descarta a mano |
-| Mensajes con la clasificación por revisar (últimos 7 días, un solo aviso con el recuento) | Informativo | Todos | No queda ninguno por revisar |
+| Conversaciones con la clasificación por revisar (últimos 7 días, un solo aviso con el recuento; cita las más recientes y «Abrir» filtra la bandeja por «Revisión pendiente» y esa fecha) | Informativo | Todos | No queda ninguna por revisar |
 | Estudio de tarifas completado o parcial / fallido (últimas 24 h) | Informativo / Crítico | Admin | Se descarta a mano |
 | Última importación válida de un conjunto de datos con advertencias (uno por conjunto) | Informativo | Admin | Una importación posterior llega sin advertencias |
 | Trabajo interrumpido y recuperado por el worker (uno por tipo, suma ocurrencias) | Requiere acción | Admin | Se descarta a mano |

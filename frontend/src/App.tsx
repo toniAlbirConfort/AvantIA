@@ -460,9 +460,18 @@ export default function App() {
   const unreadNotifications = summary?.notifications?.unread || 0
   const criticalNotifications = summary?.notifications?.by_severity.critical || 0
   const openNotificationLink = (link: string) => {
-    const next = viewFromPath(link)
-    const id = Number(link.split('/')[2]) || undefined
-    if (next === 'inbox' && !id) { clearInboxFilters(); setStatusFilter('pending') }
+    // Links may carry inbox filters, e.g. /inbox?status=pending&from=2026-11-17.
+    const url = new URL(link, window.location.origin)
+    const next = viewFromPath(url.pathname)
+    const id = Number(url.pathname.split('/')[2]) || undefined
+    if (next === 'inbox' && !id) {
+      clearInboxFilters()
+      const filters = url.searchParams
+      if (filters.get('status')) setStatusFilter(filters.get('status') || '')
+      if (filters.get('classification')) setClassificationFilter(filters.get('classification') as ClassificationLabel | 'unclassified')
+      if (filters.get('registration')) setRegistrationFilter(filters.get('registration') as 'alerted' | 'pending' | 'registered')
+      if (filters.get('from')) { setDateFrom(filters.get('from') || ''); setDatePreset('custom') }
+    }
     setComposerOpen(false)
     if (id) { setDetail(null); setDirectId(id) }
     navigate(next, id)

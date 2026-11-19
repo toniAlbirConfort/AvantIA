@@ -150,8 +150,9 @@ def test_scan_aggregates_overdue_consultations(db):
     add_conversation(db, inbound=NOW - timedelta(days=5))  # outside the window
     notifications.scan(db, NOW)
     item = active(db, "inbox.overdue")
-    assert item.title.startswith("2 consultas sin responder")
-    assert "40 min" in item.body
+    assert item.title == "2 conversaciones pendientes de responder"
+    assert "40 min" in item.body and "#1, #2." in item.body
+    assert item.link == "/inbox?status=pending&from=2026-11-17"
 
     for conv in db.scalars(select(Conversation)).all():
         conv.status = "sent"
