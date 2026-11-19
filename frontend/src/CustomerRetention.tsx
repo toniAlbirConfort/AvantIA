@@ -25,6 +25,18 @@ const matchLabels: Record<RetentionMatch, { label: string; tone: string; title: 
   none: { label: 'Sin ficha', tone: 'bg-muted text-muted-foreground', title: 'Ninguna ficha de cliente tiene exactamente este nombre' },
 }
 type Contact = 'any' | 'email' | 'phone' | 'opt_in'
+const MONTHS = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre']
+const monthName = (month: number) => MONTHS[month - 1]
+// 0 means the whole year; a range like diciembre-febrero wraps over the new year.
+function periodLabel(from: number, to: number) {
+  if (!from) return ''
+  return from === to ? monthName(from) : `de ${monthName(from)} a ${monthName(to)}`
+}
+// Short form that reads well after "para": "enero de 2026", "diciembre–febrero de 2026".
+function periodFor(from: number, to: number, year: number) {
+  if (!from) return String(year)
+  return `${from === to ? monthName(from) : `${monthName(from)}–${monthName(to)}`} de ${year}`
+}
 
 function shortDate(value: string) {
   return new Intl.DateTimeFormat('es-ES', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${value}T12:00:00Z`))
@@ -48,7 +60,9 @@ export function CustomerRetention({ onImport }: { onImport: () => void }) {
   const [targetYear, setTargetYear] = useState(currentYear)
   const [baseYears, setBaseYears] = useState<number[]>([currentYear - 3, currentYear - 2, currentYear - 1])
   // Clicking several years in a row sends one request, once the selection settles.
-  const [requested, setRequested] = useState({ years: baseYears, target: targetYear })
+  const [monthFrom, setMonthFrom] = useState(0)
+  const [monthTo, setMonthTo] = useState(0)
+  const [requested, setRequested] = useState({ years: baseYears, target: targetYear, from: 0, to: 0 })
   const requestedYears = requested.years
   const [minStays, setMinStays] = useState('1')
   const [channel, setChannel] = useState('')
@@ -72,13 +86,14 @@ export function CustomerRetention({ onImport }: { onImport: () => void }) {
   }, [search])
 
   useEffect(() => {
-    const timer = window.setTimeout(() => setRequested({ years: baseYears, target: targetYear }), 400)
+    const timer = window.setTimeout(() => setRequested({ years: baseYears, target: targetYear, from: monthFrom, to: monthTo }), 400)
     return () => window.clearTimeout(timer)
-  }, [baseYears, targetYear])
+  }, [baseYears, targetYear, monthFrom, monthTo])
 
   const parameters = useCallback((offset: number) => {
     const params = new URLSearchParams({ target_year: String(requested.target), min_stays: minStays, contact, offset: String(offset), limit: String(PAGE_SIZE) })
     requestedYears.forEach(year => params.append('base_years', String(year)))
+    if (requested.from) { params.set('month_from', String(requested.from)); params.set('month_to', String(requested.to)) }
     if (channel) params.set('channel', channel)
     if (query) params.set('q', query)
     return params
@@ -143,7 +158,8 @@ export function CustomerRetention({ onImport }: { onImport: () => void }) {
     setSelected({ avantio_id: item.avantio_id, display_name: item.display_name, email: item.email, phone: item.phone, country: item.country, document_number: null, customer_class: null })
   }
 
-  const updating = loading || requestedYears.join() !== baseYears.join() || requested.target !== targetYear || search.trim() !== query
+  const updating = loading || requestedYears.join() !== baseYears.join() || requested.target !== targetYear || requested.from !== monthFrom || requested.to !== monthTo || search.trim() !== query
+  const period = periodLabel(monthFrom, monthTo)
   const counts = new Map((data?.years_available || []).map(item => [item.year, item.reservations]))
   const firstYear = Math.min(currentYear - YEARS_BACK, ...counts.keys())
   const lastYear = Math.max(currentYear + YEARS_AHEAD, ...counts.keys())
@@ -156,7 +172,7 @@ export function CustomerRetention({ onImport }: { onImport: () => void }) {
     <div className="flex flex-wrap items-center justify-between gap-4">
       <div>
         <h1 className="text-2xl font-semibold leading-tight sm:text-3xl">Clientes a recuperar</h1>
-        <p className="mt-1 max-w-3xl text-sm text-muted-foreground">Quién se alojó con vosotros en <strong className="font-semibold text-foreground">{yearsLabel}</strong> y todavía no tiene reserva para <strong className="font-semibold text-foreground">{targetYear}</strong>.</p>
+        <p className="mt-1 max-w-3xl text-sm text-muted-foreground">Quién se alojó con vosotros {!monthFrom ? 'en ' : monthFrom === monthTo ? `en ${monthName(monthFrom)} de ` : `entre ${monthName(monthFrom)} y ${monthName(monthTo)} de `}<strong className="font-semibold text-foreground">{yearsLabel}</strong> y todavía no tiene reserva para <strong className="font-semibold text-foreground">{periodFor(monthFrom, monthTo, targetYear)}</strong>.</p>
       </div>
       <div className="flex items-center gap-2">
         <Button type="button" variant="outline" onClick={() => void exportCsv()} disabled={exporting || !data?.total}><Download size={16} aria-hidden="true" /> {exporting ? 'Exportando…' : 'Exportar CSV'}</Button>
@@ -176,13 +192,28 @@ export function CustomerRetention({ onImport }: { onImport: () => void }) {
               <small className={`text-[0.68rem] font-normal ${counts.get(year) ? 'text-muted-foreground' : 'text-muted-foreground/70'}`}>{countLabel(year)}</small>
             </Button>
           })}</div>
-          <p className="text-xs leading-5 text-muted-foreground">Cuenta como estancia una reserva confirmada o pagada con entrada en los años marcados.</p>
+          <p className="text-xs leading-5 text-muted-foreground">Cuenta como estancia una reserva confirmada o pagada con entrada en los años marcados{period ? ` y en los meses elegidos` : ''}. Las cifras de cada año cuentan solo {period ? 'esos meses' : 'el año completo'}.</p>
+          <div className="mt-2 grid gap-2 sm:max-w-xl sm:grid-cols-2">
+            <label className="grid gap-1 text-xs font-medium">Meses de llegada: desde
+              <Select value={String(monthFrom)} onChange={event => { const value = Number(event.target.value); setMonthFrom(value); setMonthTo(value ? (monthTo || value) : 0) }}>
+                <option value="0">Todo el año</option>{MONTHS.map((name, index) => <option key={name} value={index + 1}>{name[0].toUpperCase() + name.slice(1)}</option>)}
+              </Select>
+            </label>
+            <label className="grid gap-1 text-xs font-medium">Hasta
+              <Select value={String(monthTo)} disabled={!monthFrom} onChange={event => setMonthTo(Number(event.target.value))}>
+                {!monthFrom && <option value="0">—</option>}{MONTHS.map((name, index) => <option key={name} value={index + 1}>{name[0].toUpperCase() + name.slice(1)}</option>)}
+              </Select>
+            </label>
+          </div>
+          {monthFrom > 0 && monthTo < monthFrom && <p className="text-xs leading-5 text-muted-foreground">El periodo cruza el cambio de año: cada estancia cuenta en el año en que entra.</p>}
         </fieldset>
         <ArrowRight size={20} aria-hidden="true" className="mt-9 hidden text-muted-foreground lg:block" />
         <label className="grid gap-2 text-xs">
           <span className="mb-1 font-semibold uppercase tracking-wide text-primary">2 · Sin reserva para</span>
           <Select value={String(targetYear)} onChange={event => changeTarget(Number(event.target.value))}>{yearOptions.filter(year => year > firstYear).map(year => <option key={year} value={year}>{year} · {countLabel(year)}</option>)}</Select>
-          <span className="leading-5 text-muted-foreground">Ya ha vuelto quien tiene una prerreserva, reserva confirmada o pagada con entrada en {targetYear}{targetYear <= currentYear ? `, o la hizo durante ${targetYear} para más adelante` : ''}.</span>
+          <span className="leading-5 text-muted-foreground">{period
+            ? <>Ya ha vuelto quien tiene una prerreserva, reserva confirmada o pagada con entrada {period} de {targetYear}. Si tiene reservas para otros meses de {targetYear}, se indica en su fila.</>
+            : <>Ya ha vuelto quien tiene una prerreserva, reserva confirmada o pagada con entrada en {targetYear}{targetYear <= currentYear ? `, o la hizo durante ${targetYear} para más adelante` : ''}.</>}</span>
         </label>
       </div>
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-[minmax(14rem,2fr)_repeat(3,minmax(10rem,1fr))_auto] xl:items-end">
@@ -202,7 +233,7 @@ export function CustomerRetention({ onImport }: { onImport: () => void }) {
     {data && data.has_snapshot && baseYears.length > 0 && updating && <p role="status" className="-mb-2 flex items-center gap-2 text-sm font-medium text-info-ink"><RefreshCw size={15} aria-hidden="true" className="animate-spin motion-reduce:animate-none" />Actualizando resultados…</p>}
 
     {data && data.has_snapshot && baseYears.length > 0 && <div aria-busy={updating} className={`grid grid-cols-2 gap-3 transition-opacity motion-reduce:transition-none xl:grid-cols-4 ${updating ? 'opacity-50' : ''}`}>
-      <Metric label="Huéspedes" value={data.summary.guests} detail={`Sin reserva para ${requested.target}`} />
+      <Metric label="Huéspedes" value={data.summary.guests} detail={`Sin reserva para ${periodFor(requested.from, requested.to, requested.target)}`} />
       <Metric label="Con ficha única" value={data.summary.linked} detail="Enlazados a un cliente" />
       <Metric label="Con email" value={data.summary.with_email} detail="Se les puede escribir" />
       <Metric label="Aceptan campañas" value={data.summary.opt_in} detail="Opt-in de newsletters" />
@@ -229,6 +260,7 @@ export function CustomerRetention({ onImport }: { onImport: () => void }) {
             <span className="grid min-w-0 gap-1.5">
               <strong className="truncate text-sm font-semibold" title={item.display_name}>{item.display_name}</strong>
               <span className="flex flex-wrap gap-1">{item.years.map(year => <Badge key={year} className="bg-muted font-medium text-muted-foreground">{year}</Badge>)}</span>
+              {item.target_bookings.length > 0 && <span className="text-xs text-info-ink">Ya tiene reserva en {requested.target}: {item.target_bookings.map(booking => shortDate(booking.start_date)).join(', ')}</span>}
             </span>
             <span className="text-sm"><span className="text-muted-foreground xl:hidden">Historial: </span><span className="tabular-nums">{item.stays} {item.stays === 1 ? 'estancia' : 'estancias'} · {item.nights} noches</span><small className="block text-xs text-muted-foreground tabular-nums">{euros.format(Number(item.total))}</small></span>
             <span className="min-w-0 text-sm"><span className="text-muted-foreground xl:hidden">Última estancia: </span>{shortDate(item.last_stay_start)}<small className="block truncate text-xs text-muted-foreground" title={item.property_name || undefined}>{item.property_name || '—'} · {item.last_locator}</small></span>

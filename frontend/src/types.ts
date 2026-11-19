@@ -183,6 +183,7 @@ export type RetentionGuest = {
   avantio_id: string | null; email: string | null; phone: string | null; language: string | null
   country: string | null; email_opt_in: boolean | null
   history: RetentionStay[]
+  target_bookings: { locator: string; start_date: string; end_date: string; status: string }[]
 }
 export type RetentionStay = {
   locator: string; start_date: string; end_date: string; nights: number; guests: number
@@ -194,4 +195,5 @@ export type RetentionResponse = {
   target_year: number; base_years: number[]; channels: string[]
   summary: { guests: number; linked: number; with_email: number; opt_in: number }
   years_available: { year: number; reservations: number }[]
+  months: [number, number] | null
 }
