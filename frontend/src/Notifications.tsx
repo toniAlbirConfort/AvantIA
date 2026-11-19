@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
-import { CircleAlert, CircleCheck, Info, OctagonAlert, type LucideIcon } from 'lucide-react'
+import { BellOff, CircleAlert, CircleCheck, Info, OctagonAlert, SlidersHorizontal, UserRound, type LucideIcon } from 'lucide-react'
 import { api } from './api'
-import type { AppNotification, NotificationCounts, NotificationSeverity } from './types'
+import type { AppNotification, NotificationCounts, NotificationPreference, NotificationSeverity } from './types'
 import { Alert } from './components/ui/alert'
 import { Badge } from './components/ui/badge'
 import { Button } from './components/ui/button'
@@ -21,6 +21,44 @@ const statusLabels: Record<AppNotification['status'], string> = {
   open: 'Abierto', dismissed: 'Descartado', resolved: 'Resuelto',
 }
 
+function NotificationPreferences({ onSaved }: { onSaved: () => void }) {
+  const [items, setItems] = useState<NotificationPreference[] | null>(null)
+  const [error, setError] = useState('')
+  const [saving, setSaving] = useState(false)
+  useEffect(() => {
+    api<NotificationPreference[]>('/api/notifications/preferences').then(setItems).catch(err => setError((err as Error).message))
+  }, [])
+  async function toggle(kind: string, muted: boolean) {
+    if (!items) return
+    const next = items.filter(item => item.kind === kind ? muted : item.muted).map(item => item.kind)
+    setSaving(true)
+    try {
+      setItems(await api<NotificationPreference[]>('/api/notifications/preferences', { method: 'PUT', body: JSON.stringify({ muted: next }) }))
+      setError('')
+      onSaved()
+    } catch (err) { setError((err as Error).message) } finally { setSaving(false) }
+  }
+  return <Card className="grid gap-4 p-5">
+    <div>
+      <h2 className="text-base font-semibold">Qué avisos cuentan para ti</h2>
+      <p className="mt-1 text-sm leading-6 text-muted-foreground">Un tipo silenciado sigue en la lista, pero no suma al contador. Los avisos críticos cuentan siempre.</p>
+    </div>
+    {error && <Alert variant="destructive">{error}</Alert>}
+    {!items
+      ? <Skeleton className="h-32 w-full" />
+      : <ul className="grid gap-2 sm:grid-cols-2" aria-label="Preferencias de avisos">
+        {items.map(item => <li key={item.kind}>
+          <label className={`flex min-h-11 items-center gap-3 rounded-md border border-border px-3 py-2 text-sm ${item.can_mute ? 'cursor-pointer hover:bg-accent' : 'opacity-75'}`}>
+            <input type="checkbox" className="size-4 accent-primary" checked={!item.muted} disabled={!item.can_mute || saving} onChange={event => void toggle(item.kind, !event.target.checked)} />
+            <span className="min-w-0 flex-1">{item.label}</span>
+            <Badge className={(severities[item.severity] || severities.info).tone}>{(severities[item.severity] || severities.info).label}</Badge>
+            {!item.can_mute && <span className="sr-only">(no se puede silenciar)</span>}
+          </label>
+        </li>)}
+      </ul>}
+  </Card>
+}
+
 function dateTime(value: string | null) {
   return value ? new Intl.DateTimeFormat('es-ES', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(value)) : '—'
 }
@@ -31,6 +69,7 @@ export function Notifications({ onOpen, onChanged }: { onOpen: (link: string) =>
   const [data, setData] = useState<NotificationList | null>(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [showPreferences, setShowPreferences] = useState(false)
 
   const load = useCallback(async () => {
     try {
@@ -79,9 +118,12 @@ export function Notifications({ onOpen, onChanged }: { onOpen: (link: string) =>
             {(Object.keys(severities) as NotificationSeverity[]).map(key => <option key={key} value={key}>{severities[key].label}</option>)}
           </Select>
         </label>
-        <Button type="button" variant="outline" disabled={busy || !counts?.unread} onClick={() => void markRead()}>Marcar todo como leído</Button>
+        <Button type="button" variant="outline" disabled={busy || !data?.items.some(item => !item.read && item.status === 'open')} onClick={() => void markRead()}>Marcar todo como leído</Button>
+        <Button type="button" variant="ghost" aria-expanded={showPreferences} onClick={() => setShowPreferences(value => !value)}><SlidersHorizontal size={16} aria-hidden="true" /> Preferencias</Button>
       </div>
     </Card>
+
+    {showPreferences && <NotificationPreferences onSaved={() => { void load(); onChanged() }} />}
 
     {error && <Alert variant="destructive">{error}</Alert>}
 
@@ -98,13 +140,15 @@ export function Notifications({ onOpen, onChanged }: { onOpen: (link: string) =>
             const Icon = meta.icon
             const unread = !item.read && item.status === 'open'
             return <li key={item.id}>
-              <Card className={`flex flex-col gap-3 p-4 sm:flex-row sm:items-start sm:p-5 ${unread ? 'border-l-4 border-l-primary' : ''} ${item.status !== 'open' ? 'opacity-75' : ''}`}>
+              <Card className={`flex flex-col gap-3 p-4 sm:flex-row sm:items-start sm:p-5 ${unread && !item.muted ? 'border-l-4 border-l-primary' : ''} ${item.status !== 'open' ? 'opacity-75' : ''}`}>
                 <span className={`grid size-9 shrink-0 place-items-center rounded-full ${meta.tone}`}><Icon size={18} aria-hidden="true" /></span>
                 <div className="min-w-0 flex-1">
                   <div className="mb-1 flex flex-wrap items-center gap-2">
                     <Badge className={meta.tone}>{meta.label}</Badge>
                     <span className="text-xs text-muted-foreground">{item.label}</span>
+                    {item.audience === 'user' && <Badge className="bg-info-bg text-info-ink"><UserRound size={12} aria-hidden="true" /> Para ti</Badge>}
                     {unread && <Badge className="bg-primary text-primary-foreground">Nuevo</Badge>}
+                    {item.muted && <Badge className="bg-muted text-muted-foreground"><BellOff size={12} aria-hidden="true" /> Silenciado</Badge>}
                     {item.status !== 'open' && <Badge className="bg-muted text-muted-foreground">{statusLabels[item.status]}</Badge>}
                   </div>
                   <h2 className="text-base font-semibold leading-6">{item.title}</h2>

@@ -86,10 +86,11 @@ export type InboxResponse = { items: InboxItem[]; total: number; offset: number;
 export type NotificationSeverity = 'critical' | 'action' | 'info'
 export type NotificationCounts = { unread: number; by_severity: Record<NotificationSeverity, number> }
 export type AppNotification = {
-  id: number; kind: string; label: string; severity: NotificationSeverity; audience: 'all' | 'admin';
+  id: number; kind: string; label: string; severity: NotificationSeverity; audience: 'all' | 'admin' | 'user';
   title: string; body: string | null; link: string | null; status: 'open' | 'dismissed' | 'resolved';
-  occurrences: number; created_at: string; last_seen_at: string; resolved_at: string | null; read: boolean
+  occurrences: number; created_at: string; last_seen_at: string; resolved_at: string | null; read: boolean; muted: boolean
 }
+export type NotificationPreference = { kind: string; label: string; severity: NotificationSeverity; audience: AppNotification['audience']; muted: boolean; can_mute: boolean }
 export type Summary = { pending: number; delivery_unknown: number; bookings: number; last_import_at: string | null; last_import_rows: number; notifications?: NotificationCounts }
 export type ImportIssue = { code: string; customer_id?: string; field?: string; locator?: string; property_id?: string; source_row?: number; source_batch_id?: number | null; locators?: string[] }
 export type ImportChange = { key: string; kind: string; fields?: string[] }
