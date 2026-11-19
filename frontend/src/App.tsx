@@ -6,7 +6,7 @@ import { Reservations } from './Reservations'
 import { Customers } from './Customers'
 import { Tariffs } from './Tariffs'
 import type { ClassificationLabel, Conversation, InboxResponse, InboxThread, ImportBatch, Message, Property, Summary, User } from './types'
-import { ArrowLeft, ArrowRight, Bell, CalendarDays, ChartColumn, CalendarRange, Cable, ChevronDown, ClipboardList, Contact, FileText, FlaskConical, House, Inbox, LayoutDashboard, LogOut, Menu, RefreshCw, Reply, Search, Tag, Upload, Users, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Bell, CalendarDays, ChartColumn, CalendarRange, Cable, ChevronDown, ClipboardList, Contact, FileText, FlaskConical, House, Inbox, LayoutDashboard, LogOut, Menu, RefreshCw, Reply, Search, Settings, Tag, Upload, Users, X } from 'lucide-react'
 import { EmailPreviewDialog } from './EmailPreviewDialog'
 import { AutoReplyCard, type AutoReplyStatus } from './AutoReplyCard'
 import { EmailMessageContent } from './EmailMessageContent'
@@ -49,6 +49,19 @@ const navigation: { id: View; label: string; icon: typeof LayoutDashboard }[] = 
   { id: 'users', label: 'Usuarios', icon: Users },
   { id: 'integrations', label: 'Integraciones', icon: Cable },
 ]
+// The side menu lists sections; each section shows its views as tabs. Views keep their own URL.
+type SectionId = 'reservations' | 'customers' | 'communication' | 'performance' | 'notifications' | 'settings'
+const sections: { id: SectionId; label: string; icon: typeof LayoutDashboard; views: View[] }[] = [
+  { id: 'reservations', label: 'Reservas', icon: CalendarDays, views: ['reservations', 'planning', 'properties'] },
+  { id: 'customers', label: 'Clientes', icon: Contact, views: ['customers'] },
+  { id: 'communication', label: 'Comunicación', icon: Inbox, views: ['inbox', 'bookings', 'summary'] },
+  { id: 'performance', label: 'Rendimiento', icon: ChartColumn, views: ['analysis', 'tariffs', 'tariff-lab', 'reports'] },
+  { id: 'notifications', label: 'Avisos', icon: Bell, views: ['notifications'] },
+  { id: 'settings', label: 'Configuración', icon: Settings, views: ['imports', 'integrations', 'users'] },
+]
+function sectionOf(view: View) {
+  return sections.find(item => item.views.includes(view)) || sections[0]
+}
 const fieldLabels: Record<string, string> = {
   property_id: 'ID alojamiento', property_name: 'Nombre', capacity: 'Capacidad',
   start_date: 'Entrada / inicio', end_date: 'Salida / fin', status: 'Estado',
@@ -243,6 +256,9 @@ export default function App() {
   const inboxFilterVersion = useRef(0)
   const [mobileMenu, setMobileMenu] = useState(false)
   const wasMobileMenuOpen = useRef(false)
+  const lastViews = useRef<Partial<Record<SectionId, View>>>({})
+
+  useEffect(() => { lastViews.current[sectionOf(view).id] = view }, [view])
 
   useEffect(() => {
     if (mobileMenu) document.getElementById('mobile-menu-close')?.focus()
@@ -451,8 +467,22 @@ export default function App() {
     if (id) api<Conversation>(`/api/conversations/${id}`).then(setDetail).catch(err => setError((err as Error).message))
   }
   const section = navigation.find(item => item.id === view)?.label || 'Reservas'
-  const visibleNavigation = navigation.filter(item => item.id !== 'users' || user.role === 'admin')
-  const renderNavigation = () => visibleNavigation.map(item => <Button key={item.id} type="button" variant="ghost" aria-current={view === item.id ? 'page' : undefined} className={`min-h-11 w-full justify-start gap-3 px-3 text-left text-sm ${view === item.id ? 'bg-brand-orange text-white hover:bg-brand-orange/90 hover:text-white' : 'text-white/80 hover:bg-white/10 hover:text-white'}`} onClick={() => navigate(item.id)}><item.icon size={17} strokeWidth={1.8} /><span className="min-w-0 flex-1 truncate">{item.label}</span>{item.id === 'inbox' && !!summary?.pending && <span className={`rounded-full px-1.5 py-0.5 text-[0.65rem] ${view === item.id ? 'bg-background text-primary' : 'bg-white/15 text-white'}`}>{summary.pending}</span>}{item.id === 'notifications' && !!unreadNotifications && <span className={`rounded-full px-1.5 py-0.5 text-[0.65rem] font-semibold ${criticalNotifications ? 'bg-error-bg text-error-ink' : view === item.id ? 'bg-background text-primary' : 'bg-white/15 text-white'}`} aria-label={`${unreadNotifications} avisos sin leer${criticalNotifications ? `, ${criticalNotifications} críticos` : ''}`}>{unreadNotifications}</span>}</Button>)
+  const visibleView = (id: View) => id !== 'users' || user.role === 'admin'
+  const activeSection = sectionOf(view)
+  const sectionTabs = navigation.filter(item => activeSection.views.includes(item.id) && visibleView(item.id))
+    .sort((left, right) => activeSection.views.indexOf(left.id) - activeSection.views.indexOf(right.id))
+  const openSection = (id: SectionId) => {
+    const target = sections.find(item => item.id === id)!
+    const remembered = lastViews.current[id]
+    navigate(remembered && visibleView(remembered) ? remembered : target.views.find(visibleView) || target.views[0])
+  }
+  const renderNavigation = () => sections.map(item => {
+    const active = activeSection.id === item.id
+    return <Button key={item.id} type="button" variant="ghost" aria-current={active ? 'page' : undefined} className={`min-h-11 w-full justify-start gap-3 px-3 text-left text-sm ${active ? 'bg-brand-orange text-white hover:bg-brand-orange/90 hover:text-white' : 'text-white/80 hover:bg-white/10 hover:text-white'}`} onClick={() => openSection(item.id)}><item.icon size={17} strokeWidth={1.8} /><span className="min-w-0 flex-1 truncate">{item.label}</span>{item.id === 'communication' && !!summary?.pending && <span className={`rounded-full px-1.5 py-0.5 text-[0.65rem] ${active ? 'bg-background text-primary' : 'bg-white/15 text-white'}`} aria-label={`${summary.pending} consultas pendientes`}>{summary.pending}</span>}{item.id === 'notifications' && !!unreadNotifications && <span className={`rounded-full px-1.5 py-0.5 text-[0.65rem] font-semibold ${criticalNotifications ? 'bg-error-bg text-error-ink' : active ? 'bg-background text-primary' : 'bg-white/15 text-white'}`} aria-label={`${unreadNotifications} avisos sin leer${criticalNotifications ? `, ${criticalNotifications} críticos` : ''}`}>{unreadNotifications}</span>}</Button>
+  })
+  const renderSectionTabs = () => sectionTabs.length > 1 && <nav aria-label={`Vistas de ${activeSection.label}`} className="-mx-1 mb-5 overflow-x-auto border-b border-border">
+    <div className="flex min-w-max gap-1 px-1">{sectionTabs.map(item => <button key={item.id} type="button" aria-current={view === item.id ? 'page' : undefined} onClick={() => navigate(item.id)} className={`-mb-px flex min-h-11 items-center gap-2 border-b-2 px-3 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background ${view === item.id ? 'border-brand-orange text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'}`}><item.icon size={16} strokeWidth={1.8} aria-hidden="true" />{item.label}{item.id === 'inbox' && !!summary?.pending && <span className="rounded-full bg-muted px-1.5 py-0.5 text-[0.65rem] text-foreground" aria-label={`${summary.pending} pendientes`}>{summary.pending}</span>}</button>)}</div>
+  </nav>
   const renderAccount = () => <div className="flex min-w-0 items-center gap-3">
     <span className="grid size-9 shrink-0 place-items-center rounded bg-brand-turquoise text-sm font-semibold text-brand-charcoal">{user.username.slice(0, 1).toUpperCase()}</span>
     <span className="min-w-0 flex-1"><span className="block truncate text-sm">{user.username}</span><small className="block text-xs text-white/65">{user.role === 'admin' ? 'Administradora' : 'Operador'}</small></span>
@@ -505,7 +535,8 @@ export default function App() {
           <Button type="button" variant="ghost" size="icon" className="relative text-white hover:bg-white/10 hover:text-white" onClick={() => navigate('notifications')} aria-label={unreadNotifications ? `Avisos: ${unreadNotifications} sin leer` : 'Avisos'}><Bell size={20} />{!!unreadNotifications && <span className={`absolute right-1 top-1 min-w-4 rounded-full px-1 text-[0.6rem] font-semibold leading-4 ${criticalNotifications ? 'bg-error-bg text-error-ink' : 'bg-white text-brand-charcoal'}`} aria-hidden="true">{unreadNotifications}</span>}</Button>
         </header>
         <main className={`mx-auto w-full ${view === 'reservations' || view === 'customers' ? 'max-w-none px-4 py-5 sm:px-6 lg:px-8' : 'max-w-screen-2xl px-4 py-6 sm:px-6 lg:px-10 lg:py-9'}`}>
-        {view !== 'reservations' && view !== 'customers' && <div className="mb-6 flex flex-wrap items-end justify-between gap-4"><div><p className="mb-2 text-xs font-semibold uppercase tracking-wide text-primary">TU ESPACIO DE HOSPITALIDAD <span className="px-1 text-muted-foreground">/</span> {section.toUpperCase()}</p><h1 className="mb-2 text-3xl font-semibold leading-tight sm:text-4xl">{section}</h1><p className="max-w-3xl text-sm leading-6 text-muted-foreground">{view === 'summary' ? 'Cada conversación, en su sitio. La atención empieza aquí.' : view === 'inbox' ? 'Lee el contexto, revisa el borrador y decide cómo responder.' : view === 'bookings' ? 'Prerreservas que necesitan una mirada y seguimiento humano.' : view === 'imports' ? 'Fuentes y disponibilidad, siempre con su origen a la vista.' : view === 'planning' ? 'Una vista clara de las estancias y los huecos disponibles.' : view === 'tariffs' ? 'Consulta los importes por temporada y grupo tarifario.' : view === 'tariff-lab' ? 'Contrasta el histórico, los precios de mercado y los festivos antes de preparar una propuesta.' : view === 'analysis' ? 'Compara los años sobre el listado de reservas importado y detecta qué ha cambiado.' : view === 'reports' ? 'Los informes preparados con Claude y los generados por AvantIA, del más reciente al más antiguo.' : view === 'notifications' ? 'Lo que está pasando en AvantIA y lo que necesita tu atención, ordenado por gravedad.' : 'La información operativa de AvantIA, reunida con cuidado.'}</p></div><Button variant="outline" onClick={() => view === 'tariffs' || view === 'tariff-lab' ? setTariffRefreshVersion(version => version + 1) : view === 'analysis' ? setAnalysisRefreshVersion(version => version + 1) : view === 'reports' ? setReportsRefreshVersion(version => version + 1) : void refresh()} disabled={busy}><RefreshCw size={15} /> {view === 'tariffs' || view === 'tariff-lab' ? 'Actualizar tarifas' : 'Actualizar'}</Button></div>}
+        {renderSectionTabs()}
+        {view !== 'reservations' && view !== 'customers' && <div className="mb-6 flex flex-wrap items-end justify-between gap-4"><div><p className="mb-2 text-xs font-semibold uppercase tracking-wide text-primary">TU ESPACIO DE HOSPITALIDAD <span className="px-1 text-muted-foreground">/</span> {activeSection.label.toUpperCase()}{activeSection.label !== section && <><span className="px-1 text-muted-foreground">/</span> {section.toUpperCase()}</>}</p><h1 className="mb-2 text-3xl font-semibold leading-tight sm:text-4xl">{section}</h1><p className="max-w-3xl text-sm leading-6 text-muted-foreground">{view === 'summary' ? 'Cada conversación, en su sitio. La atención empieza aquí.' : view === 'inbox' ? 'Lee el contexto, revisa el borrador y decide cómo responder.' : view === 'bookings' ? 'Prerreservas que necesitan una mirada y seguimiento humano.' : view === 'imports' ? 'Fuentes y disponibilidad, siempre con su origen a la vista.' : view === 'planning' ? 'Una vista clara de las estancias y los huecos disponibles.' : view === 'tariffs' ? 'Consulta los importes por temporada y grupo tarifario.' : view === 'tariff-lab' ? 'Contrasta el histórico, los precios de mercado y los festivos antes de preparar una propuesta.' : view === 'analysis' ? 'Compara los años sobre el listado de reservas importado y detecta qué ha cambiado.' : view === 'reports' ? 'Los informes preparados con Claude y los generados por AvantIA, del más reciente al más antiguo.' : view === 'notifications' ? 'Lo que está pasando en AvantIA y lo que necesita tu atención, ordenado por gravedad.' : 'La información operativa de AvantIA, reunida con cuidado.'}</p></div><Button variant="outline" onClick={() => view === 'tariffs' || view === 'tariff-lab' ? setTariffRefreshVersion(version => version + 1) : view === 'analysis' ? setAnalysisRefreshVersion(version => version + 1) : view === 'reports' ? setReportsRefreshVersion(version => version + 1) : void refresh()} disabled={busy}><RefreshCw size={15} /> {view === 'tariffs' || view === 'tariff-lab' ? 'Actualizar tarifas' : 'Actualizar'}</Button></div>}
         {readOnlyMode && view !== 'reservations' && view !== 'customers' && <Alert variant="info" role="status" className="mb-5 flex flex-wrap items-center gap-x-4 gap-y-1"><strong className="text-xs">MODO DESARROLLO · SOLO LECTURA</strong><span>IMAP se consulta sin modificar correos. Los envíos de email y WhatsApp están bloqueados.</span></Alert>}
         {error && <Alert variant="destructive" className="mb-5 flex items-center justify-between gap-4"><span>{error}</span><Button variant="ghost" size="icon" onClick={() => setError('')} aria-label="Cerrar aviso"><X size={16} /></Button></Alert>}
         <EmailPreviewDialog message={expandedEmail} fallbackSubject={detail?.subject} onClose={() => setExpandedEmail(null)} />
