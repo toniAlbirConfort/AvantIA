@@ -214,6 +214,8 @@ export default function App() {
   const path = window.location.pathname
   const [view, setView] = useState<View>(viewFromPath(path))
   const [selectedId, setSelectedId] = useState<number | null>(Number(path.split('/')[2]) || null)
+  // Conversation opened from a link or a notice: shown even when the list filters or pages leave it out.
+  const [directId, setDirectId] = useState<number | null>(Number(path.split('/')[2]) || null)
   const [summary, setSummary] = useState<Summary | null>(null)
   const [items, setItems] = useState<Conversation[]>([])
   const [detail, setDetail] = useState<Conversation | null>(null)
@@ -400,7 +402,7 @@ export default function App() {
       const next = viewFromPath(current)
       setView(next); setMobileMenu(false); setError(''); setComposerOpen(false)
       const id = next === 'inbox' || next === 'bookings' ? Number(current.split('/')[2]) || null : null
-      setSelectedId(id); setDetail(null)
+      setSelectedId(id); setDirectId(id); setDetail(null)
       if (id) api<Conversation>(`/api/conversations/${id}`).then(setDetail).catch(err => setError((err as Error).message))
     }
     window.addEventListener('popstate', onPopState)
@@ -432,7 +434,7 @@ export default function App() {
     ...inboxRows.filter((item): item is InboxThread => item.type === 'thread'),
     ...Object.values(senderThreads).flatMap(response => response.items.filter((item): item is InboxThread => item.type === 'thread')),
   ]
-  const selectedThreadLoaded = detail && loadedThreads.some(item => item.id === detail.id)
+  const selectedThreadLoaded = detail && (detail.id === directId || loadedThreads.some(item => item.id === detail.id))
   const renderThread = (item: InboxThread) => <Button key={item.id} variant="ghost" className={`h-auto w-full flex-col items-stretch justify-start gap-2 rounded-none border-b border-border px-4 py-4 text-left text-foreground whitespace-normal hover:bg-accent ${selectedId === item.id ? 'border-l-4 border-l-primary bg-accent pl-3' : ''}`} onClick={() => void select(item.id)}>
     <span className="flex items-center justify-between gap-3"><strong className="truncate text-sm">{threadTitle(item)}</strong><small className="shrink-0 text-xs text-muted-foreground">{date(item.last_inbound_at)}</small></span>
     {item.contact?.source === 'relayed'
@@ -462,7 +464,7 @@ export default function App() {
     const id = Number(link.split('/')[2]) || undefined
     if (next === 'inbox' && !id) { clearInboxFilters(); setStatusFilter('pending') }
     setComposerOpen(false)
-    if (id) setDetail(null)
+    if (id) { setDetail(null); setDirectId(id) }
     navigate(next, id)
     if (id) api<Conversation>(`/api/conversations/${id}`).then(setDetail).catch(err => setError((err as Error).message))
   }
