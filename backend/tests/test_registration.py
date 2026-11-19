@@ -334,8 +334,39 @@ def test_asking_about_cancellations_is_still_a_consultation(db):
             "Pat <p@example.test>",
             "RE: Booking",
             "Thanks, see you 1-15 March",
+            "uncertain",
+            "respuesta",
+        ),
+        (
+            "Sven <s@example.test>",
+            "Sv: Booking confirmation Leilighet 130649",
+            "Vi ønsker leilighet i 3. etasje, 1.-15. mars",
             "demand",
             "respuesta",
+        ),
+        (
+            "Max Mustermann <paula@shop.example>",
+            "Urgent Booking Request: Nov 15-16",
+            "I've been trying to book a single room for November 15th to 16th. I've attached "
+            "photos of my documents for you. Here's the link: my documents.",
+            "demand",
+            "posible_fraude",
+        ),
+        (
+            "Miguel Sanchez <m@unrelated.example>",
+            "Consulta de Reserva: 18-19 Nov",
+            "¿Podría ayudarme a reservar una habitación del 18 al 19 de noviembre? Le he "
+            "adjuntado fotos de mis documentos. Aquí está el enlace: mis documentos.",
+            "demand",
+            "posible_fraude",
+        ),
+        (
+            "Promotora <oferta@example.test>",
+            "Solicitud de presupuesto: comunidad de 6 villas",
+            "Somos la promotora de 6 villas. Buscamos un administrador de fincas para la "
+            "comunidad de propietarios. Cuatro son de uso vacacional.",
+            "uncertain",
+            "proveedor",
         ),
         (
             "Wendy <w@example.test>",
@@ -352,6 +383,58 @@ def test_not_new_consultations_are_excluded(db, sender, subject, body, label, re
     run_registration_check(db, LATER)
     check = check_for(db, conv)
     assert (check.status, check.reason) == ("excluded", reason)
+
+
+def test_new_request_written_as_a_reply_to_a_circular_is_checked(db):
+    """Answering a July circular with new dates for next spring is a new consultation."""
+    past_stay = (date(2026, 9, 19), date(2026, 9, 26))
+    reservations(db, ("40000020-130665", "OLA NORDMANN", "paid", date(2026, 7, 6), *past_stay))
+    conv = email(
+        db,
+        "Ola Nordmann <ola@example.test>",
+        "Re: 2027 holidays",
+        "We are a group of 5 planning a cycling holiday 24. April - 1. May 2027. "
+        "How do you see the availability of apartments?",
+    )
+    run_registration_check(db, LATER)
+    assert check_for(db, conv).status == "alerted"
+
+
+def test_reply_to_a_check_in_reminder_asking_for_dates_is_checked(db):
+    reservations(db, ("40000021-130666", "OTRA PERSONA", "paid", DAY, *NEXT_YEAR))
+    conv = email(
+        db,
+        "Hilde Strand <hs@example.test>",
+        "SV: Reminder: Check in online for your stay in Albir",
+        "Do you have an apartment with one or two bedrooms from 1 until 7 March?",
+    )
+    run_registration_check(db, LATER)
+    assert check_for(db, conv).status == "alerted"
+
+
+def test_reply_needs_a_confident_demand_label(db):
+    reservations(db, ("40000022-130667", "OTRA PERSONA", "paid", DAY, *NEXT_YEAR))
+    conv = email(
+        db,
+        "Hilde Strand <hs@example.test>",
+        "Re: 2027 holidays",
+        "Maybe 1-15 March?",
+        confidence="medium",
+    )
+    run_registration_check(db, LATER)
+    assert check_for(db, conv).reason == "respuesta"
+
+
+def test_vendor_words_do_not_hide_a_confident_consultation(db):
+    reservations(db, ("40000023-130668", "OTRA PERSONA", "paid", DAY, *NEXT_YEAR))
+    conv = email(
+        db,
+        "Lena Holm <lh@example.test>",
+        "Apartment 1-15 March",
+        "Our company has a partnership event; do you have two apartments 1-15 March?",
+    )
+    run_registration_check(db, LATER)
+    assert check_for(db, conv).status == "alerted"
 
 
 def test_follow_up_from_same_customer_is_not_a_new_alert(db):
