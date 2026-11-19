@@ -161,7 +161,7 @@ El worker reevalúa las condiciones cada 30 segundos. Los avisos se resuelven so
 | Trabajo en segundo plano fallido (uno por tipo, suma ocurrencias) | Crítico | Admin | Se descarta a mano |
 | Envío incierto en una conversación | Crítico | Admin | Se registra «enviado» o «no enviado» |
 | Consultas sin responder tras `OVERDUE_MINUTES` (recibidas en las últimas 48 h) | Requiere acción | Todos | No queda ninguna pendiente |
-| Prerreserva nueva (últimos 7 días) | Requiere acción | Todos | Se cierra la prerreserva |
+| Prerreservas abiertas de los últimos 7 días (un solo aviso con el recuento; vuelve a salir si llega una nueva) | Requiere acción | Todos | Se cierran todas |
 | Consulta sin registrar en Avantio | Requiere acción | Todos | Se registra, se vincula o se marca «no procede» |
 | Importación rechazada (últimas 24 h) | Requiere acción | Admin | Se descarta a mano |
 
