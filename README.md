@@ -144,9 +144,12 @@ La vista **Reservas → Incidencias** (`/reservation-issues`) reúne lo que conv
 
 - **Posibles dobles reservas:** dos reservas que bloquean el mismo apartamento comparten noches. Cada caso muestra una línea de tiempo con la zona solapada resaltada, la comparación de las dos reservas y un enlace al Planning en esas fechas.
 - **Saldos descuadrados:** en estancias vendidas, el total no coincide con pagado + pendiente (o con neto + impuestos). Resume lo cobrado de más y lo que falta por cobrar, y compara cada reserva con una barra.
+  Cuando la exportación lo explica con certeza, el descuadre pasa a «Explicados por la exportación» y no genera aviso: comisión del canal registrada en Avantio, porcentaje de comisión o descuento anotado en «Mis comentarios» («+18% COMISION», «11% DTO») o extras fuera del total. Cada fila muestra el canal, quién la atendió y los comentarios de Avantio.
 - **Apartamentos inactivos** y **Apartamentos sin catálogo:** reservas futuras en apartamentos dados de baja o desconocidos, agrupadas por apartamento con su línea de tiempo.
 
 Por defecto se ven las vigentes y futuras; el histórico está en «Todo, incluido histórico». Una incidencia marcada como revisada (con nota opcional) se sigue viendo, pero deja de contar en los avisos. API: `GET /api/reservation-issues`, `POST /api/reservation-issues/review` (`key`, `note`) y `POST /api/reservation-issues/unreview` (`key`).
+
+Además de las columnas del planning, cada importación de reservas guarda en `reservation_details` (una fila por reserva, la versión más reciente) los importes de alquiler y extras, la comisión calculada, la factura, el localizador del agente, «Atendido por», «Mis comentarios» (con los datos de pago enmascarados) y los emails del cliente y del ocupante. Los emails solo se usan para emparejar las consultas por correo con su reserva: la comprobación de consultas sin registrar empareja primero por email exacto y después por apellido, y el panel indica quién atendió la reserva. Los documentos de identidad, teléfonos y fechas de nacimiento de la exportación no se importan. Como la sincronización automática solo trae las reservas creadas en los últimos 14 días, para completar el histórico hay que importar una vez una exportación completa desde Importaciones.
 
 En las importaciones, lo que el importador corrige con certeza (por ejemplo, un «;» en las observaciones de un cliente que desplaza las columnas) aparece como **reparación automática**: queda registrado en el detalle de la importación, pero no cuenta como incidencia ni genera avisos.
 

@@ -17,6 +17,7 @@ export const DISMISS_REASONS: Record<string, string> = {
 
 const AUTOMATIC_REASONS: Record<string, string> = {
   reserva: 'reserva con el mismo apellido creada esos días',
+  email: 'el email coincide con el de una reserva creada esos días',
   plantilla_avantio: 'el cliente respondió a la oferta enviada desde Avantio',
   registrada_tras_aviso: 'la reserva apareció después del aviso',
   vinculada_manual: 'vinculada a mano por un operador',
@@ -71,7 +72,7 @@ export function RegistrationPanel({ check, busy, userName, onAction }: Props) {
       <span>Recibida el {dateTime(check.received_at)}. Pasada la hora de oficina ({dateTime(check.due_at)}) no hay ninguna reserva de este cliente en Avantio. Regístrala como petición de información aunque luego se descarte.</span>
     </Alert>}
     {check.status === 'pending' && <p className="m-0 flex items-center gap-1.5 text-xs text-muted-foreground"><Clock size={14} aria-hidden="true" />Se comprobará tras la próxima sincronización con Avantio. Avisa si sigue sin reserva después del {dateTime(check.due_at)}.</p>}
-    {check.status === 'registered' && <p className="m-0 flex items-center gap-1.5 text-xs text-muted-foreground"><CircleCheck size={14} aria-hidden="true" />{reasonText(check.reason)}{byOperator ? ` · ${userName(check.resolved_by_id)} el ${dateTime(check.resolved_at)}` : ''}</p>}
+    {check.status === 'registered' && <p className="m-0 flex items-center gap-1.5 text-xs text-muted-foreground"><CircleCheck size={14} aria-hidden="true" />{reasonText(check.reason)}{check.handled_by ? ` · atendida por ${check.handled_by}` : ''}{byOperator ? ` · ${userName(check.resolved_by_id)} el ${dateTime(check.resolved_at)}` : ''}</p>}
     {check.status === 'excluded' && <p className="m-0 text-xs text-muted-foreground">Motivo: {reasonText(check.reason)}{check.note ? ` (${check.note})` : ''}{byOperator ? ` · ${userName(check.resolved_by_id)} el ${dateTime(check.resolved_at)}` : ''}</p>}
 
     {open && <div className="grid gap-3">

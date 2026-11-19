@@ -48,7 +48,7 @@ export type RegistrationCheck = {
   id: number; conversation_id: number; message_id: number; customer_email: string | null; customer_name: string | null;
   received_at: string; due_at: string; status: RegistrationStatus; reason: string | null; locator: string | null;
   mode: string | null; checked_at: string | null; alerted_at: string | null; resolved_at: string | null;
-  resolved_by_id: number | null; note: string | null
+  resolved_by_id: number | null; note: string | null; handled_by?: string | null
 }
 export type Audit = { action: string; actor_user_id: number | null; detail: Record<string, unknown>; created_at: string }
 export type Conversation = {
@@ -88,17 +88,20 @@ export type IssueReservation = {
   locator: string; property_id: string; status: string; status_original: string; created_on: string | null;
   start_date: string; end_date: string; nights: number; guests: number; display_name: string; portal: string | null;
   total: number; net: number; tax: number; paid: number; pending: number
+  comments: string | null; handled_by: string | null; agent_locator: string | null
+  commission?: number | null; extras_total?: number | null; invoice_total?: number | null; invoice_number?: string | null
 }
+export type BalanceExplanation = { source: 'commission' | 'comment_commission' | 'comment_discount' | 'extras'; text: string }
 export type IssueProperty = { id: string; name: string | null; known: boolean; active?: boolean; status_original?: string; building?: string | null; city?: string | null; category?: string }
 export type ReservationIssueReview = { by: string | null; at: string; note: string | null }
 type IssueBase = { key: string; current: boolean; review: ReservationIssueReview | null; property: IssueProperty }
 export type ReservationIssues = {
   batch: { id: number; created_at: string } | null
   overlap: (IssueBase & { reservations: IssueReservation[]; overlap_start: string; overlap_end: string; nights: number })[]
-  amounts: (IssueBase & { reservation: IssueReservation; balance_difference: number | null; tax_difference: number | null })[]
+  amounts: (IssueBase & { reservation: IssueReservation; balance_difference: number | null; tax_difference: number | null; explanation: BalanceExplanation | null })[]
   inactive: (IssueBase & { reservation: IssueReservation })[]
   unknown: (IssueBase & { reservation: IssueReservation })[]
-  counts: Record<ReservationIssueKind, { total: number; current: number; pending: number }>
+  counts: Record<ReservationIssueKind, { total: number; current: number; pending: number; explained?: number }>
 }
 export type NotificationSeverity = 'critical' | 'action' | 'info'
 export type NotificationCounts = { unread: number; by_severity: Record<NotificationSeverity, number> }
