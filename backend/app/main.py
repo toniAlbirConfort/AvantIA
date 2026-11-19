@@ -19,9 +19,16 @@ from pydantic import BaseModel, Field
 from sqlalchemy import desc, func, or_, select, text
 from sqlalchemy.orm import Session
 
+from app import notifications, reservation_issues
+from app.analytics import reservation_analysis
 from app.annotations import INTENTS, intent_catalog, save_annotation, serialize
 from app.annotations import summary as annotations_summary
 from app.auth import admin_user, authenticate, current_user, hasher, issue_token
+from app.auto_reply import configured_mode as auto_reply_configured_mode
+from app.auto_reply import mode as auto_reply_mode
+from app.auto_reply import pause_state as auto_reply_pause_state
+from app.auto_reply import set_paused as set_auto_reply_paused
+from app.auto_reply import simulate as simulate_auto_replies
 from app.availability import aware, import_csv, latest_batch
 from app.avantio import availability_provider
 from app.classification import (
@@ -30,11 +37,6 @@ from app.classification import (
     effective_classification,
     resolve_conversation_classification,
 )
-from app.auto_reply import configured_mode as auto_reply_configured_mode
-from app.auto_reply import mode as auto_reply_mode
-from app.auto_reply import pause_state as auto_reply_pause_state
-from app.auto_reply import set_paused as set_auto_reply_paused
-from app.auto_reply import simulate as simulate_auto_replies
 from app.config import READ_ONLY_MODE, get_settings
 from app.contacts import conversation_contact
 from app.customers import DATASET as CUSTOMER_DATASET
@@ -61,6 +63,7 @@ from app.gowa import (
     start_gowa_pairing,
 )
 from app.html_sanitize import sanitize_html
+from app.import_issues import split_issues, with_repairs
 from app.ingest import enqueue, ingest
 from app.integrations import ollama_translate_email
 from app.models import (
@@ -84,9 +87,6 @@ from app.models import (
     User,
     now,
 )
-from app.analytics import reservation_analysis
-from app.retention import retention_csv, retention_view
-from app import notifications
 from app.planning import (
     DATASETS,
     commit_import,
@@ -111,6 +111,7 @@ from app.reports import (
     list_reports,
     report_document,
 )
+from app.retention import retention_csv, retention_view
 from app.tariff_lab import (
     MarketProviderUnavailable,
     TariffLabError,
@@ -526,6 +527,56 @@ def summary(db: Db, user: Operator) -> dict:
 
 class NotificationReadIn(BaseModel):
     ids: list[int] | None = Field(default=None, max_length=500)
+
+
+class ReservationIssueReviewIn(BaseModel):
+    key: str = Field(min_length=3, max_length=320)
+    note: str | None = Field(default=None, max_length=300)
+
+
+class ReservationIssueKeyIn(BaseModel):
+    key: str = Field(min_length=3, max_length=320)
+
+
+@app.get("/api/reservation-issues")
+def list_reservation_issues(db: Db, user: Operator) -> dict:
+    """Incidents in the Avantio reservation data: overlaps, amounts, inactive apartments."""
+    return reservation_issues.collect(db)
+
+
+@app.post("/api/reservation-issues/review")
+def review_reservation_issue(body: ReservationIssueReviewIn, db: Db, user: Operator) -> dict:
+    """Mark an incident as reviewed: it stays listed but stops counting in notifications."""
+    try:
+        review = reservation_issues.mark_reviewed(db, body.key, user, body.note)
+    except reservation_issues.ReservationIssueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    db.add(
+        AuditEvent(
+            actor_user_id=user.id,
+            action="reservation_issue.reviewed",
+            detail={"key": body.key, "note": review["note"]},
+        )
+    )
+    db.commit()
+    return review
+
+
+@app.post("/api/reservation-issues/unreview")
+def unreview_reservation_issue(body: ReservationIssueKeyIn, db: Db, user: Operator) -> dict:
+    try:
+        reservation_issues.unmark_reviewed(db, body.key)
+    except reservation_issues.ReservationIssueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    db.add(
+        AuditEvent(
+            actor_user_id=user.id,
+            action="reservation_issue.unreviewed",
+            detail={"key": body.key},
+        )
+    )
+    db.commit()
+    return {"key": body.key, "review": None}
 
 
 class NotificationPreferencesIn(BaseModel):
@@ -1267,7 +1318,8 @@ def imports(db: Db, user: Operator, limit: int = Query(500, ge=1, le=2000)) -> l
             "created_at": b.created_at,
             "actor_user_id": b.actor_user_id,
             "parser_version": b.parser_version,
-            "warning_count": len(b.warnings or []),
+            "warning_count": len(split_issues(b.warnings)[0]),
+            "repair_count": len(split_issues(b.warnings)[1]),
             "change_count": len(b.changes or []),
         }
         for b in db.scalars(select(ImportBatch).order_by(desc(ImportBatch.id)).limit(limit)).all()
@@ -1279,14 +1331,16 @@ def import_detail(batch_id: int, db: Db, user: Operator) -> dict:
     batch = db.get(ImportBatch, batch_id)
     if not batch:
         raise HTTPException(404, "Importación no encontrada")
+    warnings, repairs = split_issues(batch.warnings)
     return {
         "id": batch.id, "dataset": batch.dataset, "filename": batch.filename,
         "source": batch.source, "status": batch.status, "rows": batch.row_count,
         "error": batch.error, "created_at": batch.created_at,
         "checksum": batch.checksum, "actor_user_id": batch.actor_user_id,
-        "parser_version": batch.parser_version, "warnings": batch.warnings or [],
+        "parser_version": batch.parser_version, "warnings": warnings, "repairs": repairs,
         "changes": batch.changes or [],
-        "warning_count": len(batch.warnings or []), "change_count": len(batch.changes or []),
+        "warning_count": len(warnings), "repair_count": len(repairs),
+        "change_count": len(batch.changes or []),
     }
 
 
@@ -1299,8 +1353,8 @@ async def preview_source_import(
     raw = await file.read(10_000_001)
     try:
         if dataset == CUSTOMER_DATASET:
-            return preview_customers(db, raw)
-        return preview_import(db, dataset, raw)
+            return with_repairs(preview_customers(db, raw))
+        return with_repairs(preview_import(db, dataset, raw))
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 
@@ -1335,8 +1389,10 @@ async def upload_source_import(
         )
     )
     db.commit()
-    return {"id": batch.id, "status": batch.status, "rows": batch.row_count, "error": batch.error,
-            "warnings": batch.warnings or [], "changes": batch.changes or []}
+    return with_repairs(
+        {"id": batch.id, "status": batch.status, "rows": batch.row_count, "error": batch.error,
+         "warnings": batch.warnings or [], "changes": batch.changes or []}
+    )
 
 
 @app.get("/api/properties")
