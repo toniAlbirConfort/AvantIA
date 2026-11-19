@@ -161,6 +161,24 @@ def retention_view(
             "property_name": property_names.get(main_property, main_property),
             "match": link["match"],
             "candidates": link["candidates"],
+            # Every counted stay, newest first, so the row can unfold its history.
+            "history": [
+                {
+                    "locator": row.locator,
+                    "start_date": row.start_date,
+                    "end_date": row.end_date,
+                    "nights": row.nights,
+                    "guests": row.adults + row.children + row.infants,
+                    "property_id": row.property_id,
+                    "property_name": property_names.get(row.property_id, row.property_id),
+                    "status": row.status,
+                    "channel": channel_of(row.portal),
+                    "portal": row.portal,
+                    "created_on": row.created_on,
+                    "total": row.total,
+                }
+                for row in sorted(rows, key=lambda row: (row.start_date, row.locator), reverse=True)
+            ],
             **{
                 field: customer.get(field)
                 for field in ("avantio_id", "email", "phone", "language", "country", "email_opt_in")
