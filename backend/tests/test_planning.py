@@ -7,7 +7,13 @@ from datetime import UTC, date, datetime, timedelta
 
 from app.availability import check_availability, import_csv
 from app.models import ImportBatch, PropertySnapshot, ReservationSnapshot
-from app.planning import commit_import, parse_export, planning_view, preview_import
+from app.planning import (
+    commit_import,
+    consolidated_reservations,
+    parse_export,
+    planning_view,
+    preview_import,
+)
 
 PROPERTY_HEADERS = [
     "Código",
@@ -437,3 +443,39 @@ def test_warnings_skip_history_and_placeholder_amounts(db):
     ]))
     found = {(issue["code"], issue.get("locator")) for issue in batch.warnings}
     assert found == {("inactive_property", "INQ"), ("balance_mismatch", "PAY")}
+
+
+def test_consolidation_keeps_the_newest_version_of_each_locator(db):
+    def batch(status="valid"):
+        checksum = f"k{db.query(ImportBatch).count()}"
+        item = ImportBatch(dataset="reservations", source="upload", filename="r.csv",
+                           checksum=checksum, status=status)
+        db.add(item)
+        db.flush()
+        return item
+
+    def row(batch_id, locator, name):
+        return ReservationSnapshot(
+            batch_id=batch_id, source_row=3, row_hash="h", locator=locator, property_id="P1",
+            status_original="Pagada", status="paid", created_on=date(2025, 1, 1),
+            start_date=date(2025, 7, 1), end_date=date(2025, 7, 5), nights=4, adults=2,
+            children=0, infants=0, display_name=name, portal=None, total=1, net=1, tax=0,
+            paid=1, pending=0,
+        )
+
+    # A legacy, non-cumulative import followed by cumulative ones.
+    legacy, first, broken, last = batch(), batch(), batch("invalid"), batch()
+    db.add_all([
+        row(legacy.id, "OLD", "Solo en la antigua"),
+        row(first.id, "A", "Versión 1"), row(first.id, "B", "B original"),
+        row(broken.id, "A", "Importación inválida"),
+        row(last.id, "A", "Versión 2"),
+    ])
+    db.commit()
+
+    latest = consolidated_reservations(db, last)
+    assert {key: item.display_name for key, item in latest.items()} == {
+        "OLD": "Solo en la antigua", "A": "Versión 2", "B": "B original",
+    }
+    # An older batch as reference ignores everything imported after it.
+    assert consolidated_reservations(db, first)["A"].display_name == "Versión 1"

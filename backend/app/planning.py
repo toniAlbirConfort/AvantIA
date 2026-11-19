@@ -11,7 +11,7 @@ from collections import defaultdict
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 
-from sqlalchemy import desc, select
+from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 
 from app.models import ImportBatch, PropertySnapshot, ReservationSnapshot
@@ -532,20 +532,34 @@ def consolidated_reservations(
 ) -> dict[str, ReservationSnapshot]:
     """Fold valid imports by locator so older non-cumulative snapshots still
     contribute the newest imported version of every reservation."""
-    latest_by_locator: dict[str, ReservationSnapshot] = {}
-    source_rows = db.scalars(
-        select(ReservationSnapshot)
+    # Every import stores the whole cumulative list, so folding in Python meant
+    # loading every row of every import. The database keeps only the newest
+    # version per locator (latest import, then latest row) before loading.
+    ranked = (
+        select(
+            ReservationSnapshot.id,
+            func.row_number()
+            .over(
+                partition_by=ReservationSnapshot.locator,
+                order_by=(ReservationSnapshot.batch_id.desc(), ReservationSnapshot.id.desc()),
+            )
+            .label("version"),
+        )
         .join(ImportBatch, ReservationSnapshot.batch_id == ImportBatch.id)
         .where(
             ImportBatch.dataset == "reservations",
             ImportBatch.status == "valid",
             ImportBatch.id <= reservation_batch.id,
         )
-        .order_by(ImportBatch.id, ReservationSnapshot.id)
+        .subquery()
     )
-    for row in source_rows:
-        latest_by_locator[row.locator] = row
-    return latest_by_locator
+    rows = db.scalars(
+        select(ReservationSnapshot)
+        .join(ranked, ranked.c.id == ReservationSnapshot.id)
+        .where(ranked.c.version == 1)
+        .order_by(ReservationSnapshot.batch_id, ReservationSnapshot.id)
+    )
+    return {row.locator: row for row in rows}
 
 
 def reservations_view(
@@ -658,21 +672,7 @@ def planning_view(
     # A batch is an audit source, not a filter on the operational planning.
     # Older imports may predate the cumulative snapshot format, so fold every
     # valid source in upload order and retain the newest version per locator.
-    by_locator: dict[str, ReservationSnapshot] = {}
-    if rb:
-        source_rows = db.scalars(
-            select(ReservationSnapshot)
-            .join(ImportBatch, ReservationSnapshot.batch_id == ImportBatch.id)
-            .where(
-                ImportBatch.dataset == "reservations",
-                ImportBatch.status == "valid",
-                ImportBatch.id <= rb.id,
-            )
-            .order_by(ImportBatch.id, ReservationSnapshot.id)
-        )
-        for row in source_rows:
-            by_locator[row.locator] = row
-    all_reservations = list(by_locator.values())
+    all_reservations = list(consolidated_reservations(db, rb).values()) if rb else []
     reservations = [
         row for row in all_reservations if row.start_date < end and row.end_date > start
     ]
