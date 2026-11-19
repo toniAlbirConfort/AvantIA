@@ -222,14 +222,21 @@ def add_batch(db, dataset, warnings, minutes_ago):
 
 
 def test_import_warnings_follow_the_latest_valid_batch(db):
-    add_batch(db, "reservations", [{"code": "a"}, {"code": "b"}], 30)
+    add_batch(db, "customers", [{"code": "invalid_date"}, {"code": "short_row"}], 30)
     notifications.scan(db, NOW)
-    item = active(db, "import.warnings:reservations")
-    assert item.title == "La última importación de reservas trae 2 advertencias"
+    item = active(db, "import.warnings:customers")
+    assert item.title == "La última importación de clientes trae 2 advertencias"
 
-    add_batch(db, "reservations", [], 1)
+    add_batch(db, "customers", [], 1)
     notifications.scan(db, NOW)
-    assert active(db, "import.warnings:reservations") is None
+    assert active(db, "import.warnings:customers") is None
+
+
+def test_automatic_repairs_and_reservation_warnings_do_not_notify(db):
+    add_batch(db, "customers", [{"code": "extra_separators"}] * 37, 30)
+    add_batch(db, "reservations", [{"code": "balance_mismatch", "locator": "X"}], 30)
+    notifications.scan(db, NOW)
+    assert active_of(db, "import.warnings") == []
 
 
 def test_maintenance_actions_are_reported_once(db):

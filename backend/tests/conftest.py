@@ -29,3 +29,12 @@ def session_factory():
     factory = sessionmaker(bind=engine, expire_on_commit=False)
     yield factory
     engine.dispose()
+
+
+@pytest.fixture(autouse=True)
+def _fresh_notification_caches():
+    """The reservation-incident notices cache their last input; tests use fresh databases."""
+    from app import notifications
+
+    notifications._issues_cache.update(signature=None, summary=None)
+    yield
