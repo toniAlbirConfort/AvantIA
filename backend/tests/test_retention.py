@@ -160,3 +160,14 @@ def test_api_and_audited_export(data, monkeypatch):
         select(AuditEvent).where(AuditEvent.action == "customers.retention_exported")
     )
     assert event is not None and event.detail["rows"] == 3
+
+
+def test_future_target_year_and_years_with_data(data):
+    result = retention_view(data, target_year=2027, base_years=[2025, 2026])
+    # Eva already booked 2027; a 2026 pre-reservation is not a stay yet.
+    assert [item["key"] for item in result["items"]] == ["ana garcia", "toni vuelve"]
+    assert result["years_available"] == [
+        {"year": 2021, "reservations": 1}, {"year": 2023, "reservations": 1},
+        {"year": 2024, "reservations": 2}, {"year": 2025, "reservations": 3},
+        {"year": 2026, "reservations": 1}, {"year": 2027, "reservations": 1},
+    ]

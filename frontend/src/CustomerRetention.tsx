@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Download, RefreshCw, Search } from 'lucide-react'
+import { ArrowRight, Download, RefreshCw, Search } from 'lucide-react'
 import { api, apiDownload } from './api'
 import { CustomerPanel } from './Customers'
 import type { CustomerSummary, RetentionGuest, RetentionMatch, RetentionResponse } from './types'
@@ -13,8 +13,10 @@ import { Skeleton } from './components/ui/skeleton'
 
 const PAGE_SIZE = 50
 const YEARS_BACK = 6
+const YEARS_AHEAD = 3
 const euros = new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 })
-const integer = new Intl.NumberFormat('es-ES')
+// Spanish formatting leaves four-digit numbers ungrouped; group them so counts compare at a glance.
+const integer = new Intl.NumberFormat('es-ES', { useGrouping: 'always' } as unknown as Intl.NumberFormatOptions)
 const matchLabels: Record<RetentionMatch, { label: string; tone: string; title: string }> = {
   exact: { label: 'Ficha única', tone: 'bg-success-bg text-success-ink', title: 'El nombre coincide con una sola ficha de cliente' },
   ambiguous: { label: 'Varias fichas', tone: 'bg-warning-bg text-warning-ink', title: 'Varias fichas de cliente tienen este nombre: confirma a quién contactar' },
@@ -24,6 +26,11 @@ type Contact = 'any' | 'email' | 'phone' | 'opt_in'
 
 function shortDate(value: string) {
   return new Intl.DateTimeFormat('es-ES', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${value}T12:00:00Z`))
+}
+
+function yearList(years: number[]) {
+  if (years.length < 2) return years.join('')
+  return `${years.slice(0, -1).join(', ')} y ${years[years.length - 1]}`
 }
 
 function Metric({ label, value, detail }: { label: string; value: number | undefined; detail: string }) {
@@ -36,10 +43,11 @@ function Metric({ label, value, detail }: { label: string; value: number | undef
 
 export function CustomerRetention({ onImport }: { onImport: () => void }) {
   const currentYear = new Date().getFullYear()
-  const yearOptions = Array.from({ length: YEARS_BACK }, (_, index) => currentYear - YEARS_BACK + index)
+  const [targetYear, setTargetYear] = useState(currentYear)
   const [baseYears, setBaseYears] = useState<number[]>([currentYear - 3, currentYear - 2, currentYear - 1])
   // Clicking several years in a row sends one request, once the selection settles.
-  const [requestedYears, setRequestedYears] = useState<number[]>(baseYears)
+  const [requested, setRequested] = useState({ years: baseYears, target: targetYear })
+  const requestedYears = requested.years
   const [minStays, setMinStays] = useState('1')
   const [channel, setChannel] = useState('')
   const [contact, setContact] = useState<Contact>('any')
@@ -61,17 +69,17 @@ export function CustomerRetention({ onImport }: { onImport: () => void }) {
   }, [search])
 
   useEffect(() => {
-    const timer = window.setTimeout(() => setRequestedYears(baseYears), 400)
+    const timer = window.setTimeout(() => setRequested({ years: baseYears, target: targetYear }), 400)
     return () => window.clearTimeout(timer)
-  }, [baseYears])
+  }, [baseYears, targetYear])
 
   const parameters = useCallback((offset: number) => {
-    const params = new URLSearchParams({ target_year: String(currentYear), min_stays: minStays, contact, offset: String(offset), limit: String(PAGE_SIZE) })
+    const params = new URLSearchParams({ target_year: String(requested.target), min_stays: minStays, contact, offset: String(offset), limit: String(PAGE_SIZE) })
     requestedYears.forEach(year => params.append('base_years', String(year)))
     if (channel) params.set('channel', channel)
     if (query) params.set('q', query)
     return params
-  }, [currentYear, requestedYears, minStays, channel, contact, query])
+  }, [requested, requestedYears, minStays, channel, contact, query])
 
   useEffect(() => {
     if (!requestedYears.length) return
@@ -102,9 +110,17 @@ export function CustomerRetention({ onImport }: { onImport: () => void }) {
     setExporting(true); setError('')
     const params = parameters(0)
     params.delete('offset'); params.delete('limit')
-    try { await apiDownload(`/api/customers/retention.csv?${params}`, `clientes-a-recuperar-${currentYear}.csv`) }
+    try { await apiDownload(`/api/customers/retention.csv?${params}`, `clientes-a-recuperar-${requested.target}.csv`) }
     catch (err) { setError((err as Error).message) }
     finally { setExporting(false) }
+  }
+
+  function changeTarget(year: number) {
+    setTargetYear(year)
+    setBaseYears(current => {
+      const kept = current.filter(item => item < year)
+      return kept.length ? kept : [year - 1]
+    })
   }
 
   function toggleYear(year: number) {
@@ -116,15 +132,20 @@ export function CustomerRetention({ onImport }: { onImport: () => void }) {
     setSelected({ avantio_id: item.avantio_id, display_name: item.display_name, email: item.email, phone: item.phone, country: item.country, document_number: null, customer_class: null })
   }
 
-  const updating = loading || requestedYears.join() !== baseYears.join() || search.trim() !== query
-  const yearsLabel = baseYears.length ? baseYears.join(', ') : 'ningún año'
+  const updating = loading || requestedYears.join() !== baseYears.join() || requested.target !== targetYear || search.trim() !== query
+  const counts = new Map((data?.years_available || []).map(item => [item.year, item.reservations]))
+  const firstYear = Math.min(currentYear - YEARS_BACK, ...counts.keys())
+  const lastYear = Math.max(currentYear + YEARS_AHEAD, ...counts.keys())
+  const yearOptions = Array.from({ length: lastYear - firstYear + 1 }, (_, index) => firstYear + index)
+  const countLabel = (year: number) => counts.get(year) ? `${integer.format(counts.get(year)!)} reservas` : 'sin reservas'
+  const yearsLabel = baseYears.length ? yearList(baseYears) : 'ningún año'
   const filtersChanged = minStays !== '1' || !!channel || contact !== 'any' || !!search
 
   return <div className="grid gap-5">
     <div className="flex flex-wrap items-center justify-between gap-4">
       <div>
         <h1 className="text-2xl font-semibold leading-tight sm:text-3xl">Clientes a recuperar</h1>
-        <p className="mt-1 max-w-3xl text-sm text-muted-foreground">Huéspedes con estancias confirmadas o pagadas en {yearsLabel} que no tienen ninguna reserva activa para {currentYear} ni hecha en {currentYear}.</p>
+        <p className="mt-1 max-w-3xl text-sm text-muted-foreground">Quién se alojó con vosotros en <strong className="font-semibold text-foreground">{yearsLabel}</strong> y todavía no tiene reserva para <strong className="font-semibold text-foreground">{targetYear}</strong>.</p>
       </div>
       <div className="flex items-center gap-2">
         <Button type="button" variant="outline" onClick={() => void exportCsv()} disabled={exporting || !data?.total}><Download size={16} aria-hidden="true" /> {exporting ? 'Exportando…' : 'Exportar CSV'}</Button>
@@ -133,10 +154,26 @@ export function CustomerRetention({ onImport }: { onImport: () => void }) {
     </div>
 
     <Card className="grid gap-4 p-4 sm:p-5">
-      <fieldset className="grid gap-2">
-        <legend className="mb-2 text-xs font-medium">Años de referencia</legend>
-        <div className="flex flex-wrap gap-2">{yearOptions.map(year => <Button key={year} type="button" size="sm" variant={baseYears.includes(year) ? 'secondary' : 'outline'} aria-pressed={baseYears.includes(year)} onClick={() => toggleYear(year)}>{year}</Button>)}</div>
-      </fieldset>
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto_minmax(12rem,16rem)] lg:items-start">
+        <fieldset className="grid gap-2">
+          <legend className="mb-2 text-xs font-semibold uppercase tracking-wide text-primary">1 · Se alojaron en</legend>
+          <div className="flex flex-wrap gap-2">{yearOptions.map(year => {
+            const allowed = year < targetYear
+            const pressed = allowed && baseYears.includes(year)
+            return <Button key={year} type="button" variant={pressed ? 'secondary' : 'outline'} aria-pressed={pressed} disabled={!allowed} title={allowed ? undefined : `Tiene que ser anterior a ${targetYear}`} className="h-auto min-w-20 flex-col gap-0 px-3 py-1.5" onClick={() => toggleYear(year)}>
+              <span className="text-sm font-semibold">{year}</span>
+              <small className={`text-[0.68rem] font-normal ${counts.get(year) ? 'text-muted-foreground' : 'text-muted-foreground/70'}`}>{countLabel(year)}</small>
+            </Button>
+          })}</div>
+          <p className="text-xs leading-5 text-muted-foreground">Cuenta como estancia una reserva confirmada o pagada con entrada en los años marcados.</p>
+        </fieldset>
+        <ArrowRight size={20} aria-hidden="true" className="mt-9 hidden text-muted-foreground lg:block" />
+        <label className="grid gap-2 text-xs">
+          <span className="mb-1 font-semibold uppercase tracking-wide text-primary">2 · Sin reserva para</span>
+          <Select value={String(targetYear)} onChange={event => changeTarget(Number(event.target.value))}>{yearOptions.filter(year => year > firstYear).map(year => <option key={year} value={year}>{year} · {countLabel(year)}</option>)}</Select>
+          <span className="leading-5 text-muted-foreground">Ya ha vuelto quien tiene una prerreserva, reserva confirmada o pagada con entrada en {targetYear}{targetYear <= currentYear ? `, o la hizo durante ${targetYear} para más adelante` : ''}.</span>
+        </label>
+      </div>
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-[minmax(14rem,2fr)_repeat(3,minmax(10rem,1fr))_auto] xl:items-end">
         <label className="relative grid gap-1 text-xs font-medium">Buscar
           <span className="relative"><Search size={16} aria-hidden="true" className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" /><Input className="pl-9" type="search" placeholder="Nombre del huésped" value={search} onChange={event => setSearch(event.target.value)} /></span>
@@ -148,13 +185,13 @@ export function CustomerRetention({ onImport }: { onImport: () => void }) {
       </div>
     </Card>
 
-    {!baseYears.length && <Alert variant="info" role="status">Elige al menos un año de referencia.</Alert>}
+    {!baseYears.length && <Alert variant="info" role="status">Marca al menos un año en «Se alojaron en».</Alert>}
     {error && <Alert variant="destructive" className="flex items-center justify-between gap-4"><span>{error}</span><Button type="button" variant="outline" size="sm" onClick={() => setRetryKey(value => value + 1)}>Reintentar</Button></Alert>}
 
     {data && data.has_snapshot && baseYears.length > 0 && updating && <p role="status" className="-mb-2 flex items-center gap-2 text-sm font-medium text-info-ink"><RefreshCw size={15} aria-hidden="true" className="animate-spin motion-reduce:animate-none" />Actualizando resultados…</p>}
 
     {data && data.has_snapshot && baseYears.length > 0 && <div aria-busy={updating} className={`grid grid-cols-2 gap-3 transition-opacity motion-reduce:transition-none xl:grid-cols-4 ${updating ? 'opacity-50' : ''}`}>
-      <Metric label="Huéspedes" value={data.summary.guests} detail={`Sin reserva en ${currentYear}`} />
+      <Metric label="Huéspedes" value={data.summary.guests} detail={`Sin reserva para ${requested.target}`} />
       <Metric label="Con ficha única" value={data.summary.linked} detail="Enlazados a un cliente" />
       <Metric label="Con email" value={data.summary.with_email} detail="Se les puede escribir" />
       <Metric label="Aceptan campañas" value={data.summary.opt_in} detail="Opt-in de newsletters" />
