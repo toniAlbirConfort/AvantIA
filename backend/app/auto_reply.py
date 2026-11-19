@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import base64
 import html
+import logging
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -192,6 +193,8 @@ LETTERS_WITHOUT_ACCENT_FORM = str.maketrans(
     {"ø": "o", "æ": "ae", "œ": "oe", "ð": "d", "þ": "th", "ł": "l", "đ": "d", "ß": "ss"}
 )
 NAME_RE = re.compile(r"[^\W\d_]+(?:[-'’][^\W\d_]+)*")
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -585,6 +588,7 @@ async def _send(db: Session, reply_id: int) -> None:
                 detail={"message_id": reply.message_id, "error_type": type(exc).__name__},
             )
         )
+        _notify_failure(db, reply.conversation_id, type(exc).__name__, copy=False)
         db.commit()
         return
     reply.mode = "sent"
@@ -632,7 +636,19 @@ def _keep_sent_copy(db: Session, reply: AutoReply, sent) -> None:
                 detail={"message_id": reply.message_id, "error_type": type(exc).__name__},
             )
         )
+        _notify_failure(db, reply.conversation_id, type(exc).__name__, copy=True)
         db.commit()
+
+
+def _notify_failure(db: Session, conversation_id: int, error_type: str, *, copy: bool) -> None:
+    """In-app notice for a failed auto-reply; never let it break the reply bookkeeping."""
+    from app.notifications import notify_auto_reply_failed
+
+    try:
+        with db.begin_nested():
+            notify_auto_reply_failed(db, conversation_id, error_type, copy=copy)
+    except Exception:
+        logger.exception("Could not record the auto-reply notification")
 
 
 def simulate(

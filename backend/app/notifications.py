@@ -24,16 +24,21 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import case, delete, exists, func, select
 from sqlalchemy.orm import Session
 
+from app.classification import classification_review_clause
 from app.config import get_settings
 from app.models import (
+    AuditEvent,
     BookingTask,
     Conversation,
     ImportBatch,
     MailCursor,
+    Message,
     Notification,
+    NotificationMute,
     NotificationRead,
     RegistrationCheck,
     ReservationSyncState,
+    TariffStudy,
     User,
     now,
 )
@@ -41,11 +46,14 @@ from app.models import (
 logger = logging.getLogger(__name__)
 
 SEVERITIES = ("critical", "action", "info")
-AUDIENCES = ("all", "admin")
+AUDIENCES = ("all", "admin", "user")
 # Open notifications stop being relevant after this window even if never acted upon.
 OVERDUE_WINDOW = timedelta(hours=48)
 BOOKING_WINDOW = timedelta(days=7)
 IMPORT_WINDOW = timedelta(hours=24)
+RECENT_WINDOW = timedelta(days=7)
+LLM_WINDOW = timedelta(minutes=30)
+LLM_FAILURES = 3
 
 
 @dataclass(frozen=True)
@@ -66,6 +74,16 @@ KINDS: dict[str, KindSpec] = {
     "booking.created": KindSpec("action", "all", "Prerreservas"),
     "registration.unregistered": KindSpec("action", "all", "Consulta sin registrar"),
     "import.invalid": KindSpec("action", "admin", "Importación inválida"),
+    "whatsapp.unavailable": KindSpec("critical", "admin", "WhatsApp (GOWA)"),
+    "llm.failing": KindSpec("action", "admin", "Análisis con IA"),
+    "conversation.assigned": KindSpec("info", "user", "Conversación asignada"),
+    "auto_reply.failed": KindSpec("action", "admin", "Autorespuesta"),
+    "classification.review": KindSpec("info", "all", "Clasificación por revisar"),
+    "tariff.study_finished": KindSpec("info", "admin", "Estudio de tarifas"),
+    "tariff.study_failed": KindSpec("critical", "admin", "Estudio de tarifas fallido"),
+    "import.warnings": KindSpec("info", "admin", "Advertencias de importación"),
+    "job.recovered": KindSpec("action", "admin", "Trabajo interrumpido"),
+    "maintenance.done": KindSpec("info", "admin", "Mantenimiento"),
 }
 
 JOB_LABELS = {
@@ -98,13 +116,23 @@ def _active(db: Session, key: str) -> Notification | None:
 
 
 def _create(
-    db: Session, kind: str, key: str, title: str, body: str | None, link: str | None, at: datetime
+    db: Session,
+    kind: str,
+    key: str,
+    title: str,
+    body: str | None,
+    link: str | None,
+    at: datetime,
+    user_id: int | None = None,
 ) -> Notification:
     spec = KINDS[kind]
+    if (spec.audience == "user") != (user_id is not None):
+        raise ValueError(f"El aviso {kind} lleva destinatario solo si es personal")
     item = Notification(
         kind=kind,
         severity=spec.severity,
         audience=spec.audience,
+        user_id=user_id,
         title=_clip(title, 200),
         body=_clip(body, 500),
         link=link,
@@ -129,6 +157,7 @@ def raise_condition(
     *,
     once: bool = False,
     at: datetime | None = None,
+    user_id: int | None = None,
 ) -> Notification | None:
     """Make sure an active notification exists for ``key``; refresh its text if it does.
 
@@ -142,7 +171,7 @@ def raise_condition(
         return None
     item = _active(db, key)
     if item is None:
-        return _create(db, kind, key, title, body, link, at)
+        return _create(db, kind, key, title, body, link, at, user_id)
     item.title = _clip(title, 200)
     item.body = _clip(body, 500)
     item.link = link
@@ -188,18 +217,21 @@ def record_event(
     item.occurrences += 1
     item.title = _clip(title, 200)
     item.body = _clip(body, 500)
+    item.link = link
     item.last_seen_at = at
     # Unread again for everyone, so a repeated failure is noticed.
     db.execute(delete(NotificationRead).where(NotificationRead.notification_id == item.id))
     return item
 
 
-def _sync_set(
-    db: Session, kind: str, wanted: dict[str, tuple[str, str | None, str | None]], at: datetime
-) -> None:
-    """Raise one condition per wanted key and clear the active ones of ``kind`` not wanted."""
-    for key, (title, body, link) in wanted.items():
-        raise_condition(db, kind, key, title, body, link, at=at)
+def _sync_set(db: Session, kind: str, wanted: dict[str, tuple], at: datetime) -> None:
+    """Raise one condition per wanted key and clear the active ones of ``kind`` not wanted.
+
+    Values are ``(title, body, link)`` or, for personal kinds, ``(title, body, link, user_id)``.
+    """
+    for key, (title, body, link, *rest) in wanted.items():
+        user_id = rest[0] if rest else None
+        raise_condition(db, kind, key, title, body, link, at=at, user_id=user_id)
     stale = db.scalars(
         select(Notification.dedupe_key).where(
             Notification.kind == kind, Notification.resolved_at.is_(None)
@@ -427,6 +459,180 @@ def _watch_imports(db: Session, at: datetime) -> None:
         )
 
 
+def _watch_llm(db: Session, at: datetime) -> None:
+    """Several classification failures and no success since: the LLM is down."""
+    failures, last_failure = db.execute(
+        select(func.count(AuditEvent.id), func.max(AuditEvent.created_at)).where(
+            AuditEvent.action == "message.classification_failed",
+            AuditEvent.created_at >= at - LLM_WINDOW,
+        )
+    ).one()
+    last_success = db.scalar(
+        select(func.max(AuditEvent.created_at)).where(AuditEvent.action == "message.classified")
+    )
+    failing = failures >= LLM_FAILURES and (
+        last_success is None or _aware(last_success) < _aware(last_failure)
+    )
+    wanted = {}
+    if failing:
+        wanted["llm.failing"] = (
+            "El análisis con IA está fallando",
+            f"{failures} mensajes no se pudieron clasificar en los últimos 30 min. Revisa que "
+            "Ollama esté disponible; mientras tanto los borradores piden comprobación manual.",
+            "/integrations",
+        )
+    _sync_set(db, "llm.failing", wanted, at)
+
+
+def _watch_assignments(db: Session, at: datetime) -> None:
+    """Tell each person about pending conversations a colleague assigned to them."""
+    rows = db.execute(
+        select(Conversation.id, Conversation.assigned_user_id).where(
+            Conversation.assigned_user_id.is_not(None),
+            Conversation.status == "pending",
+            Conversation.last_inbound_at >= at - RECENT_WINDOW,
+        )
+    ).all()
+    wanted = {}
+    for conversation_id, user_id in rows:
+        event = db.scalar(
+            select(AuditEvent)
+            .where(
+                AuditEvent.conversation_id == conversation_id,
+                AuditEvent.action == "conversation.assigned",
+            )
+            .order_by(AuditEvent.id.desc())
+        )
+        actor_id = event.actor_user_id if event else None
+        if actor_id == user_id:
+            continue  # Assigned to themselves: nothing to tell.
+        actor = db.get(User, actor_id) if actor_id else None
+        wanted[f"conversation.assigned:{conversation_id}:{user_id}"] = (
+            f"Te han asignado la conversación #{conversation_id}",
+            f"Asignada por {actor.username}." if actor else "Está pendiente de respuesta.",
+            f"/inbox/{conversation_id}",
+            user_id,
+        )
+    _sync_set(db, "conversation.assigned", wanted, at)
+
+
+def _watch_classification_review(db: Session, at: datetime) -> None:
+    count = db.scalar(
+        select(func.count(Message.id)).where(
+            classification_review_clause(), Message.created_at >= at - RECENT_WINDOW
+        )
+    )
+    wanted = {}
+    if count:
+        wanted["classification.review"] = (
+            f"{count} mensaje{'s' if count != 1 else ''} con la clasificación por revisar",
+            "La clasificación automática no está segura. Confírmala o corrígela desde la "
+            "bandeja. Cuenta los recibidos en los últimos 7 días.",
+            "/inbox",
+        )
+    _sync_set(db, "classification.review", wanted, at)
+
+
+STUDY_TEXT = {
+    "completed": ("tariff.study_finished", "Estudio de tarifas «{name}» completado"),
+    "partial": (
+        "tariff.study_finished",
+        "Estudio de tarifas «{name}» terminado con datos incompletos",
+    ),
+    "failed": ("tariff.study_failed", "Falló el estudio de tarifas «{name}»"),
+}
+
+
+def _watch_tariff_studies(db: Session, at: datetime) -> None:
+    finished_at = func.coalesce(
+        TariffStudy.completed_at, TariffStudy.started_at, TariffStudy.created_at
+    )
+    studies = db.scalars(
+        select(TariffStudy).where(
+            TariffStudy.status.in_(tuple(STUDY_TEXT)), finished_at >= at - IMPORT_WINDOW
+        )
+    ).all()
+    for study in studies:
+        kind, title = STUDY_TEXT[study.status]
+        if study.status == "failed":
+            body = _clip(study.error, 300) or "Sin detalle del error."
+        else:
+            body = "Ya puedes consultar el resultado y su informe."
+        raise_condition(
+            db,
+            kind,
+            f"tariff.study:{study.id}",
+            title.format(name=study.name),
+            body,
+            "/tariff-lab",
+            once=True,
+            at=at,
+        )
+
+
+def _watch_import_warnings(db: Session, at: datetime) -> None:
+    """One notice per dataset while its latest valid import carries warnings."""
+    for dataset, label in DATASET_LABELS.items():
+        batch = db.scalar(
+            select(ImportBatch)
+            .where(ImportBatch.dataset == dataset, ImportBatch.status == "valid")
+            .order_by(ImportBatch.created_at.desc(), ImportBatch.id.desc())
+        )
+        key = f"import.warnings:{dataset}"
+        count = len(batch.warnings or []) if batch else 0
+        if count:
+            raise_condition(
+                db,
+                "import.warnings",
+                key,
+                f"La última importación de {label} trae {count} advertencia"
+                f"{'s' if count != 1 else ''}",
+                "Son datos que conviene corregir en el origen (por ejemplo, en Avantio). "
+                "El detalle está en Importaciones.",
+                "/imports",
+                at=at,
+            )
+        else:
+            clear_condition(db, key, at)
+
+
+MAINTENANCE_TEXT = {
+    "whatsapp.session.purged": "Se borraron los datos de WhatsApp",
+    "maintenance.payment_data_masked": "Se enmascararon datos de pago guardados",
+}
+
+
+def _watch_maintenance(db: Session, at: datetime) -> None:
+    events = db.scalars(
+        select(AuditEvent).where(
+            AuditEvent.action.in_(tuple(MAINTENANCE_TEXT)),
+            AuditEvent.created_at >= at - IMPORT_WINDOW,
+        )
+    ).all()
+    for event in events:
+        actor = db.get(User, event.actor_user_id) if event.actor_user_id else None
+        detail = event.detail or {}
+        if event.action == "maintenance.payment_data_masked":
+            body = (
+                f"{detail.get('messages', 0)} mensajes y {detail.get('conversations', 0)} "
+                "conversaciones."
+            )
+        else:
+            body = "Sesión de WhatsApp y datos derivados eliminados de forma irreversible."
+        if actor:
+            body += f" Lo hizo {actor.username}."
+        raise_condition(
+            db,
+            "maintenance.done",
+            f"maintenance:{event.id}",
+            MAINTENANCE_TEXT[event.action],
+            body,
+            "/integrations",
+            once=True,
+            at=at,
+        )
+
+
 WATCHERS: tuple[Callable[[Session, datetime], None], ...] = (
     _watch_imap,
     _watch_avantio_sync,
@@ -436,6 +642,12 @@ WATCHERS: tuple[Callable[[Session, datetime], None], ...] = (
     _watch_bookings,
     _watch_registration,
     _watch_imports,
+    _watch_llm,
+    _watch_assignments,
+    _watch_classification_review,
+    _watch_tariff_studies,
+    _watch_import_warnings,
+    _watch_maintenance,
 )
 
 
@@ -472,6 +684,99 @@ def scan(db: Session, current_time: datetime | None = None) -> None:
         logger.exception("Notification purge failed")
 
 
+async def watch_gowa(db: Session) -> None:
+    """Check the WhatsApp device through GOWA (a network call, so it runs less often)."""
+    from app.gowa import GowaNotConfigured, get_gowa_status, gowa_is_configured
+
+    key = "whatsapp"
+    at = now()
+    if not gowa_is_configured():
+        clear_condition(db, key, at)
+        db.commit()
+        return
+    try:
+        status = await get_gowa_status()
+    except GowaNotConfigured:
+        clear_condition(db, key, at)
+        db.commit()
+        return
+    except Exception as exc:  # Any failure means the service cannot be reached.
+        raise_condition(
+            db,
+            "whatsapp.unavailable",
+            key,
+            "No se puede contactar con WhatsApp (GOWA)",
+            f"El servicio no responde ({type(exc).__name__}). Los mensajes de WhatsApp no "
+            "entran mientras tanto.",
+            "/integrations",
+            at=at,
+        )
+        db.commit()
+        return
+    if not status.get("registered") or not status.get("is_logged_in"):
+        raise_condition(
+            db,
+            "whatsapp.unavailable",
+            key,
+            "WhatsApp no tiene la sesión iniciada",
+            "Hay que vincular de nuevo el dispositivo desde Integraciones.",
+            "/integrations",
+            at=at,
+        )
+    elif not status.get("is_connected"):
+        raise_condition(
+            db,
+            "whatsapp.unavailable",
+            key,
+            "WhatsApp está desconectado",
+            "La sesión existe pero no hay conexión. Prueba a reconectar desde Integraciones.",
+            "/integrations",
+            at=at,
+        )
+    else:
+        clear_condition(db, key, at)
+    db.commit()
+
+
+def notify_auto_reply_failed(
+    db: Session, conversation_id: int, error_type: str, *, copy: bool = False
+) -> None:
+    if copy:
+        title = "No se guardó la copia de una autorespuesta en Enviados"
+        body = (
+            f"Conversación #{conversation_id}: la respuesta salió, pero falló la copia "
+            f"({error_type})."
+        )
+    else:
+        title = "Falló el envío de una autorespuesta"
+        body = f"Conversación #{conversation_id}: {error_type}. El cliente no recibió el acuse."
+    record_event(
+        db,
+        "auto_reply.failed",
+        "auto_reply.copy_failed" if copy else "auto_reply.failed",
+        title,
+        body,
+        f"/inbox/{conversation_id}",
+    )
+
+
+def notify_job_recovered(db: Session, kind: str, job_id: int) -> None:
+    label = JOB_LABELS.get(kind, kind)
+    follow_up = (
+        "Comprueba el envío: puede haber salido o no."
+        if kind == "send"
+        else "Se ha vuelto a poner en cola."
+    )
+    record_event(
+        db,
+        "job.recovered",
+        f"job.recovered:{kind}",
+        f"Se interrumpió un trabajo de {label}",
+        f"Trabajo #{job_id}: el worker se detuvo a mitad. {follow_up}",
+        "/integrations",
+    )
+
+
 def notify_job_failed(db: Session, kind: str, job_id: int, error: str | None) -> None:
     label = JOB_LABELS.get(kind, kind)
     record_event(
@@ -488,7 +793,61 @@ def notify_job_failed(db: Session, kind: str, job_id: int, error: str | None) ->
 
 
 def _visible(user: User):
-    return Notification.audience.in_(("all", "admin") if user.role == "admin" else ("all",))
+    shared = Notification.audience.in_(("all", "admin") if user.role == "admin" else ("all",))
+    return shared | ((Notification.audience == "user") & (Notification.user_id == user.id))
+
+
+def can_mute(kind: str) -> bool:
+    return kind in KINDS and KINDS[kind].severity != "critical"
+
+
+def muted_kinds(db: Session, user: User) -> set[str]:
+    return set(db.scalars(select(NotificationMute.kind).where(NotificationMute.user_id == user.id)))
+
+
+def _counted(user: User):
+    """Unread notifications that count: kinds the user did not mute, and critical ones always."""
+    muted = select(NotificationMute.kind).where(NotificationMute.user_id == user.id)
+    return (Notification.severity == "critical") | Notification.kind.not_in(muted)
+
+
+def kinds_for(user: User) -> list[str]:
+    """Kinds this user can ever see, for the preferences screen."""
+    allowed = {"all", "user", "admin"} if user.role == "admin" else {"all", "user"}
+    return [kind for kind, spec in KINDS.items() if spec.audience in allowed]
+
+
+def preferences(db: Session, user: User) -> list[dict]:
+    muted = muted_kinds(db, user)
+    return [
+        {
+            "kind": kind,
+            "label": KINDS[kind].label,
+            "severity": KINDS[kind].severity,
+            "audience": KINDS[kind].audience,
+            "muted": kind in muted and can_mute(kind),
+            "can_mute": can_mute(kind),
+        }
+        for kind in kinds_for(user)
+    ]
+
+
+def set_muted(db: Session, user: User, kinds: list[str]) -> None:
+    wanted = set(kinds)
+    allowed = set(kinds_for(user))
+    invalid = sorted(kind for kind in wanted if kind not in allowed or not can_mute(kind))
+    if invalid:
+        raise ValueError("No se pueden silenciar: " + ", ".join(invalid))
+    current = muted_kinds(db, user)
+    for kind in current - wanted:
+        db.execute(
+            delete(NotificationMute).where(
+                NotificationMute.user_id == user.id, NotificationMute.kind == kind
+            )
+        )
+    for kind in wanted - current:
+        db.add(NotificationMute(user_id=user.id, kind=kind, created_at=now()))
+    db.commit()
 
 
 def _unread_clause(user: User):
@@ -498,7 +857,7 @@ def _unread_clause(user: User):
     )
 
 
-def view(item: Notification, read: bool) -> dict:
+def view(item: Notification, read: bool, muted: bool = False) -> dict:
     return {
         "id": item.id,
         "kind": item.kind,
@@ -514,13 +873,19 @@ def view(item: Notification, read: bool) -> dict:
         "last_seen_at": item.last_seen_at,
         "resolved_at": item.resolved_at,
         "read": read,
+        "muted": muted,
     }
 
 
 def counts(db: Session, user: User) -> dict:
     rows = db.execute(
         select(Notification.severity, func.count(Notification.id))
-        .where(Notification.status == "open", _visible(user), _unread_clause(user))
+        .where(
+            Notification.status == "open",
+            _visible(user),
+            _unread_clause(user),
+            _counted(user),
+        )
         .group_by(Notification.severity)
     ).all()
     by_severity = {severity: 0 for severity in SEVERITIES} | dict(rows)
@@ -549,7 +914,8 @@ def list_for_user(db: Session, user: User, status: str = "open", limit: int = 10
     read = set(
         db.scalars(read_ids.where(NotificationRead.notification_id.in_([i.id for i in items])))
     )
-    return [view(item, item.id in read) for item in items]
+    muted = {kind for kind in muted_kinds(db, user) if can_mute(kind)}
+    return [view(item, item.id in read, item.kind in muted) for item in items]
 
 
 def get_visible(db: Session, user: User, notification_id: int) -> Notification | None:
@@ -585,15 +951,21 @@ __all__ = [
     "AUDIENCES",
     "KINDS",
     "SEVERITIES",
+    "can_mute",
     "clear_condition",
     "counts",
     "dismiss",
     "get_visible",
     "list_for_user",
     "mark_read",
+    "notify_auto_reply_failed",
     "notify_job_failed",
+    "notify_job_recovered",
+    "preferences",
     "raise_condition",
     "record_event",
     "scan",
+    "set_muted",
     "view",
+    "watch_gowa",
 ]

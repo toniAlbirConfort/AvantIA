@@ -527,6 +527,10 @@ class NotificationReadIn(BaseModel):
     ids: list[int] | None = Field(default=None, max_length=500)
 
 
+class NotificationPreferencesIn(BaseModel):
+    muted: list[str] = Field(default_factory=list, max_length=100)
+
+
 @app.get("/api/notifications")
 def list_notifications(
     db: Db,
@@ -556,6 +560,24 @@ def dismiss_notification(notification_id: int, db: Db, user: Operator) -> dict:
         raise HTTPException(404, "Aviso no encontrado")
     notifications.dismiss(db, user, item)
     return notifications.view(item, True)
+
+
+@app.get("/api/notifications/preferences")
+def notification_preferences(db: Db, user: Operator) -> list[dict]:
+    """Kinds this user can receive and which ones they muted (critical ones cannot be muted)."""
+    return notifications.preferences(db, user)
+
+
+@app.put("/api/notifications/preferences")
+def save_notification_preferences(
+    body: NotificationPreferencesIn, db: Db, user: Operator
+) -> list[dict]:
+    """Replace the user's muted kinds: muted notices stay listed but do not count as unread."""
+    try:
+        notifications.set_muted(db, user, body.muted)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return notifications.preferences(db, user)
 
 
 @app.get("/api/conversations")
