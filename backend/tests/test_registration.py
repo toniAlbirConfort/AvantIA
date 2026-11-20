@@ -684,3 +684,62 @@ def test_export_email_identifies_a_current_guest(db):
         "excluded",
         "huesped_con_reserva",
     )
+
+
+def test_open_alert_that_current_rules_exclude_closes_itself(db):
+    """An alert raised by older rules (here, a fraud attempt) is closed on the next run."""
+    from app import notifications
+
+    reservations(db, ("40000090-130650", "OTRA PERSONA", "paid", DAY, *NEXT_YEAR))
+    scam = email(
+        db,
+        "Max Mustermann <paula@shop.example>",
+        "Urgent Booking Request: Nov 15-16",
+        "I've been trying to book a single room for November 15th to 16th. I've attached "
+        "photos of my documents for you. Here's the link: my documents.",
+    )
+    genuine = email(db, "Svein Hagen <sh@example.test>", "En uke", "En uke fra 17 okt - 24 okt?")
+    for conversation in (scam, genuine):
+        message = db.scalar(select(Message).where(Message.conversation_id == conversation.id))
+        db.add(
+            RegistrationCheck(
+                conversation_id=conversation.id,
+                message_id=message.id,
+                customer_email="x@example.test",
+                received_at=RECEIVED,
+                due_at=RECEIVED + timedelta(hours=1),
+                status="alerted",
+                mode="shadow",
+                alerted_at=RECEIVED + timedelta(hours=1),
+                checked_at=RECEIVED + timedelta(hours=1),
+            )
+        )
+    db.commit()
+    notifications.scan(db, LATER)
+    assert len(notifications_open(db)) == 2
+
+    summary = run_registration_check(db, LATER)
+    assert summary["excluded"] == 1
+    assert (check_for(db, scam).status, check_for(db, scam).reason) == (
+        "excluded",
+        "posible_fraude",
+    )
+    assert check_for(db, scam).resolved_at is not None
+    assert check_for(db, genuine).status == "alerted"
+    event = db.scalar(select(AuditEvent).where(AuditEvent.action == "registration.reevaluated"))
+    assert event.detail["was"] == "alerted"
+
+    notifications.scan(db, LATER)
+    assert [item.dedupe_key for item in notifications_open(db)] == [
+        f"registration.unregistered:{check_for(db, genuine).id}"
+    ]
+
+
+def notifications_open(db):
+    from app.models import Notification
+
+    return db.scalars(
+        select(Notification).where(
+            Notification.kind == "registration.unregistered", Notification.resolved_at.is_(None)
+        )
+    ).all()

@@ -30,6 +30,8 @@ const AUTOMATIC_REASONS: Record<string, string> = {
   seguimiento: 'seguimiento de una consulta anterior del mismo cliente',
   huesped_con_reserva: 'el cliente ya tiene una reserva en curso',
   parece_huesped: 'el texto es de un huésped con reserva',
+  posible_fraude: 'parece un intento de fraude (pide reservar con documentos adjuntos)',
+  proveedor: 'empresa que ofrece o pide servicios',
 }
 
 export function reasonText(reason: string | null) {
