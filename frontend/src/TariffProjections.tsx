@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { TriangleAlert } from 'lucide-react'
 import { api, apiDownload } from './api'
 import { Alert } from './components/ui/alert'
 import { Badge } from './components/ui/badge'
@@ -8,6 +9,7 @@ import { Input } from './components/ui/input'
 import { Select } from './components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './components/ui/table'
 import { Textarea } from './components/ui/textarea'
+import { Tooltip } from './components/ui/tooltip'
 import { PriceEvolution, type Evolution } from './PriceEvolution'
 
 type Observation = {
@@ -20,13 +22,21 @@ type ProjectionSeason = {
   previous_year: number | null; adr: string | null; market_median: string | null; market_refs: number
   market_gap: number | null; cost_adjustment: number; demand_adjustment: number; market_adjustment: number
   total_change: number; rate: string; monthly_occupancy: Record<string, number> | null; flags: string[]
+  // Version 2: learned yearly increase and booking pace.
+  increase_source?: 'pattern' | 'group_pattern' | 'cost'; increase_amount?: string; pattern_adjustment?: number
+  pattern?: { amount: string; steps: { year: number; from: string; to: string; amount: string }[] } | null
+  pace?: Pace | null
+}
+type Pace = {
+  as_of: string; previous_as_of: string; nights: number; previous_nights: number; change: number | null
+  status: 'behind' | 'slightly_behind' | 'on_track' | 'few_data'
 }
 type FinalSeason = {
   key: string; tariff_name: string; start: string; end: string; proposed_rate: string; rate: string
   override_reason: string | null; note: string | null
 }
 type GroupSummary = {
-  units: number; average_base_rate: string | null; average_rate: string | null
+  units: number; average_base_rate: string | null; average_rate: string | null; pattern_amount?: string | null
   pickup: { year: number; nights: number; previous_nights: number; change: number | null } | null
 }
 type SeasonRef = { start: string; end: string; base_rate: string }
@@ -57,6 +67,15 @@ const flagLabels: Record<string, string> = {
   mercado_pocas_referencias: 'Pocas referencias de mercado: sin ajuste',
   limitado: 'Ajustada al límite de subida',
   sin_historico: 'Sin histórico de ocupación',
+  sin_patron: 'Sin tarifas de años anteriores: subida típica del grupo',
+}
+
+const increaseSources: Record<string, string> = { pattern: 'Patrón', group_pattern: 'Típica del grupo', cost: 'IPC' }
+
+function signedMoney(value: string | null | undefined) {
+  if (value == null) return '—'
+  const amount = Number(value)
+  return `${amount > 0 ? '+' : ''}${new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(amount)}`
 }
 
 function formatDate(value: string) {
@@ -89,6 +108,24 @@ function percent(value: number | null | undefined, signed = false) {
 function Adjustment({ value }: { value: number }) {
   if (!value) return <span className="text-muted-foreground">0</span>
   return <span className={value > 0 ? 'text-success-ink' : 'text-warning-ink'}>{percent(value, true)}</span>
+}
+
+function PaceCell({ pace, baseYear }: { pace: Pace | null | undefined; baseYear: number }) {
+  if (!pace) return <span className="text-muted-foreground">—</span>
+  const counts = <span className="tabular-nums">{pace.nights} / {pace.previous_nights}</span>
+  if (pace.status === 'few_data') return <span className="text-muted-foreground">{counts}<small className="block text-xs">Pocos datos</small></span>
+  if (pace.status === 'on_track') return <span>{counts}<small className="block text-xs text-muted-foreground">{percent(pace.change, true)}</small></span>
+  const behind = pace.status === 'behind'
+  return <span className="inline-flex items-start justify-end gap-1 text-warning-ink">
+    <span>{counts}<small className="block text-xs">{behind ? 'Por detrás' : 'Algo por detrás'} · {percent(pace.change, true)}</small></span>
+    <Tooltip label={`Reservas por detrás del año pasado: ${percent(pace.change, true)}`} content={<>
+      <strong className="text-foreground">{behind ? 'Menos reservas que el año pasado' : 'Algo menos de reservas que el año pasado'}</strong>
+      <span>A {formatDate(pace.as_of)} hay {pace.nights} noches reservadas en estas fechas de {baseYear}. El año pasado, a {formatDate(pace.previous_as_of)}, había {pace.previous_nights} ({percent(pace.change, true)}).</span>
+      <span>{behind
+        ? 'Valora no subir tanto esta temporada, bajar el precio o crear una oferta del −5 % al −10 % para estas fechas.'
+        : 'Vigila el ritmo y revísalo en unas semanas antes de fijar la subida; si sigue por detrás, valora una oferta.'}</span>
+    </>}><TriangleAlert className="size-4" aria-hidden="true" /></Tooltip>
+  </span>
 }
 
 export function TariffProjections({ admin, groups, refreshVersion }: { admin: boolean; groups: string[]; refreshVersion: number }) {
@@ -164,7 +201,7 @@ export function TariffProjections({ admin, groups, refreshVersion }: { admin: bo
           parameters: {
             cost_percent: number(form, 'cost_percent'), market_inflation_percent: number(form, 'market_inflation_percent'),
             min_change_percent: number(form, 'min_change_percent'), max_change_percent: number(form, 'max_change_percent'),
-            min_units: number(form, 'min_units'), rounding: form.get('rounding'),
+            min_units: number(form, 'min_units'), rounding: form.get('rounding'), increase_mode: form.get('increase_mode'),
           },
         }),
       })
@@ -262,24 +299,26 @@ export function TariffProjections({ admin, groups, refreshVersion }: { admin: bo
     {admin && <Card className="grid gap-4 p-4 sm:p-6">
       <div><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">PROYECCIÓN DE AÑO</p>
         <h2 className="text-xl font-semibold">Proyectar las tarifas SA de un año a otro</h2>
-        <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">Parte de las temporadas SA del año base con las mismas fechas y ajusta cada precio por costes (IPC), ocupación propia y precios de la competencia. No necesita proveedor de mercado. Revisa el resultado y aplícalo a Tarifas cuando esté listo. Avantio no se modifica.</p>
+        <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">Parte de las temporadas SA del año base con las mismas fechas y sube cada precio lo mismo que se ha subido en esas fechas los últimos años (en euros, con más peso el año más reciente). Después lo corrige por ocupación propia y precios de la competencia, y avisa de las temporadas que llevan menos reservas que el año pasado. No necesita proveedor de mercado. Revisa el resultado y aplícalo a Tarifas cuando esté listo. Avantio no se modifica.</p>
       </div>
       <form className="grid items-end gap-3 sm:grid-cols-2 xl:grid-cols-4" onSubmit={event => void createProjection(event)}>
         <label className="grid gap-1.5 text-sm font-medium">Nombre<Input name="name" maxLength={120} defaultValue={`Tarifas SA ${year + 2}`} required /></label>
         <label className="grid gap-1.5 text-sm font-medium">Año base<Input name="base_year" type="number" min={2000} max={2100} defaultValue={year + 1} required /></label>
         <label className="grid gap-1.5 text-sm font-medium">Año a proyectar<Input name="target_year" type="number" min={2001} max={2101} defaultValue={year + 2} required /></label>
-        <label className="grid gap-1.5 text-sm font-medium">Redondeo<Select name="rounding" defaultValue="euro"><option value="euro">Al euro</option><option value="nine">Acabado en 9</option></Select></label>
-        <label className="grid gap-1.5 text-sm font-medium">IPC y costes (%)<Input name="cost_percent" type="number" step={0.1} min={-10} max={25} defaultValue={3.5} required /></label>
+        <label className="grid gap-1.5 text-sm font-medium">Subida<Select name="increase_mode" defaultValue="pattern"><option value="pattern">Patrón de años anteriores</option><option value="percent">IPC y costes</option></Select></label>
+        <label className="grid gap-1.5 text-sm font-medium">Redondeo<Select name="rounding" defaultValue="nine"><option value="nine">Acabado en 9</option><option value="euro">Al euro</option></Select></label>
+        <label className="grid gap-1.5 text-sm font-medium">IPC y costes (%)<Input name="cost_percent" type="number" step={0.1} min={-10} max={25} defaultValue={3.5} required aria-describedby="cost-help" /><span id="cost-help" className="text-xs font-normal leading-5 text-muted-foreground">Con el patrón, solo se usa en grupos sin tarifas de años anteriores.</span></label>
         <label className="grid gap-1.5 text-sm font-medium">IPC para precios de mercado antiguos (%)<Input name="market_inflation_percent" type="number" step={0.1} min={-10} max={25} defaultValue={3.7} /></label>
         <label className="grid gap-1.5 text-sm font-medium">Subida mínima (%)<Input name="min_change_percent" type="number" step={0.5} min={-25} max={25} defaultValue={0} /></label>
-        <label className="grid gap-1.5 text-sm font-medium">Subida máxima (%)<Input name="max_change_percent" type="number" step={0.5} min={-25} max={50} defaultValue={10} /></label>
+        <label className="grid gap-1.5 text-sm font-medium">Subida máxima (%)<Input name="max_change_percent" type="number" step={0.5} min={-25} max={50} defaultValue={20} /></label>
         <label className="grid gap-1.5 text-sm font-medium">Mínimo de alojamientos para ajustar por ocupación<Input name="min_units" type="number" min={1} max={100} defaultValue={3} aria-describedby="min-units-help" /><span id="min-units-help" className="text-xs font-normal leading-5 text-muted-foreground">Si un grupo SA tiene menos alojamientos, su ocupación no es representativa (una sola reserva la mueve mucho) y no se aplica el ajuste de demanda.</span></label>
         <fieldset className="grid gap-2 sm:col-span-2 xl:col-span-3">
           <legend className="mb-1 text-sm font-medium">Grupos SA</legend>
           <div className="flex flex-wrap gap-2">{groups.map(group => <label key={group} className="inline-flex min-h-10 items-center gap-2 rounded-md border border-border px-3 py-2 text-sm"><input type="checkbox" name="projection_group" value={group} defaultChecked />{group}</label>)}</div>
         </fieldset>
         <div className="grid gap-1 text-xs leading-5 text-muted-foreground sm:col-span-2 xl:col-span-4">
-          <p><strong className="text-foreground">Demanda:</strong> +2 puntos si la temporada llegó al 80 % de ocupación; −2 si quedó por debajo del 60 % y cayó 5 puntos o más frente al año anterior.</p>
+          <p><strong className="text-foreground">Patrón:</strong> para cada temporada, euros que subió la SA en las mismas fechas en cada uno de los tres últimos años (pesos 3, 2 y 1, el más reciente primero). Si se proyecta a dos o tres años, se aplica una vez por año.</p>
+          <p><strong className="text-foreground">Demanda:</strong> −2 puntos si la temporada quedó por debajo del 60 % de ocupación y cayó 5 puntos o más frente al año anterior. Con IPC, también +2 puntos si llegó al 80 %; con el patrón no, porque las subidas pasadas ya lo recogen.</p>
           <p><strong className="text-foreground">Mercado:</strong> con 2 o más competidores, si estamos un 10 % o más por debajo de la mediana se suma un tercio de la diferencia (máximo 5 puntos); si estamos un 10 % o más por encima, −2 puntos.</p>
         </div>
         <Button type="submit" className="w-fit" disabled={busy || !groups.length}>{busy ? 'Calculando…' : 'Calcular proyección'}</Button>
@@ -339,7 +378,7 @@ export function TariffProjections({ admin, groups, refreshVersion }: { admin: bo
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">PROYECCIÓN #{selected.id} · {selected.status === 'applied' ? 'APLICADA' : 'BORRADOR'}</p>
               <h2 className="text-xl font-semibold">{selected.name}</h2>
-              <p className="mt-1 text-sm text-muted-foreground">SA {selected.base_year} → SA {selected.target_year} · reservas hasta el {formatDate(selected.result.as_of)} · IPC y costes {percent(Number(selected.result.parameters.cost_percent) / 100)}</p>
+              <p className="mt-1 text-sm text-muted-foreground">SA {selected.base_year} → SA {selected.target_year} · reservas hasta el {formatDate(selected.result.as_of)} · {selected.result.parameters.increase_mode === 'pattern' ? 'subida por patrón de años anteriores' : `IPC y costes ${percent(Number(selected.result.parameters.cost_percent) / 100)}`}</p>
               {selected.applied_at && <p className="mt-1 text-sm text-success-ink">Aplicada a Tarifas el {new Date(selected.applied_at).toLocaleString('es-ES')}.</p>}
             </div>
             <div className="flex flex-wrap gap-2">
@@ -355,6 +394,7 @@ export function TariffProjections({ admin, groups, refreshVersion }: { admin: bo
                 <strong className="truncate text-sm text-foreground" title={group}>{group}</strong>
                 <span className="text-muted-foreground">Media {money(summary.average_base_rate)} → <strong className="text-foreground">{money(summary.average_rate)}</strong> ({percent(average, true)})</span>
                 <span className="text-muted-foreground">{summary.units} alojamientos asignados</span>
+                {summary.pattern_amount && <span className="text-muted-foreground">Subida aprendida: {signedMoney(summary.pattern_amount)} por temporada (mediana)</span>}
                 {summary.pickup && <span className={summary.pickup.change != null && summary.pickup.change < -0.15 ? 'text-warning-ink' : 'text-muted-foreground'}>Reservado para {summary.pickup.year}: {summary.pickup.nights} noches frente a {summary.pickup.previous_nights} hace un año{summary.pickup.change != null ? ` (${percent(summary.pickup.change, true)})` : ''}</span>}
               </div>
             })}
@@ -381,11 +421,11 @@ export function TariffProjections({ admin, groups, refreshVersion }: { admin: bo
 
           <div className="grid gap-2">
             <h3 className="text-base font-semibold">Cálculo por temporada</h3>
-            <p className="text-xs text-muted-foreground">Ocupación y precio real: misma temporada del año indicado, con IVA. Mercado: mediana de la competencia y cuánto está por encima (+) o por debajo (−) de nuestra SA.</p>
+            <p className="text-xs text-muted-foreground">Subida: euros del patrón de años anteriores (o IPC) y su peso sobre la SA. Ocupación y precio real: misma temporada del año indicado, con IVA. Mercado: mediana de la competencia y cuánto está por encima (+) o por debajo (−) de nuestra SA. Reservas: noches reservadas hoy en estas fechas del año base frente a las que había hace un año.</p>
             {Object.entries(seasonsByGroup).map(([group, rows]) => <div key={group} className="grid gap-1.5">
               <h4 className="text-sm font-semibold">{group}</h4>
               <div className="max-w-full overflow-auto rounded-lg border border-border"><Table>
-                <TableHeader><TableRow><TableHead>Fecha inicio</TableHead><TableHead>Última noche</TableHead><TableHead className="text-right">SA {selected.base_year}</TableHead><TableHead className="text-right">Ocupación</TableHead><TableHead className="text-right">Precio real</TableHead><TableHead className="text-right">Mercado</TableHead><TableHead className="text-right">Costes</TableHead><TableHead className="text-right">Demanda</TableHead><TableHead className="text-right">Mercado</TableHead><TableHead className="text-right">Total</TableHead><TableHead className="text-right">Propuesta</TableHead><TableHead>Avisos</TableHead></TableRow></TableHeader>
+                <TableHeader><TableRow><TableHead>Fecha inicio</TableHead><TableHead>Última noche</TableHead><TableHead className="text-right">SA {selected.base_year}</TableHead><TableHead className="text-right">Ocupación</TableHead><TableHead className="text-right">Precio real</TableHead><TableHead className="text-right">Mercado</TableHead><TableHead className="text-right">Subida</TableHead><TableHead className="text-right">Demanda</TableHead><TableHead className="text-right">Mercado</TableHead><TableHead className="text-right">Total</TableHead><TableHead className="text-right">Propuesta</TableHead><TableHead className="text-right">Reservas</TableHead><TableHead>Avisos</TableHead></TableRow></TableHeader>
                 <TableBody>{rows.map(row => <TableRow key={row.key}>
                   <TableCell className="whitespace-nowrap tabular-nums">{formatDate(row.start)}</TableCell>
                   <TableCell className="whitespace-nowrap tabular-nums">{formatDate(row.end)}</TableCell>
@@ -393,11 +433,14 @@ export function TariffProjections({ admin, groups, refreshVersion }: { admin: bo
                   <TableCell className="whitespace-nowrap text-right tabular-nums">{percent(row.occupancy)}<small className="block text-xs text-muted-foreground">{row.occupancy_year ?? '—'}{row.previous_occupancy != null ? ` · antes ${percent(row.previous_occupancy)}` : ''}</small></TableCell>
                   <TableCell className="text-right tabular-nums">{money(row.adr)}</TableCell>
                   <TableCell className="whitespace-nowrap text-right tabular-nums">{money(row.market_median)}{row.market_refs > 0 && <small className="block text-xs text-muted-foreground">{row.market_refs} ref. · {percent(row.market_gap, true)}</small>}</TableCell>
-                  <TableCell className="text-right tabular-nums"><Adjustment value={row.cost_adjustment} /></TableCell>
+                  <TableCell className="whitespace-nowrap text-right tabular-nums">{row.increase_source
+                    ? <>{signedMoney(row.increase_amount)}<small className="block text-xs text-muted-foreground">{increaseSources[row.increase_source]} · {percent(row.increase_source === 'cost' ? row.cost_adjustment : row.pattern_adjustment, true)}</small>{row.pattern && <small className="block text-xs text-muted-foreground">{row.pattern.steps.map(step => `${step.year} ${signedMoney(step.amount)}`).join(' · ')}</small>}</>
+                    : <Adjustment value={row.cost_adjustment} />}</TableCell>
                   <TableCell className="text-right tabular-nums"><Adjustment value={row.demand_adjustment} /></TableCell>
                   <TableCell className="text-right tabular-nums"><Adjustment value={row.market_adjustment} /></TableCell>
                   <TableCell className="text-right font-medium tabular-nums">{percent(row.total_change, true)}</TableCell>
                   <TableCell className="text-right font-semibold tabular-nums">{price(row.rate)}</TableCell>
+                  <TableCell className="whitespace-nowrap text-right text-sm"><PaceCell pace={row.pace} baseYear={selected.base_year} /></TableCell>
                   <TableCell className="min-w-48 text-xs text-muted-foreground">{row.flags.map(flag => flagLabels[flag] || flag).join(' · ')}{row.monthly_occupancy && <span className="block">{Object.entries(row.monthly_occupancy).map(([month, value]) => `${month.slice(5)}: ${percent(value)}`).join(' · ')}</span>}</TableCell>
                 </TableRow>)}</TableBody>
               </Table></div>

@@ -184,10 +184,14 @@ def test_rounding_modes_and_parameter_limits():
         raise AssertionError(f"accepted {invalid}")
 
 
+# The cost-percentage mode of version 1, with its former limits and rounding.
+PERCENT_MODE = {"increase_mode": "percent", "max_change_percent": 10, "rounding": "euro"}
+
+
 def test_projection_explains_cost_demand_and_market_per_season(db):
     _seed(db)
     result = calculate_projection(
-        db, base_year=2027, target_year=2028, groups=[GROUP, SMALL], parameters={}
+        db, base_year=2027, target_year=2028, groups=[GROUP, SMALL], parameters=PERCENT_MODE
     )
     assert result["as_of"] == "2026-10-27"
 
@@ -513,5 +517,159 @@ def test_migration_seeds_the_albir_competitor_prices():
             if row[0] == "Albir Confort 1 dormitorio" and str(row[1]).startswith("2027-08")
         )
         assert august_one_bedroom[len(august_one_bedroom) // 2] == 198
+    finally:
+        engine.dispose()
+
+
+def _previous_years(db, group: str, raises: dict[int, int]) -> None:
+    """SA seasons of earlier years: each season of 2027 minus the raises applied since."""
+    for year in (2024, 2025, 2026):
+        for start, end, rate in SEASONS_2027:
+            behind = sum(amount for later, amount in raises.items() if later > year)
+            db.add(TariffSeason(
+                tariff_name=group, rate_plan="SA", start_date=start.replace(year=year),
+                end_date=end.replace(year=year) if end.month != 2 else date(year, 2, 28),
+                nightly_rate=Decimal(rate) - behind,
+            ))
+
+
+def test_projection_learns_the_yearly_raise_in_euros(db):
+    _seed(db)
+    # +10 EUR in 2025 and 2026, +16 EUR in 2027: weighted 3-2-1 from the latest year.
+    _previous_years(db, GROUP, {2025: 10, 2026: 10, 2027: 16})
+    db.commit()
+    result = calculate_projection(
+        db, base_year=2027, target_year=2028, groups=[GROUP, SMALL], parameters={}
+    )
+    assert result["parameters"]["increase_mode"] == "pattern"
+
+    spring = _season(result, GROUP, "2027-04-01")
+    assert spring["increase_source"] == "pattern"
+    assert [step["year"] for step in spring["pattern"]["steps"]] == [2027, 2026, 2025]
+    assert spring["pattern"]["steps"][0] == {
+        "year": 2027, "from": "104.00", "to": "120.00", "amount": "16.00"
+    }
+    assert spring["pattern"]["amount"] == "13.00"  # (16x3 + 10x2 + 10x1) / 6
+    assert spring["increase_amount"] == "13.00"
+    assert spring["cost_adjustment"] == 0.0
+    # Falling occupancy still lowers 2 points: 120 + 13 - 2.4 = 130.6, ending in 9.
+    assert spring["demand_adjustment"] == -0.02
+    assert spring["rate"] == "129.00"
+
+    summer = _season(result, GROUP, "2027-07-01")
+    # Full summers no longer add 2 points: the learned raise already carries them.
+    assert summer["demand_adjustment"] == 0
+    assert summer["market_adjustment"] == 0.05
+    assert summer["rate"] == "219.00"  # 200 + 13 + 10 = 223
+
+    # A group without earlier tariffs falls back to the cost percentage, and says so.
+    small = _season(result, SMALL, "2027-04-01")
+    assert small["increase_source"] == "cost" and small["cost_adjustment"] == 0.035
+    assert any(SMALL in warning and "aprender" in warning for warning in result["warnings"])
+    assert result["groups"][GROUP]["pattern_amount"] == "13.00"
+
+
+def test_projection_two_years_ahead_doubles_the_learned_raise(db):
+    _seed(db)
+    _previous_years(db, GROUP, {2025: 10, 2026: 10, 2027: 10})
+    db.commit()
+    result = calculate_projection(
+        db, base_year=2027, target_year=2029, groups=[GROUP], parameters={"rounding": "euro"}
+    )
+    winter = _season(result, GROUP, "2027-01-01")
+    assert winter["increase_amount"] == "20.00" and winter["rate"] == "120.00"
+
+
+def test_season_without_history_takes_the_typical_raise_of_its_group(db):
+    _seed(db)
+    _previous_years(db, GROUP, {2025: 10, 2026: 10, 2027: 12})
+    # Summers 2024-2026 missing in Tarifas: that season has nothing to compare.
+    db.query(TariffSeason).filter(
+        TariffSeason.tariff_name == GROUP,
+        TariffSeason.start_date.in_([date(year, 7, 1) for year in (2024, 2025, 2026)]),
+    ).delete()
+    db.commit()
+    result = calculate_projection(
+        db, base_year=2027, target_year=2028, groups=[GROUP], parameters={"rounding": "euro"}
+    )
+    summer = _season(result, GROUP, "2027-07-01")
+    assert summer["pattern"] is None and summer["increase_source"] == "group_pattern"
+    assert "sin_patron" in summer["flags"]
+    # Every other season learned (12x3 + 10x2 + 10x1) / 6 = 11.
+    assert summer["increase_amount"] == "11.00"
+
+
+def test_season_pace_compares_bookings_with_last_year_at_the_same_point(db):
+    _seed(db)
+    batch = _batch(db, "reservations", datetime(2026, 10, 28, 12, tzinfo=UTC))
+    # Summer 2026, as seen on 27 Oct 2025: 3 stays of 14 nights.
+    for index, unit in enumerate(("A1", "A2", "A3")):
+        _reservation(
+            db, batch, f"V26-{unit}", unit, date(2026, 7, 1 + index), 14, "2800.00",
+            created_on=date(2025, 10, 1),
+        )
+    # Summer 2027 so far: one stay of 14 nights and one booked after the cut-off.
+    _reservation(
+        db, batch, "V27-A1", "A1", date(2027, 7, 1), 14, "2800.00",
+        created_on=date(2026, 10, 1),
+    )
+    _reservation(
+        db, batch, "V27-late", "A2", date(2027, 7, 10), 7, "1400.00",
+        created_on=date(2026, 11, 1),
+    )
+    # A stay crossing into September counts only its August nights.
+    _reservation(
+        db, batch, "V27-edge", "A3", date(2027, 8, 29), 7, "1400.00",
+        created_on=date(2026, 10, 2),
+    )
+    db.commit()
+    result = calculate_projection(
+        db, base_year=2027, target_year=2028, groups=[GROUP], parameters={},
+        as_of=date(2026, 10, 27),
+    )
+    pace = _season(result, GROUP, "2027-07-01")["pace"]
+    assert pace == {
+        "as_of": "2026-10-27", "previous_as_of": "2025-10-27", "nights": 17,
+        "previous_nights": 42, "change": -0.5952, "status": "behind",
+    }
+    # Spring 2027 has no comparable bookings one year earlier.
+    assert _season(result, GROUP, "2027-04-01")["pace"]["status"] == "few_data"
+
+
+def test_historical_tariffs_migration_loads_avantio_without_overwriting():
+    path = Path(__file__).parents[1] / "alembic" / "versions" / "0028_historical_sa_tariffs.py"
+    spec = importlib.util.spec_from_file_location("historical_tariffs_migration", path)
+    assert spec and spec.loader
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    engine = create_engine("sqlite+pysqlite://")
+    try:
+        with engine.begin() as connection:
+            Base.metadata.tables["tariff_seasons"].create(connection)
+            connection.execute(text(
+                "INSERT INTO tariff_seasons (tariff_name, rate_plan, start_date, end_date, "
+                "nightly_rate) VALUES ('ESTRELLA 2 dormitorios', 'SA', '2027-05-01', "
+                "'2027-06-30', 199), ('ESTRELLA 2 dormitorios', 'SA', '2026-08-25', "
+                "'2026-08-31', 999)"
+            ))
+            with Operations.context(MigrationContext.configure(connection)):
+                migration.upgrade()
+            rows = connection.execute(text(
+                "SELECT tariff_name, start_date, nightly_rate FROM tariff_seasons"
+            )).all()
+            assert len(rows) == 2 + 370 - 1  # the overlapping August season is kept
+            rates = {(row[0], str(row[1])): float(row[2]) for row in rows}
+            assert rates[("ESTRELLA 2 dormitorios", "2027-05-01")] == 159
+            assert rates[("ESTRELLA 2 dormitorios", "2026-08-25")] == 999
+            assert rates[("Albir Confort 1 dormitorio", "2014-01-01")] == 50
+            assert rates[("AVENIDA 2 dorm / Golf II -2112-", "2022-01-01")] > 0
+            with Operations.context(MigrationContext.configure(connection)):
+                migration.downgrade()
+            rows = connection.execute(text(
+                "SELECT start_date, nightly_rate FROM tariff_seasons ORDER BY start_date"
+            )).all()
+            assert [(str(row[0]), float(row[1])) for row in rows] == [
+                ("2026-08-25", 999), ("2027-05-01", 199)
+            ]
     finally:
         engine.dispose()
