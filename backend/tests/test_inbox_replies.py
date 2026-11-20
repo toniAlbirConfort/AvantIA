@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from sqlalchemy import select
 
 from app import inbox_replies, notifications
@@ -13,6 +14,13 @@ from app.inbox_replies import answer_in, check_inbox_replies, outside_reply
 from app.ingest import ingest
 from app.models import AuditEvent, Conversation, Message, Notification
 from tests.test_staff_replies import FakeImap, sent
+
+
+@pytest.fixture(autouse=True)
+def _fresh_cursor():
+    inbox_replies._cursor["after_id"] = 0
+    yield
+
 
 WROTE = datetime(2026, 11, 18, 9, 0, tzinfo=UTC)
 CUSTOMER = "liv@example.test"
@@ -137,3 +145,20 @@ def test_a_new_customer_message_puts_it_back_to_pending(db, monkeypatch):
     assert outside_reply(db, conversation) is None
     with configured(monkeypatch, imap):  # the old reply does not answer the new message
         assert check_inbox_replies(db, WROTE + timedelta(days=1, hours=1)) == 0
+
+
+def test_each_run_continues_where_the_last_one_stopped_and_skips_platforms(db, monkeypatch):
+    monkeypatch.setattr(inbox_replies, "MAX_PER_RUN", 2)
+    platform = pending(db, address="Avantio <noreply@booking.com>", provider_id="<p@x>")
+    customers = [
+        pending(db, address=f"C{n} <c{n}@example.test>", provider_id=f"<c{n}@x>")
+        for n in range(5)
+    ]
+    imap = FakeImap({})
+    with configured(monkeypatch, imap):
+        seen = []
+        for _ in range(3):
+            seen.append([item.id for item, _ in inbox_replies.candidates(db, WROTE)])
+    ids = [item.id for item in customers]
+    assert seen == [ids[0:2], ids[2:4], [ids[4], ids[0]]]
+    assert platform.id not in sum(seen, [])

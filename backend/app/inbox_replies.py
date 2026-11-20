@@ -30,7 +30,10 @@ logger = logging.getLogger(__name__)
 
 ACTION = "conversation.answered_outside"
 WINDOW = timedelta(days=30)
-MAX_PER_RUN = 200
+# Sent folder look-ups per run. Each run continues after the last conversation it looked up,
+# so a long backlog is covered over several runs instead of always the same ones.
+MAX_PER_RUN = 150
+_cursor = {"after_id": 0}
 # Clock differences between the customer's server and the mailbox's.
 CLOCK_MARGIN = timedelta(minutes=2)
 
@@ -47,20 +50,30 @@ def customer_email(conversation: Conversation) -> str | None:
     return address
 
 
-def candidates(db: Session, current: datetime) -> list[Conversation]:
-    return list(
-        db.scalars(
-            select(Conversation)
-            .where(
-                Conversation.status == "pending",
-                Conversation.channel == "email",
-                Conversation.kind != "booking",
-                Conversation.last_inbound_at >= current - WINDOW,
-            )
-            .order_by(Conversation.last_inbound_at.desc())
-            .limit(MAX_PER_RUN)
-        ).all()
-    )
+def candidates(db: Session, current: datetime) -> list[tuple[Conversation, str]]:
+    """Pending consultations with a customer address, from where the last run stopped.
+
+    Platform notifications and colleagues do not use up the per-run budget.
+    """
+    rows = db.scalars(
+        select(Conversation)
+        .where(
+            Conversation.status == "pending",
+            Conversation.channel == "email",
+            Conversation.kind != "booking",
+            Conversation.last_inbound_at >= current - WINDOW,
+        )
+        .order_by(Conversation.id)
+    ).all()
+    addressed = [(item, address) for item in rows if (address := customer_email(item))]
+    start = _cursor["after_id"]
+    ordered = [pair for pair in addressed if pair[0].id > start] + [
+        pair for pair in addressed if pair[0].id <= start
+    ]
+    chosen = ordered[:MAX_PER_RUN]
+    # Wrap around once the end is reached; next run starts again from the lowest id.
+    _cursor["after_id"] = chosen[-1][0].id if len(chosen) < len(ordered) else 0
+    return chosen
 
 
 def thread_ids(db: Session, conversation: Conversation) -> set[str]:
@@ -132,10 +145,9 @@ def check_inbox_replies(db: Session, current: datetime | None = None) -> int:
         if conn is None:
             logger.warning("No Sent folder found; pending conversations are not checked")
             return 0
-        for conversation in conversations:
-            address = customer_email(conversation)
+        for conversation, address in conversations:
             after = last_customer_message_at(db, conversation)
-            if not address or after is None:
+            if after is None:
                 continue
             reply = answer_in(
                 sent_to(conn, address, skip_ids=set()), thread_ids(db, conversation), after
