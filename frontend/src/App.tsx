@@ -490,8 +490,9 @@ export default function App() {
     const url = new URL(link, window.location.origin)
     const next = viewFromPath(url.pathname)
     const id = Number(url.pathname.split('/')[2]) || undefined
+    // Filters left over from the inbox could hide what the link points to.
+    if ((next === 'inbox' || next === 'bookings') && !id) clearInboxFilters()
     if (next === 'inbox' && !id) {
-      clearInboxFilters()
       const filters = url.searchParams
       if (filters.get('status')) setStatusFilter(filters.get('status') || '')
       if (filters.get('classification')) setClassificationFilter(filters.get('classification') as ClassificationLabel | 'unclassified')

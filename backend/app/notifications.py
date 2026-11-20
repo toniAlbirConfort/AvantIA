@@ -431,11 +431,12 @@ def _watch_bookings(db: Session, at: datetime) -> None:
     the notice even after a dismissal, while closing prerreservas only updates the count.
     """
     since = at - BOOKING_WINDOW
-    count = db.scalar(
-        select(func.count(BookingTask.id)).where(
+    open_conversations = db.scalars(
+        select(BookingTask.conversation_id).where(
             BookingTask.status == "open", BookingTask.created_at >= since
         )
-    )
+    ).all()
+    count = len(open_conversations)
     wanted = {}
     if count:
         newest = db.scalar(select(func.max(BookingTask.id)).where(BookingTask.created_at >= since))
@@ -444,7 +445,8 @@ def _watch_bookings(db: Session, at: datetime) -> None:
             f"{'s' if count != 1 else ''} de revisar",
             "Llegaron desde dominios de reservas en los últimos 7 días. Compruébalas en "
             "Avantio y ciérralas en Prerreservas.",
-            "/bookings",
+            # A single one opens directly; several open the list.
+            f"/bookings/{open_conversations[0]}" if count == 1 else "/bookings",
         )
     _sync_set(db, "booking.created", wanted, at)
 
