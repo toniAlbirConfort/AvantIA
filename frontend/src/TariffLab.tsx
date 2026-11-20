@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { ChevronDown } from 'lucide-react'
 import { api, apiDownload } from './api'
 import { Alert } from './components/ui/alert'
 import { Badge } from './components/ui/badge'
@@ -207,59 +208,8 @@ export function TariffLab({ role, refreshVersion }: { role: string; refreshVersi
       </div>
       {incompleteChecks.some(item => item.key === 'market_provider') && <Alert variant="warning">El proveedor/API de mercado todavía no está instalado. Para activar la captura, hace falta integrar un proveedor autorizado con su contrato técnico.</Alert>}
       {!!readiness?.unmapped_properties.length && <Alert variant="warning">{readiness.unmapped_properties.length === 1 ? 'Hay 1 alojamiento' : `Hay ${readiness.unmapped_properties.length} alojamientos`} sin grupo SA deducible: quedan fuera de los estudios hasta que tengan reservas comparables.</Alert>}
-      {!!readiness?.uncertain_properties.length && <Alert variant="info">{readiness.uncertain_properties.length === 1 ? '1 vinculación tiene' : `${readiness.uncertain_properties.length} vinculaciones tienen`} confianza media o baja. Revisa el motivo en Vinculación.</Alert>}
       {!!readiness?.unmapped_groups.length && <Alert variant="warning">Hay grupos SA sin alojamientos vinculados: {readiness.unmapped_groups.join(', ')}.</Alert>}
       {readiness?.checks.some(item => item.key === 'availability_history' && !item.ready) && <Alert variant="warning">Sin calendario histórico de disponibilidad no se calcula una tasa de ocupación fiable.</Alert>}
-    </Card>
-
-    <Card className="grid gap-4 p-4 sm:p-6">
-      <div><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">VINCULACIÓN</p>
-        <h2 className="text-xl font-semibold">Alojamientos por grupo SA</h2>
-        <p className="mt-2 text-sm leading-6 text-muted-foreground">Se deduce automáticamente: los alojamientos con el mismo edificio y capacidad toman el grupo cuyas tarifas SA, consultables en Tarifas, se ajustan mejor al precio de sus reservas confirmadas y pagadas. Si dos grupos quedan muy cerca, decide el nombre del edificio.</p>
-      </div>
-      {!propertyGroups.length ? <p className="text-sm text-muted-foreground">Importa el catálogo de alojamientos y las reservas para deducir la vinculación.</p> :
-        <div className="max-h-[28rem] max-w-full overflow-auto rounded-lg border border-border">
-          <Table><TableHeader><TableRow><TableHead>Alojamiento</TableHead><TableHead>Grupo SA</TableHead><TableHead>Confianza</TableHead><TableHead>Motivo</TableHead></TableRow></TableHeader>
-            <TableBody>{propertyGroups.map(item => <TableRow key={item.property_id}>
-              <TableCell className="min-w-44"><span className="block font-medium">{item.name}</span><small className="text-xs text-muted-foreground">{item.building || 'Sin edificio'} · {item.capacity} plazas</small></TableCell>
-              <TableCell className="min-w-52">{item.tariff_name || <span className="text-warning-ink">Sin grupo deducible</span>}</TableCell>
-              <TableCell>{item.confidence ? <Badge className={confidenceStyles[item.confidence]}>{item.confidence[0].toUpperCase() + item.confidence.slice(1)}</Badge> : '—'}</TableCell>
-              <TableCell className="min-w-72 text-xs leading-5 text-muted-foreground">{item.reason}</TableCell>
-            </TableRow>)}</TableBody>
-          </Table>
-        </div>}
-    </Card>
-
-    <Card className="grid gap-4 p-4 sm:p-6">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">CALENDARIO OFICIAL</p>
-          <h2 className="text-xl font-semibold">Festivos de {readiness?.scope.locality || 'Albir'}, {readiness?.scope.municipality || "l'Alfàs del Pi"}</h2>
-          <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">Se obtienen cada día de fuentes oficiales: festivos nacionales y de la {readiness?.scope.autonomous_community || 'Comunitat Valenciana'} del BOE, y festivos locales del Ayuntamiento y del DOGV. No se editan a mano.</p>
-        </div>
-        {admin && <Button type="button" variant="outline" disabled={busy} onClick={() => void syncHolidays()}>Sincronizar ahora</Button>}
-      </div>
-      {holidaySync && <div className="grid gap-3">
-        <p className="text-xs text-muted-foreground">Última sincronización: {holidaySync.last_run_at ? new Date(holidaySync.last_run_at).toLocaleString('es-ES') : 'pendiente'}</p>
-        {holidaySync.error && <Alert variant="destructive">No se pudo completar la última sincronización: {holidaySync.error}</Alert>}
-        {!!holidaySync.warnings.length && <Alert variant="warning"><ul className="list-inside list-disc">{holidaySync.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul></Alert>}
-        <div className="flex flex-wrap gap-2">{holidaySync.coverage.map(item => <button type="button" key={item.year} onClick={() => setHolidayYear(String(item.year))} aria-pressed={holidayYear === String(item.year)} className={`grid min-w-28 gap-0.5 rounded-md border px-3 py-2 text-left text-xs ${holidayYear === String(item.year) ? 'border-primary bg-accent' : 'border-border bg-background hover:bg-accent'}`}>
-          <strong className="text-sm text-foreground">{item.year}</strong>
-          <span className="text-muted-foreground">{item.national + item.regional} nac. y aut.</span>
-          <span className={item.local ? 'text-muted-foreground' : 'text-warning-ink'}>{item.local ? `${item.local} locales` : item.year < new Date().getFullYear() ? 'Locales sin fuente' : 'Locales pendientes'}</span>
-        </button>)}</div>
-      </div>}
-      <div className="max-w-full overflow-auto rounded-lg border border-border">
-        <Table><TableHeader><TableRow><TableHead>Fecha</TableHead><TableHead>Festivo</TableHead><TableHead>Ámbito</TableHead><TableHead>Fuente</TableHead></TableRow></TableHeader>
-          <TableBody>{yearHolidays.map(item => <TableRow key={item.id}>
-            <TableCell className="whitespace-nowrap">{formatDate(item.date)}</TableCell>
-            <TableCell>{item.name}</TableCell>
-            <TableCell>{scopeLabels[item.scope] || item.scope}</TableCell>
-            <TableCell className="text-xs">{item.source_url ? <a className="underline underline-offset-2" href={item.source_url} target="_blank" rel="noreferrer">{sourceLabels[item.source] || item.source}{item.source_reference ? ` · ${item.source_reference}` : ''}</a> : sourceLabels[item.source] || item.source}</TableCell>
-          </TableRow>)}
-            {!yearHolidays.length && <TableRow><TableCell colSpan={4} className="py-6 text-center text-sm text-muted-foreground">No hay festivos oficiales de {holidayYear} todavía.</TableCell></TableRow>}
-          </TableBody>
-        </Table>
-      </div>
     </Card>
 
     <TariffProjections admin={admin} groups={readiness?.groups || []} refreshVersion={refreshVersion} />
@@ -348,5 +298,67 @@ export function TariffLab({ role, refreshVersion }: { role: string; refreshVersi
         </>}
       </Card>
     </div>
+
+    <Card className="p-0">
+      <details className="group">
+        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-lg p-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:p-6 [&::-webkit-details-marker]:hidden">
+          <span><span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-primary">CALENDARIO OFICIAL</span>
+            <span className="block text-base font-semibold">Festivos de {readiness?.scope.locality || 'Albir'}, {readiness?.scope.municipality || "l'Alfàs del Pi"}</span></span>
+          <ChevronDown aria-hidden="true" className="size-5 shrink-0 text-muted-foreground motion-safe:transition-transform group-open:rotate-180" />
+        </summary>
+        <div className="grid gap-4 px-4 pb-4 sm:px-6 sm:pb-6">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <p className="max-w-3xl text-sm leading-6 text-muted-foreground">Se obtienen cada día de fuentes oficiales: festivos nacionales y de la {readiness?.scope.autonomous_community || 'Comunitat Valenciana'} del BOE, y festivos locales del Ayuntamiento y del DOGV. No se editan a mano.</p>
+            {admin && <Button type="button" variant="outline" disabled={busy} onClick={() => void syncHolidays()}>Sincronizar ahora</Button>}
+          </div>
+          {holidaySync && <div className="grid gap-3">
+            <p className="text-xs text-muted-foreground">Última sincronización: {holidaySync.last_run_at ? new Date(holidaySync.last_run_at).toLocaleString('es-ES') : 'pendiente'}</p>
+            {holidaySync.error && <Alert variant="destructive">No se pudo completar la última sincronización: {holidaySync.error}</Alert>}
+            {!!holidaySync.warnings.length && <Alert variant="warning"><ul className="list-inside list-disc">{holidaySync.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul></Alert>}
+            <div className="flex flex-wrap gap-2">{holidaySync.coverage.map(item => <button type="button" key={item.year} onClick={() => setHolidayYear(String(item.year))} aria-pressed={holidayYear === String(item.year)} className={`grid min-w-28 gap-0.5 rounded-md border px-3 py-2 text-left text-xs ${holidayYear === String(item.year) ? 'border-primary bg-accent' : 'border-border bg-background hover:bg-accent'}`}>
+              <strong className="text-sm text-foreground">{item.year}</strong>
+              <span className="text-muted-foreground">{item.national + item.regional} nac. y aut.</span>
+              <span className={item.local ? 'text-muted-foreground' : 'text-warning-ink'}>{item.local ? `${item.local} locales` : item.year < new Date().getFullYear() ? 'Locales sin fuente' : 'Locales pendientes'}</span>
+            </button>)}</div>
+          </div>}
+          <div className="max-w-full overflow-auto rounded-lg border border-border">
+            <Table><TableHeader><TableRow><TableHead>Fecha</TableHead><TableHead>Festivo</TableHead><TableHead>Ámbito</TableHead><TableHead>Fuente</TableHead></TableRow></TableHeader>
+              <TableBody>{yearHolidays.map(item => <TableRow key={item.id}>
+                <TableCell className="whitespace-nowrap">{formatDate(item.date)}</TableCell>
+                <TableCell>{item.name}</TableCell>
+                <TableCell>{scopeLabels[item.scope] || item.scope}</TableCell>
+                <TableCell className="text-xs">{item.source_url ? <a className="underline underline-offset-2" href={item.source_url} target="_blank" rel="noreferrer">{sourceLabels[item.source] || item.source}{item.source_reference ? ` · ${item.source_reference}` : ''}</a> : sourceLabels[item.source] || item.source}</TableCell>
+              </TableRow>)}
+                {!yearHolidays.length && <TableRow><TableCell colSpan={4} className="py-6 text-center text-sm text-muted-foreground">No hay festivos oficiales de {holidayYear} todavía.</TableCell></TableRow>}
+              </TableBody>
+            </Table>
+          </div>
+        </div>
+      </details>
+    </Card>
+
+    <Card className="p-0">
+      <details className="group">
+        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-lg p-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:p-6 [&::-webkit-details-marker]:hidden">
+          <span><span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-primary">VINCULACIÓN</span>
+            <span className="block text-base font-semibold">Alojamientos por grupo SA</span></span>
+          <ChevronDown aria-hidden="true" className="size-5 shrink-0 text-muted-foreground motion-safe:transition-transform group-open:rotate-180" />
+        </summary>
+        <div className="grid gap-4 px-4 pb-4 sm:px-6 sm:pb-6">
+          <p className="text-sm leading-6 text-muted-foreground">Se deduce automáticamente: los alojamientos con el mismo edificio y capacidad toman el grupo cuyas tarifas SA, consultables en Tarifas, se ajustan mejor al precio de sus reservas confirmadas y pagadas. Si dos grupos quedan muy cerca, decide el nombre del edificio.</p>
+          {!propertyGroups.length ? <p className="text-sm text-muted-foreground">Importa el catálogo de alojamientos y las reservas para deducir la vinculación.</p> :
+            <div className="max-h-[28rem] max-w-full overflow-auto rounded-lg border border-border">
+              <Table><TableHeader><TableRow><TableHead>Alojamiento</TableHead><TableHead>Grupo SA</TableHead><TableHead>Confianza</TableHead><TableHead>Motivo</TableHead></TableRow></TableHeader>
+                <TableBody>{propertyGroups.map(item => <TableRow key={item.property_id}>
+                  <TableCell className="min-w-44"><span className="block font-medium">{item.name}</span><small className="text-xs text-muted-foreground">{item.building || 'Sin edificio'} · {item.capacity} plazas</small></TableCell>
+                  <TableCell className="min-w-52">{item.tariff_name || <span className="text-warning-ink">Sin grupo deducible</span>}</TableCell>
+                  <TableCell>{item.confidence ? <Badge className={confidenceStyles[item.confidence]}>{item.confidence[0].toUpperCase() + item.confidence.slice(1)}</Badge> : '—'}</TableCell>
+                  <TableCell className="min-w-72 text-xs leading-5 text-muted-foreground">{item.reason}</TableCell>
+                </TableRow>)}</TableBody>
+              </Table>
+            </div>}
+        </div>
+      </details>
+    </Card>
   </div>
 }
