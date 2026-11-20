@@ -21,6 +21,8 @@ from app.notifications import notify_job_failed, notify_job_recovered, watch_gow
 from app.notifications import scan as scan_notifications
 from app.processing import alert_conversation, analyze_message, schedule_overdue
 from app.registration import run_registration_check, watch_sync
+from app.staff_replies import CHECK_SECONDS as STAFF_REPLY_CHECK_SECONDS
+from app.staff_replies import check_staff_replies
 from app.tariff_lab import run_study
 
 logging.basicConfig(level=logging.INFO)
@@ -156,6 +158,7 @@ async def main() -> None:
     last_mail = 0.0
     last_housekeeping = 0.0
     last_gowa_check = 0.0
+    last_staff_replies = 0.0
     settings = get_settings()
     while True:
         tick = time.monotonic()
@@ -190,6 +193,13 @@ async def main() -> None:
                 except Exception:
                     logger.exception("WhatsApp notification check failed")
             last_gowa_check = tick
+        if tick - last_staff_replies >= STAFF_REPLY_CHECK_SECONDS:
+            with SessionLocal() as db:
+                try:
+                    check_staff_replies(db)
+                except Exception:
+                    logger.exception("Sent folder check for auto-replies failed")
+            last_staff_replies = tick
         if not await run_job():
             await asyncio.sleep(settings.worker_poll_seconds)
 

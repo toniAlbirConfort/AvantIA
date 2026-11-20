@@ -1,7 +1,7 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from 'react'
-import { CircleAlert, CircleCheck, CircleHelp, EyeOff, Mail, MessageCircle, Search, type LucideIcon } from 'lucide-react'
+import { CircleAlert, CircleCheck, CircleHelp, EyeOff, Mail, MailCheck, MailQuestion, MailX, MessageCircle, Search, type LucideIcon } from 'lucide-react'
 import { api } from './api'
-import type { AutomaticMessage, AutomaticMessageChannel, AutomaticMessageList, AutomaticMessageStatus } from './types'
+import type { AutomaticMessage, AutomaticMessageChannel, AutomaticMessageList, AutomaticMessageStatus, StaffReply } from './types'
 import { Alert } from './components/ui/alert'
 import { Badge } from './components/ui/badge'
 import { Button } from './components/ui/button'
@@ -12,6 +12,7 @@ import { Skeleton } from './components/ui/skeleton'
 
 const PAGE_SIZE = 50
 type Period = 'today' | '7d' | '30d' | '90d' | 'all'
+type StaffFilter = '' | 'after' | 'none'
 
 const statuses: Record<AutomaticMessageStatus, { label: string; summary: string; icon: LucideIcon; tone: string }> = {
   sent: { label: 'Enviado', summary: 'Enviados', icon: CircleCheck, tone: 'bg-success-bg text-success-ink' },
@@ -41,6 +42,36 @@ function periodStart(period: Period) {
   return new Date(today.getFullYear(), today.getMonth(), today.getDate() - back).toISOString()
 }
 
+function elapsed(hours: number) {
+  if (hours < 1) return `${Math.max(1, Math.round(hours * 60))} min después`
+  if (hours < 48) return `${Math.round(hours)} h después`
+  return `${Math.round(hours / 24)} días después`
+}
+
+// The last email the team sent to the recipient from Outlook, read from "Elementos enviados".
+function StaffReplyLine({ value }: { value: StaffReply | null }) {
+  let Icon = MailQuestion
+  let tone = 'text-muted-foreground'
+  let text: React.ReactNode = 'Pendiente de comprobar en Elementos enviados.'
+  if (value && value.after_auto_reply && value.last_sent_at) {
+    Icon = MailCheck
+    tone = 'text-success-ink'
+    text = <><strong className="font-semibold">Último email del equipo:</strong> {dateTime(value.last_sent_at)} · {elapsed(value.hours_after || 0)} · {value.in_thread ? 'en este hilo' : 'en otro hilo'}{value.subject && <> · <span className="break-words">{value.subject}</span></>}</>
+  } else if (value && value.last_sent_at) {
+    Icon = MailX
+    tone = 'text-warning-ink'
+    text = <><strong className="font-semibold">Sin email del equipo después de la autorespuesta.</strong> El último es del {dateTime(value.last_sent_at)}{value.subject && <> · <span className="break-words">{value.subject}</span></>}</>
+  } else if (value) {
+    Icon = MailX
+    tone = 'text-warning-ink'
+    text = <strong className="font-semibold">El equipo no le ha escrito nunca desde el buzón.</strong>
+  }
+  return <p className={`flex items-start gap-2 rounded-lg border border-border bg-background px-3 py-2 text-xs leading-5 ${tone}`}>
+    <Icon size={15} className="mt-0.5 shrink-0" aria-hidden="true" />
+    <span className="min-w-0">{text}</span>
+  </p>
+}
+
 function MessageRow({ item, onOpenConversation }: { item: AutomaticMessage; onOpenConversation: (link: string) => void }) {
   const [open, setOpen] = useState(false)
   const status = statuses[item.status]
@@ -68,6 +99,7 @@ function MessageRow({ item, onOpenConversation }: { item: AutomaticMessage; onOp
           <Button type="button" size="sm" variant="ghost" onClick={() => onOpenConversation(`/${item.conversation_kind === 'booking' ? 'bookings' : 'inbox'}/${item.conversation_id}`)}>Abrir conversación</Button>
         </div>
       </div>
+      <StaffReplyLine value={item.staff_reply} />
       {item.error && <Alert variant="destructive"><span className="break-words">{item.error}</span></Alert>}
       {item.copy_failed && <p className="text-xs text-warning-ink">El mensaje salió, pero no se pudo guardar la copia en la carpeta de enviados del buzón.</p>}
       {open && <p id={textId} className="whitespace-pre-wrap break-words rounded-lg border border-border bg-background p-3 text-sm leading-6 text-muted-foreground">{item.text}</p>}
@@ -80,6 +112,7 @@ export function AutomaticMessages({ refreshVersion, onOpenConversation }: { refr
   const [kind, setKind] = useState('')
   const [status, setStatus] = useState<AutomaticMessageStatus | ''>('')
   const [period, setPeriod] = useState<Period>('30d')
+  const [staff, setStaff] = useState<StaffFilter>('')
   const [searchText, setSearchText] = useState('')
   const [query, setQuery] = useState('')
   const [data, setData] = useState<AutomaticMessageList | null>(null)
@@ -92,10 +125,11 @@ export function AutomaticMessages({ refreshVersion, onOpenConversation }: { refr
     if (kind) search.set('kind', kind)
     if (status) search.set('status', status)
     if (query) search.set('q', query)
+    if (staff) search.set('staff_reply', staff)
     const from = periodStart(period)
     if (from) search.set('from', from)
     return search
-  }, [channel, kind, status, query, period])
+  }, [channel, kind, status, query, period, staff])
 
   // Automatic refreshes keep the pages already shown instead of collapsing to the first one.
   const shown = useRef(PAGE_SIZE)
@@ -122,11 +156,11 @@ export function AutomaticMessages({ refreshVersion, onOpenConversation }: { refr
     } catch (err) { setError((err as Error).message) } finally { setLoadingMore(false) }
   }
   function submitSearch(event: FormEvent) { event.preventDefault(); setQuery(searchText.trim()) }
-  function clearFilters() { setChannel(''); setKind(''); setStatus(''); setPeriod('30d'); setSearchText(''); setQuery('') }
+  function clearFilters() { setChannel(''); setKind(''); setStatus(''); setPeriod('30d'); setStaff(''); setSearchText(''); setQuery('') }
 
   const counts = data?.counts
   const totalInPeriod = counts ? Object.values(counts).reduce((sum, value) => sum + value, 0) : 0
-  const filtered = Boolean(channel || kind || status || query || period !== '30d')
+  const filtered = Boolean(channel || kind || status || staff || query || period !== '30d')
 
   return <div className="grid gap-5">
     <section aria-label="Resumen de envíos automáticos" className="grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -150,7 +184,7 @@ export function AutomaticMessages({ refreshVersion, onOpenConversation }: { refr
         <Input id="automatic-messages-search" value={searchText} onChange={event => setSearchText(event.target.value)} placeholder="Destinatario, nombre o asunto" />
         <Button type="submit" variant="outline"><Search size={16} aria-hidden="true" /> Buscar</Button>
       </form>
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
         <label className="grid gap-1 text-xs font-semibold text-muted-foreground">Periodo
           <Select value={period} onChange={event => setPeriod(event.target.value as Period)}>
             <option value="today">Hoy</option>
@@ -177,6 +211,13 @@ export function AutomaticMessages({ refreshVersion, onOpenConversation }: { refr
           <Select value={status} onChange={event => setStatus(event.target.value as AutomaticMessageStatus | '')}>
             <option value="">Todos</option>
             {(Object.keys(statuses) as AutomaticMessageStatus[]).map(key => <option key={key} value={key}>{statuses[key].label}</option>)}
+          </Select>
+        </label>
+        <label className="grid gap-1 text-xs font-semibold text-muted-foreground">Email del equipo después
+          <Select value={staff} onChange={event => setStaff(event.target.value as StaffFilter)}>
+            <option value="">Todos</option>
+            <option value="after">Con email posterior</option>
+            <option value="none">Sin email posterior</option>
           </Select>
         </label>
       </div>

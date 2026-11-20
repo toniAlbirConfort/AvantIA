@@ -150,6 +150,12 @@ class AutoReply(Base):
     provider_id: Mapped[str | None] = mapped_column(String(500))
     error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    # Last email the team sent to the recipient, from the mailbox's Sent folder
+    # (app.staff_replies). staff_checked_at stays empty until the folder is looked up.
+    staff_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    staff_last_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    staff_last_subject: Mapped[str | None] = mapped_column(String(500))
+    staff_last_in_thread: Mapped[bool | None] = mapped_column(Boolean)
 
 
 class MessageAnnotation(Base):
