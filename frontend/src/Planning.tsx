@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { CalendarDays, ChevronDown, ChevronLeft, ChevronRight, Globe2, House, Moon, Users, X } from 'lucide-react'
 import { api } from './api'
-import { issueText } from './SourceImports'
 import type { PlanningBar, PlanningData } from './types'
 import { Alert } from './components/ui/alert'
 import { Button } from './components/ui/button'
@@ -94,10 +93,8 @@ export function Planning({ initialStart, initialEnd, initialSearch }: { initialS
   const paidPercent = selected && Number(selected.total) > 0 ? Math.min(100, Math.max(0, Number(selected.paid) / Number(selected.total) * 100)) : 0
   return <div className="grid gap-4">
     <Card className="flex flex-wrap items-end gap-4 p-4"><label className="grid min-w-40 flex-1 gap-1.5 text-sm font-medium">Desde<Input type="date" value={start} onChange={e => setStart(e.target.value)} /></label><label className="grid min-w-40 flex-1 gap-1.5 text-sm font-medium">Hasta (exclusivo)<Input type="date" value={end} onChange={e => setEnd(e.target.value)} /></label></Card>
-    <div className="flex flex-wrap items-center gap-2"><span className="text-xs text-muted-foreground">{data?.reservation_coverage ? `${data.reservations_in_range} en este intervalo · ${data.reservation_coverage.effective_rows} integradas` : 'Sin reservas importadas'}</span></div>
     {error && <Alert variant="destructive">{error}</Alert>}
     {!data?.property_batch || !data?.reservation_batch ? <Card className="p-6 text-sm leading-7 text-muted-foreground">Importa y confirma las exportaciones de propiedades y reservas para completar el planning. La falta de barras no confirma disponibilidad.</Card> : <>
-      {data.reservation_coverage && <Alert variant="info">{data.reservation_coverage.effective_rows} reservas integradas · entradas desde {data.reservation_coverage.first_arrival} · salidas hasta {data.reservation_coverage.last_departure}. Se muestran las reservas del intervalo correspondientes a alojamientos activos.</Alert>}
       {data.reservations_in_range === 0 && <Alert variant="warning" role="status">No hay reservas de alojamientos activos entre {start} y {end}. La ausencia de barras no acredita que el alojamiento esté libre.</Alert>}
       <label className="grid max-w-md gap-1.5 text-sm font-medium">Buscar alojamiento<Input value={search} onChange={e => setSearch(e.target.value)} placeholder="Nombre, edificio o código" /></label>
       <div className="max-h-[68vh] max-w-full overflow-auto rounded-xl border border-border bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" role="region" aria-label="Planning de alojamientos" tabIndex={0}>
@@ -170,7 +167,6 @@ export function Planning({ initialStart, initialEnd, initialSearch }: { initialS
           <footer className="flex shrink-0 items-center justify-between border-t border-border bg-card px-5 py-4 sm:px-7"><span className="text-sm font-semibold">Total</span><span className="text-base font-bold">{money(selected.total)}</span></footer>
         </section>
       </div>}
-      <div className="grid gap-4 xl:grid-cols-2"><Card className="p-5"><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">NO BLOQUEAN</p><h2 className="mb-4 text-lg font-semibold">Peticiones de información ({data.inquiries.length})</h2>{data.inquiries.length ? <ul className="mb-5 max-h-60 list-disc space-y-2 overflow-auto pl-5 text-sm">{data.inquiries.map(item => <li key={item.locator}><button type="button" className="text-left text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => setSelected(item)} aria-label={`Abrir reserva ${item.locator}`}>{item.locator} · {item.property_id} · {item.start_date} → {item.end_date}</button></li>)}</ul> : <p className="mb-5 text-sm text-muted-foreground">Sin peticiones en el intervalo.</p>}<h2 className="mb-3 text-lg font-semibold">Canceladas ({data.cancellations.length})</h2>{data.cancellations.length ? <ul className="max-h-60 list-disc space-y-2 overflow-auto pl-5 text-sm">{data.cancellations.map(item => <li key={item.locator}><button type="button" className="text-left text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => setSelected(item)} aria-label={`Abrir reserva ${item.locator}`}>{item.locator} · {item.property_id} · {item.start_date} → {item.end_date}</button></li>)}</ul> : <p className="text-sm text-muted-foreground">Sin cancelaciones en el intervalo.</p>}</Card><Card className="p-5"><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">AUDITORÍA</p><h2 className="mb-4 text-lg font-semibold">Incidencias ({data.warnings.length})</h2>{data.warnings.length ? <ul className="max-h-72 list-disc space-y-2 overflow-auto pl-5 text-sm text-muted-foreground">{data.warnings.map((issue, index) => <li key={index}>{issueText(issue)}</li>)}</ul> : <p className="text-sm text-muted-foreground">Sin incidencias registradas.</p>}</Card></div>
     </>}
     <aside className="fixed bottom-3 right-3 z-30 flex max-w-[calc(100vw-1.5rem)] items-center overflow-hidden rounded-lg border border-border bg-card shadow-md sm:bottom-5 sm:right-5" aria-label="Leyenda del planning">
       <Button
