@@ -611,6 +611,8 @@ class ReservationDetail(Base):
     __tablename__ = "reservation_details"
     locator: Mapped[str] = mapped_column(String(150), primary_key=True)
     batch_id: Mapped[int | None] = mapped_column(ForeignKey("import_batches.id"))
+    # Avantio's own "Pendiente" (payment plan); snapshots use total - paid instead.
+    export_pending: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
     rent_total: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
     rent_net: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
     rent_tax: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))

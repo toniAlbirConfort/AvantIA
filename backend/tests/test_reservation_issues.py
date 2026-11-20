@@ -95,8 +95,8 @@ def data(db):
     res(db, rid, "R2", "A", date(2026, 12, 5), date(2026, 12, 10), status="paid")
     res(db, rid, "OLD1", "A", date(2020, 1, 1), date(2020, 1, 10))
     res(db, rid, "OLD2", "A", date(2020, 1, 5), date(2020, 1, 12))
-    # Amounts: future overpaid, past underpaid with tax mismatch.
-    res(db, rid, "M1", "A", date(2027, 3, 1), date(2027, 3, 5), paid=Decimal("150"))
+    # Amounts: future and past stays whose net + tax does not match the total.
+    res(db, rid, "M1", "A", date(2027, 3, 1), date(2027, 3, 5), tax=Decimal("20"))
     res(
         db, rid, "M2", "A", date(2025, 3, 1), date(2025, 3, 5), paid=Decimal("40"), tax=Decimal("0")
     )
@@ -124,15 +124,15 @@ def test_collect_groups_incidents_with_current_flags(data):
     assert keys(result["overlap"])[0] == "overlap:R1|R2"  # current first
 
     amounts = {item["reservation"]["locator"]: item for item in result["amounts"]}
-    assert amounts["M1"]["balance_difference"] == 50 and amounts["M1"]["current"]
-    assert amounts["M2"]["balance_difference"] == -60 and not amounts["M2"]["current"]
-    assert amounts["M2"]["tax_difference"] == -10
+    assert amounts["M1"]["tax_difference"] == 10 and amounts["M1"]["current"]
+    assert amounts["M2"]["tax_difference"] == -10 and not amounts["M2"]["current"]
+    assert "balance_difference" not in amounts["M1"]
 
     assert keys(result["inactive"]) == ["inactive:I1"]
     assert result["inactive"][0]["property"]["active"] is False
     assert keys(result["unknown"]) == ["unknown:U1"]
     assert result["unknown"][0]["property"]["known"] is False
-    assert result["counts"]["overlap"] == {"total": 2, "current": 1, "pending": 1, "explained": 0}
+    assert result["counts"]["overlap"] == {"total": 2, "current": 1, "pending": 1}
 
 
 def test_reviews_stop_counting_and_can_be_undone(data):

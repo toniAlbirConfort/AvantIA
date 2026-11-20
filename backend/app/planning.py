@@ -193,6 +193,7 @@ def _details(row: dict) -> dict:
     for key, column in DETAIL_EMAILS.items():
         details[key] = _email(row.get(column))
     details["invoice_date"] = _latest_date(row.get("Fecha factura") or "")
+    details["export_pending"] = _optional_money(row, "Pendiente")
     comments = (row.get(COMMENT_COLUMN) or "").replace("\r\n", "\n").strip()
     details["comments"] = redact_payment_data(comments[:COMMENT_MAX]) or None
     return details
@@ -364,7 +365,9 @@ def _reservation(row: dict) -> dict:
         "net": _money(row, "Total reserva sin tasas"),
         "tax": _money(row, "Total tasas"),
         "paid": _money(row, "Pagado"),
-        "pending": _money(row, "Pendiente"),
+        # Like Avantio's booking card: the export's "Pendiente" follows the payment plan and
+        # can disagree with it, so it is only kept as a reference in the details.
+        "pending": _money(row, "Total reserva con tasas") - _money(row, "Pagado"),
     }
 
 
@@ -509,12 +512,6 @@ def _warnings(
         if checks_amounts and abs(row["total"] - row["net"] - row["tax"]) > Decimal("0.01"):
             warnings.append(
                 {"code": "tax_mismatch", "locator": locator, **provenance}
-            )
-        if checks_amounts and abs(row["total"] - row["paid"] - row["pending"]) > Decimal(
-            "0.01"
-        ):
-            warnings.append(
-                {"code": "balance_mismatch", "locator": locator, **provenance}
             )
         if row["status"] in BLOCKING_STATUSES:
             blocked[row["property_id"]].append(row)

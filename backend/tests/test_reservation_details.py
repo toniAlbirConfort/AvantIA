@@ -8,11 +8,7 @@ from decimal import Decimal
 
 from sqlalchemy import select
 
-from app import notifications, reservation_issues
 from app.models import (
-    ImportBatch,
-    Notification,
-    PropertySnapshot,
     ReservationDetail,
     ReservationSnapshot,
 )
@@ -93,63 +89,12 @@ def test_exports_without_extra_columns_still_import(db):
     assert db.scalar(select(ReservationSnapshot.locator)) == "R2"
 
 
-def scenario(db, rows):
-    properties = ImportBatch(dataset="properties", source="t", filename="p", checksum="p",
-                             status="valid", warnings=[], created_at=NOW)  # fmt: skip
-    db.add(properties)
-    db.flush()
-    db.add(PropertySnapshot(batch_id=properties.id, source_row=1, row_hash="A", property_id="A",
-                            name="BJC", status_original="Activo", active=True,
-                            category="Apartamento", capacity=2))  # fmt: skip
-    batch = ImportBatch(dataset="reservations", source="t", filename="r", checksum="r",
-                        status="valid", warnings=[], created_at=NOW)  # fmt: skip
-    db.add(batch)
-    db.flush()
-    for locator, total, asked, detail in rows:
-        db.add(ReservationSnapshot(
-            batch_id=batch.id, source_row=1, row_hash=locator, locator=locator, property_id="A",
-            status_original="Confirmada", status="confirmed", start_date=date(2026, 12, 1),
-            end_date=date(2026, 12, 8), nights=7, adults=2, children=0, infants=0,
-            display_name="X", total=Decimal(total), net=Decimal(total) / Decimal("1.1"),
-            tax=Decimal(total) - Decimal(total) / Decimal("1.1"), paid=Decimal("0"),
-            pending=Decimal(asked)))  # fmt: skip
-        if detail is not None:
-            db.add(ReservationDetail(locator=locator, **detail))
-    db.commit()
+def test_pending_is_total_minus_paid_like_the_booking_card(db):
+    # 32011081: the export says 2100.85 pending, the booking card 3214.68 - 2150 = 1064.68.
+    batch = commit(db, export([base("R3", total="3214.68", paid="2150.00", pending="2100.85")
+                               + extra("HACE TRANSFERENCIA DEPOSITO")]))  # fmt: skip
+    row = db.scalar(select(ReservationSnapshot).where(ReservationSnapshot.locator == "R3"))
+    assert row.pending == Decimal("1064.68")
+    assert db.get(ReservationDetail, "R3").export_pending == Decimal("2100.85")
+    assert "balance_mismatch" not in {issue["code"] for issue in batch.warnings}
 
-
-def test_differences_explained_by_the_export_do_not_need_attention(db):
-    scenario(
-        db,
-        [
-            ("EXP", "683.06", "833.00", {"comments": "MUEVO AL 6103\n+18% COMISION"}),
-            ("SID", "3288.73", "4110.91", {"comments": "+20% COMISION + 11% DTO L/ ESTANCIA"}),
-            ("COL", "500.00", "600.00", {"commission": Decimal("100")}),
-            ("DTO", "900.00", "1000.00", {"comments": "10 % de descuento por repetidor"}),
-            ("RAW", "3426.35", "3587.59", {"comments": "6143. EP", "handled_by": "Ana"}),
-            ("NOD", "100.00", "150.00", None),
-        ],
-    )
-    result = reservation_issues.collect(db, TODAY)
-    by_locator = {item["reservation"]["locator"]: item for item in result["amounts"]}
-    explained = {k: (v["explanation"] or {}).get("source") for k, v in by_locator.items()}
-    assert explained == {
-        "EXP": "comment_commission",
-        "SID": "comment_commission",
-        "COL": "commission",
-        "DTO": "comment_discount",
-        "RAW": None,
-        "NOD": None,
-    }
-    sid = by_locator["SID"]["explanation"]["text"]
-    assert sid == "Comisión del 20 % anotada en los comentarios"
-    assert by_locator["RAW"]["reservation"]["comments"] == "6143. EP"
-    assert by_locator["RAW"]["reservation"]["handled_by"] == "Ana"
-    assert "customer_email" not in by_locator["RAW"]["reservation"]
-    assert result["counts"]["amounts"] == {"total": 6, "current": 6, "pending": 2, "explained": 4}
-    assert [item["reservation"]["locator"] for item in result["amounts"]][:2] == ["RAW", "NOD"]
-
-    notifications.scan(db, NOW)
-    notice = db.scalar(select(Notification).where(Notification.kind == "reservations.amounts"))
-    assert notice.title.startswith("2 reservas vigentes o futuras")
-    assert "sin explicar" in notice.title and "RAW" in notice.body and "EXP" not in notice.body

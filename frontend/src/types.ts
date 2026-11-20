@@ -91,17 +91,16 @@ export type IssueReservation = {
   comments: string | null; handled_by: string | null; agent_locator: string | null
   commission?: number | null; extras_total?: number | null; invoice_total?: number | null; invoice_number?: string | null
 }
-export type BalanceExplanation = { source: 'commission' | 'comment_commission' | 'comment_discount' | 'extras'; text: string }
 export type IssueProperty = { id: string; name: string | null; known: boolean; active?: boolean; status_original?: string; building?: string | null; city?: string | null; category?: string }
 export type ReservationIssueReview = { by: string | null; at: string; note: string | null }
 type IssueBase = { key: string; current: boolean; review: ReservationIssueReview | null; property: IssueProperty }
 export type ReservationIssues = {
   batch: { id: number; created_at: string } | null
   overlap: (IssueBase & { reservations: IssueReservation[]; overlap_start: string; overlap_end: string; nights: number })[]
-  amounts: (IssueBase & { reservation: IssueReservation; balance_difference: number | null; tax_difference: number | null; explanation: BalanceExplanation | null })[]
+  amounts: (IssueBase & { reservation: IssueReservation; tax_difference: number })[]
   inactive: (IssueBase & { reservation: IssueReservation })[]
   unknown: (IssueBase & { reservation: IssueReservation })[]
-  counts: Record<ReservationIssueKind, { total: number; current: number; pending: number; explained?: number }>
+  counts: Record<ReservationIssueKind, { total: number; current: number; pending: number }>
 }
 export type NotificationSeverity = 'critical' | 'action' | 'info'
 export type NotificationCounts = { unread: number; by_severity: Record<NotificationSeverity, number> }

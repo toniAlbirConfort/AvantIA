@@ -143,8 +143,8 @@ API: `GET|POST /api/tariff-lab/market-observations`, `DELETE /api/tariff-lab/mar
 La vista **Reservas → Incidencias** (`/reservation-issues`) reúne lo que conviene revisar en los datos de Avantio, recalculado sobre la última importación de reservas con las mismas reglas que el importador. Cada tipo tiene su pestaña:
 
 - **Posibles dobles reservas:** dos reservas que bloquean el mismo apartamento comparten noches. Cada caso muestra una línea de tiempo con la zona solapada resaltada, la comparación de las dos reservas y un enlace al Planning en esas fechas.
-- **Saldos descuadrados:** en estancias vendidas, el total no coincide con pagado + pendiente (o con neto + impuestos). Resume lo cobrado de más y lo que falta por cobrar, y compara cada reserva con una barra.
-  Cuando la exportación lo explica con certeza, el descuadre pasa a «Explicados por la exportación» y no genera aviso: comisión del canal registrada en Avantio, porcentaje de comisión o descuento anotado en «Mis comentarios» («+18% COMISION», «11% DTO») o extras fuera del total. Cada fila muestra el canal, quién la atendió y los comentarios de Avantio.
+- **Importes descuadrados:** en estancias vendidas, el total no coincide con neto + impuestos. Cada fila muestra el canal, quién la atendió y los comentarios de Avantio.
+  El pendiente de cada reserva se calcula al importar como total − pagado, igual que la ficha de Avantio. La columna «Pendiente» de la exportación sigue el plan de pagos y puede no coincidir, así que solo se guarda como referencia (`reservation_details.export_pending`) y no genera incidencias.
 - **Apartamentos inactivos** y **Apartamentos sin catálogo:** reservas futuras en apartamentos dados de baja o desconocidos, agrupadas por apartamento con su línea de tiempo.
 
 Por defecto se ven las vigentes y futuras; el histórico está en «Todo, incluido histórico». Una incidencia marcada como revisada (con nota opcional) se sigue viendo, pero deja de contar en los avisos. API: `GET /api/reservation-issues`, `POST /api/reservation-issues/review` (`key`, `note`) y `POST /api/reservation-issues/unreview` (`key`).
