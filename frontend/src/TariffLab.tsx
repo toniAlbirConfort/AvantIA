@@ -7,6 +7,7 @@ import { Button } from './components/ui/button'
 import { Card } from './components/ui/card'
 import { Input } from './components/ui/input'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './components/ui/table'
+import { BookingPace } from './BookingPace'
 import { TariffProjections } from './TariffProjections'
 
 type ReadinessCheck = { key: string; ready: boolean; count?: number; name?: string | null; unmapped?: { id: string; name: string; city: string | null }[] }
@@ -248,6 +249,8 @@ export function TariffLab({ role, refreshVersion }: { role: string; refreshVersi
     </Card>
 
     <TariffProjections admin={admin} groups={readiness?.groups || []} refreshVersion={refreshVersion} />
+
+    <BookingPace refreshVersion={refreshVersion} />
 
     {admin && <Card className="grid gap-4 p-4 sm:p-6">
       <div><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">NUEVO ESTUDIO</p>

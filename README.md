@@ -148,6 +148,16 @@ Un administrador puede cambiar cualquier precio con su motivo, guardar notas y *
 
 API: `GET|POST /api/tariff-lab/market-observations`, `DELETE /api/tariff-lab/market-observations/{id}`, `GET|POST /api/tariff-lab/projections`, `GET|PATCH|DELETE /api/tariff-lab/projections/{id}`, `POST /api/tariff-lab/projections/{id}/apply` y `GET /api/tariff-lab/projections/{id}/tariffs.csv`. Crear, cambiar, aplicar y borrar requiere administrador; los operadores consultan y descargan.
 
+### Ritmo de reservas y ofertas
+
+Comparativa de solo lectura en el laboratorio, por grupo SA o para todos:
+
+- **Ritmo de reservas:** noches del año siguiente ya reservadas hoy frente a las del año en curso que estaban reservadas en la misma fecha del año anterior, por mes. Un mes va «por detrás» si cae un 30 % o más (con al menos 30 noches de referencia) y «algo por detrás» entre un 10 % y un 30 %. Las cancelaciones posteriores al corte del año anterior no se ven, así que la caída real puede ser algo mayor.
+- **Semanas con menos ocupación:** ocupación semanal del año en curso (noches vendidas sobre noches disponibles, sin bloqueos de propietario) frente a la media de los tres años anteriores. Se marcan las semanas que caen por debajo del umbral elegido (15 puntos por defecto) y se sugiere una oferta de partida: −5 % hasta 20 puntos de caída, −7 % de 20 a 30 y −10 % desde 30. Por grupo muestra el precio real del año, la tarifa SA del año siguiente con la oferta aplicada y la propuesta de la última proyección con ese año base.
+- **Cómo se han fijado los precios:** crecimiento anual compuesto del precio real en cuatro años, variación anual (mediana de las temporadas), cuánto se fijó la SA del año siguiente sobre el precio real del año en curso y la media de la SA y de la propuesta, ponderadas por días.
+
+Nada se aplica solo: es información para decidir ofertas. API: `GET /api/tariff-lab/booking-pace?threshold=0.15`.
+
 ## Incidencias de reservas
 
 La vista **Reservas → Incidencias** (`/reservation-issues`) reúne lo que conviene revisar en los datos de Avantio, recalculado sobre la última importación de reservas con las mismas reglas que el importador. Cada tipo tiene su pestaña:
