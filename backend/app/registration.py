@@ -651,6 +651,23 @@ def run_registration_check(db: Session, current_time: datetime | None = None) ->
                     detail={"check_id": check.id, "locator": check.locator, "how": found.reason},
                 )
             )
+            continue
+        # The rules improve (fraud, vendors...): an open check they now exclude closes itself
+        # instead of waiting for an operator to dismiss an alert the current code never raises.
+        again = decide(db, message, conversation, reservations, current_time)
+        if again.status == "excluded":
+            previous = check.status
+            check.status = "excluded"
+            check.reason = again.reason
+            check.resolved_at = current_time
+            summary["excluded"] += 1
+            db.add(
+                AuditEvent(
+                    conversation_id=check.conversation_id,
+                    action="registration.reevaluated",
+                    detail={"check_id": check.id, "reason": again.reason, "was": previous},
+                )
+            )
         elif check.status == "pending" and current_time >= _aware(check.due_at):
             check.status = "alerted"
             check.mode = mode
