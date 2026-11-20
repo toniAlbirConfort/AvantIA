@@ -19,6 +19,8 @@ function displayPrice(value: string) {
 export function Tariffs({ refreshVersion }: { refreshVersion: number }) {
   const [groups, setGroups] = useState<TariffGroup[] | null>(null)
   const [selectedName, setSelectedName] = useState('')
+  const [year, setYear] = useState('')
+  const currentYear = new Date().getFullYear()
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
@@ -53,6 +55,14 @@ export function Tariffs({ refreshVersion }: { refreshVersion: number }) {
   if (!groups?.length) {
     return <Card className="p-5 text-sm text-muted-foreground">Todavía no hay tarifas cargadas.</Card>
   }
+  // Years covered by the group's seasons, newest first.
+  const years = [...new Set((selected?.seasons || []).flatMap(season => {
+    const first = Number(season.start_date.slice(0, 4))
+    const last = Number(season.end_date.slice(0, 4))
+    return Array.from({ length: last - first + 1 }, (_, index) => first + index)
+  }))].sort((a, b) => b - a)
+  const shownYear = years.includes(Number(year)) ? Number(year) : (years.includes(currentYear) ? currentYear : years[0])
+  const seasons = (selected?.seasons || []).filter(season => season.start_date.slice(0, 4) <= String(shownYear) && season.end_date.slice(0, 4) >= String(shownYear))
 
   return <Card className="overflow-hidden p-4 sm:p-6">
     <div className="mb-5 flex flex-wrap items-end justify-between gap-4">
@@ -61,15 +71,23 @@ export function Tariffs({ refreshVersion }: { refreshVersion: number }) {
         <h2 className="text-xl font-semibold">Tarifas por alojamiento</h2>
       </div>
       {selected && <p className="text-sm text-muted-foreground" aria-live="polite">
-        {selected.seasons.length} temporadas · precio por noche
+        {seasons.length} temporadas en {shownYear} · precio por noche
       </p>}
     </div>
-    <label className="mb-5 grid max-w-xl gap-1.5 text-sm font-medium">
-      Grupo de tarifa
-      <Select value={selectedName} onChange={event => setSelectedName(event.target.value)}>
-        {groups.map(group => <option key={group.name} value={group.name}>{group.name}</option>)}
-      </Select>
-    </label>
+    <div className="mb-5 grid max-w-2xl gap-3 sm:grid-cols-[minmax(0,1fr)_10rem]">
+      <label className="grid gap-1.5 text-sm font-medium">
+        Grupo de tarifa
+        <Select value={selectedName} onChange={event => setSelectedName(event.target.value)}>
+          {groups.map(group => <option key={group.name} value={group.name}>{group.name}</option>)}
+        </Select>
+      </label>
+      {!!years.length && <label className="grid gap-1.5 text-sm font-medium">
+        Año
+        <Select value={String(shownYear)} onChange={event => setYear(event.target.value)}>
+          {years.map(item => <option key={item} value={item}>{item}</option>)}
+        </Select>
+      </label>}
+    </div>
     {selected && <div className="max-w-full overflow-auto rounded-lg border border-border">
       <Table>
         <TableHeader>
@@ -80,7 +98,7 @@ export function Tariffs({ refreshVersion }: { refreshVersion: number }) {
           </TableRow>
         </TableHeader>
         <TableBody>
-          {selected.seasons.map(season => <TableRow key={`${season.rate_plan}-${season.start_date}`}>
+          {seasons.map(season => <TableRow key={`${season.rate_plan}-${season.start_date}`}>
             <TableCell className="whitespace-nowrap tabular-nums">{displayDate(season.start_date)}</TableCell>
             <TableCell className="whitespace-nowrap tabular-nums">{displayDate(season.end_date)}</TableCell>
             <TableCell className="text-right font-medium tabular-nums">{displayPrice(season.nightly_rate)}</TableCell>
