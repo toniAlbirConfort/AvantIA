@@ -45,6 +45,7 @@ from app.classification import (
 )
 from app.config import READ_ONLY_MODE, get_settings
 from app.contacts import conversation_contact
+from app.customer_audit import booked_for_others_view
 from app.customers import DATASET as CUSTOMER_DATASET
 from app.customers import (
     commit_customers,
@@ -1830,6 +1831,11 @@ def customers_retention_csv(
             )
         },
     )
+
+
+@app.get("/api/customers/audit/booked-for-others")
+def customers_booked_for_others(db: Db, user: Operator) -> dict:
+    return booked_for_others_view(db)
 
 
 @app.get("/api/customers/{avantio_id}")
