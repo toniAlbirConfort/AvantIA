@@ -6,9 +6,10 @@ import { ImportHistory, SourceImportForm } from './SourceImports'
 import { Reservations } from './Reservations'
 import { Customers } from './Customers'
 import { CustomerRetention } from './CustomerRetention'
+import { Campaigns } from './Campaigns'
 import { Tariffs } from './Tariffs'
 import type { ClassificationLabel, Conversation, InboxResponse, InboxThread, ImportBatch, Message, Property, Summary, User } from './types'
-import { ArrowLeft, ArrowRight, Bell, TriangleAlert, CalendarDays, ChartColumn, CalendarRange, Cable, ChevronDown, ClipboardList, Contact, FileText, FlaskConical, HeartHandshake, House, Inbox, LayoutDashboard, LogOut, Menu, RefreshCw, Reply, Search, Settings, Tag, Upload, Users, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Bell, TriangleAlert, CalendarDays, ChartColumn, CalendarRange, Cable, ChevronDown, ClipboardList, Contact, FileText, FlaskConical, HeartHandshake, House, Megaphone, Inbox, LayoutDashboard, LogOut, Menu, RefreshCw, Reply, Search, Settings, Tag, Upload, Users, X } from 'lucide-react'
 import { EmailPreviewDialog } from './EmailPreviewDialog'
 import { AutoReplyCard, type AutoReplyStatus } from './AutoReplyCard'
 import { EmailMessageContent } from './EmailMessageContent'
@@ -33,11 +34,12 @@ import { Analysis } from './Analysis'
 import { Reports } from './Reports'
 import { Notifications } from './Notifications'
 
-type View = 'reservation-issues' | 'notifications' | 'reservations' | 'customers' | 'customer-retention' | 'analysis' | 'summary' | 'inbox' | 'bookings' | 'properties' | 'tariffs' | 'tariff-lab' | 'reports' | 'planning' | 'imports' | 'integrations' | 'users'
+type View = 'reservation-issues' | 'notifications' | 'reservations' | 'customers' | 'customer-retention' | 'campaigns' | 'analysis' | 'summary' | 'inbox' | 'bookings' | 'properties' | 'tariffs' | 'tariff-lab' | 'reports' | 'planning' | 'imports' | 'integrations' | 'users'
 const navigation: { id: View; label: string; icon: typeof LayoutDashboard }[] = [
   { id: 'reservations', label: 'Reservas', icon: CalendarDays },
   { id: 'customers', label: 'Directorio', icon: Contact },
   { id: 'customer-retention', label: 'A recuperar', icon: HeartHandshake },
+  { id: 'campaigns', label: 'Campañas', icon: Megaphone },
   { id: 'planning', label: 'Planning', icon: CalendarRange },
   { id: 'reservation-issues', label: 'Incidencias', icon: TriangleAlert },
   { id: 'analysis', label: 'Análisis', icon: ChartColumn },
@@ -57,7 +59,7 @@ const navigation: { id: View; label: string; icon: typeof LayoutDashboard }[] = 
 type SectionId = 'reservations' | 'customers' | 'communication' | 'performance' | 'notifications' | 'settings'
 const sections: { id: SectionId; label: string; icon: typeof LayoutDashboard; views: View[] }[] = [
   { id: 'reservations', label: 'Reservas', icon: CalendarDays, views: ['reservations', 'planning', 'reservation-issues', 'properties'] },
-  { id: 'customers', label: 'Clientes', icon: Contact, views: ['customers', 'customer-retention'] },
+  { id: 'customers', label: 'Clientes', icon: Contact, views: ['customers', 'customer-retention', 'campaigns'] },
   { id: 'communication', label: 'Comunicación', icon: Inbox, views: ['inbox', 'bookings', 'summary'] },
   { id: 'performance', label: 'Rendimiento', icon: ChartColumn, views: ['analysis', 'tariffs', 'tariff-lab', 'reports'] },
   { id: 'notifications', label: 'Avisos', icon: Bell, views: ['notifications'] },
@@ -217,9 +219,12 @@ export default function App() {
   const [checking, setChecking] = useState(!!token())
   const path = window.location.pathname
   const [view, setView] = useState<View>(viewFromPath(path))
-  const [selectedId, setSelectedId] = useState<number | null>(Number(path.split('/')[2]) || null)
+  const [campaignsVersion, setCampaignsVersion] = useState(0)
+  // Only inbox and bookings carry a conversation id; /campaigns/<id> is a campaign.
+  const pathConversation = ['inbox', 'bookings'].includes(viewFromPath(path)) ? Number(path.split('/')[2]) || null : null
+  const [selectedId, setSelectedId] = useState<number | null>(pathConversation)
   // Conversation opened from a link or a notice: shown even when the list filters or pages leave it out.
-  const [directId, setDirectId] = useState<number | null>(Number(path.split('/')[2]) || null)
+  const [directId, setDirectId] = useState<number | null>(pathConversation)
   const [summary, setSummary] = useState<Summary | null>(null)
   const [items, setItems] = useState<Conversation[]>([])
   const [detail, setDetail] = useState<Conversation | null>(null)
@@ -417,7 +422,15 @@ export default function App() {
     return () => window.removeEventListener('popstate', onPopState)
   }, [])
 
+  function openCampaign(id: number) {
+    setView('campaigns'); setMobileMenu(false); setError('')
+    window.history.pushState({}, '', `/campaigns/${id}`)
+    setCampaignsVersion(value => value + 1)
+    window.scrollTo({ top: 0 })
+  }
   function navigate(next: View, id?: number) {
+    // Campaigns reads its own URL (/campaigns/<id>): remount it on every visit from the menu.
+    if (next === 'campaigns') setCampaignsVersion(value => value + 1)
     setView(next); setMobileMenu(false); setError('')
     const target = (next === 'inbox' || next === 'bookings') && id ? `/${next}/${id}` : `/${next}`
     window.history.pushState({}, '', target)
@@ -494,7 +507,7 @@ export default function App() {
   }
   const section = navigation.find(item => item.id === view)?.label || 'Reservas'
   // These views draw their own full-width heading.
-  const ownHeader = view === 'reservations' || view === 'customers' || view === 'customer-retention'
+  const ownHeader = view === 'reservations' || view === 'customers' || view === 'customer-retention' || view === 'campaigns'
   const visibleView = (id: View) => id !== 'users' || user.role === 'admin'
   const activeSection = sectionOf(view)
   const toggleSection = (id: SectionId) => setExpandedSections(current => {
@@ -588,7 +601,8 @@ export default function App() {
         {view === 'notifications' && <Notifications onOpen={openNotificationLink} onChanged={() => void refresh()} />}
         {view === 'reservations' && <Reservations onImport={() => navigate('imports')} />}
         {view === 'customers' && <Customers onImport={() => navigate('imports')} />}
-        {view === 'customer-retention' && <CustomerRetention onImport={() => navigate('imports')} />}
+        {view === 'customer-retention' && <CustomerRetention onImport={() => navigate('imports')} onCampaign={openCampaign} />}
+        {view === 'campaigns' && <Campaigns key={campaignsVersion} onRetention={() => navigate('customer-retention')} />}
         {view === 'summary' && <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-12">
           {[{ title: 'PENDIENTES', value: summary?.pending ?? '—', description: 'Consultas por atender', action: 'Abrir bandeja →', onClick: () => navigate('inbox') }, { title: 'PRERRESERVAS', value: summary?.bookings ?? '—', description: 'Booking · revisión humana', action: 'Ver tareas →', onClick: () => navigate('bookings') }, { title: 'ENVÍOS INCIERTOS', value: summary?.delivery_unknown ?? '—', description: 'Comprobar antes de reenviar' }].map((metric, index) => <Card key={metric.title} className={`relative overflow-hidden p-5 sm:p-6 xl:col-span-4 ${index === 1 ? 'border-primary/30' : ''}`}><span className="text-xs font-semibold tracking-wide text-muted-foreground">{metric.title}</span><strong className="my-3 block text-5xl font-semibold tabular-nums text-foreground">{metric.value}</strong><small className="block text-sm text-muted-foreground">{metric.description}</small>{metric.action && <Button variant="link" className="mt-3 h-auto p-0" onClick={metric.onClick}>{metric.action}</Button>}</Card>)}
           <Card className="p-5 sm:p-6 xl:col-span-7"><div className="mb-4 flex items-start justify-between gap-3"><div><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">COLA ACTIVA</p><h2 className="text-xl font-semibold">Consultas recientes</h2></div><Button variant="link" size="sm" className="shrink-0 px-1" onClick={() => navigate('inbox')}>Ver todas →</Button></div>{items.length ? items.slice(0, 5).map(item => <Button variant="ghost" className="h-auto w-full justify-start gap-3 rounded-none border-t border-border px-1 py-3 text-left whitespace-normal" key={item.id} onClick={() => void select(item.id)}><span className="text-xs text-primary">#{item.id}</span><span className="min-w-0 flex-1 truncate text-sm">{item.customer_name || item.customer_address || 'Cliente'}<small className="block truncate text-xs text-muted-foreground">{item.subject || label(item.channel)}</small></span><Badge value={item.status} /><span className="hidden shrink-0 text-xs text-muted-foreground lg:inline">{date(item.last_inbound_at)}</span></Button>) : <Empty>Aún no hay consultas. Conecta un canal para empezar.</Empty>}</Card>

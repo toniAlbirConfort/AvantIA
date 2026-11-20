@@ -630,3 +630,64 @@ class ReservationDetail(Base):
     occupant_email: Mapped[str | None] = mapped_column(String(255), index=True)
     handled_by: Mapped[str | None] = mapped_column(String(150))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class MailingCampaign(Base):
+    """A win-back email campaign prepared from the "Clientes a recuperar" filters.
+
+    ``filters`` keeps the retention filters the audience was built with, ``content`` the
+    message per language ({"es": {"subject", "preheader", "headline", "body", "offer",
+    "cta_label"}, ...}) and ``offer`` what every language shares (code, deadline, link).
+    """
+
+    __tablename__ = "mailing_campaigns"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(150))
+    status: Mapped[str] = mapped_column(String(30), default="draft")
+    filters: Mapped[dict] = mapped_column(JSON, default=dict)
+    content: Mapped[dict] = mapped_column(JSON, default=dict)
+    offer: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    audience_built_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class MailingRecipient(Base):
+    """A guest of a campaign audience, frozen when the audience was built.
+
+    ``status`` is ``included`` or ``excluded``; ``exclusion_reason`` says why a guest is
+    left out (no single customer card, no email, no consent, OTA relay address...).
+    ``token`` signs the unsubscribe link of this guest's email.
+    """
+
+    __tablename__ = "mailing_recipients"
+    __table_args__ = (UniqueConstraint("campaign_id", "guest_key"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    campaign_id: Mapped[int] = mapped_column(
+        ForeignKey("mailing_campaigns.id", ondelete="CASCADE"), index=True
+    )
+    guest_key: Mapped[str] = mapped_column(String(255))
+    display_name: Mapped[str] = mapped_column(String(255))
+    first_name: Mapped[str | None] = mapped_column(String(120))
+    avantio_id: Mapped[str | None] = mapped_column(String(20))
+    email: Mapped[str | None] = mapped_column(String(200))
+    language: Mapped[str] = mapped_column(String(10), default="en")
+    language_raw: Mapped[str | None] = mapped_column(String(40))
+    data: Mapped[dict] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(String(20), default="included")
+    exclusion_reason: Mapped[str | None] = mapped_column(String(30))
+    token: Mapped[str] = mapped_column(String(64), unique=True)
+
+
+class MailingSuppression(Base):
+    """An address that must never receive campaigns again (unsubscribe, bounce, manual)."""
+
+    __tablename__ = "mailing_suppressions"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    email: Mapped[str] = mapped_column(String(200), unique=True)
+    reason: Mapped[str] = mapped_column(String(30))
+    campaign_id: Mapped[int | None] = mapped_column(
+        ForeignKey("mailing_campaigns.id", ondelete="SET NULL")
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)

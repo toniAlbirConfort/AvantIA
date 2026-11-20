@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ArrowRight, ChevronDown, Download, RefreshCw, Search } from 'lucide-react'
+import { ArrowRight, ChevronDown, Download, Megaphone, RefreshCw, Search } from 'lucide-react'
 import { api, apiDownload } from './api'
 import { CustomerPanel } from './Customers'
 import { Status } from './Reservations'
@@ -55,7 +55,7 @@ function Metric({ label, value, detail }: { label: string; value: number | undef
   </Card>
 }
 
-export function CustomerRetention({ onImport }: { onImport: () => void }) {
+export function CustomerRetention({ onImport, onCampaign }: { onImport: () => void; onCampaign: (id: number) => void }) {
   const currentYear = new Date().getFullYear()
   const [targetYear, setTargetYear] = useState(currentYear)
   const [baseYears, setBaseYears] = useState<number[]>([currentYear - 3, currentYear - 2, currentYear - 1])
@@ -73,6 +73,7 @@ export function CustomerRetention({ onImport }: { onImport: () => void }) {
   const [loading, setLoading] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
   const [exporting, setExporting] = useState(false)
+  const [creating, setCreating] = useState(false)
   const [error, setError] = useState('')
   const [retryKey, setRetryKey] = useState(0)
   const [selected, setSelected] = useState<CustomerSummary | null>(null)
@@ -133,6 +134,18 @@ export function CustomerRetention({ onImport }: { onImport: () => void }) {
     finally { setExporting(false) }
   }
 
+  // The campaign keeps exactly the filters on screen; its audience is frozen from them.
+  async function createCampaign() {
+    setCreating(true); setError('')
+    const filters = {
+      target_year: requested.target, base_years: requestedYears, min_stays: Number(minStays),
+      channel: channel || null, contact, q: query,
+      month_from: requested.from || null, month_to: requested.from ? requested.to : null,
+    }
+    try { onCampaign((await api<{ id: number }>('/api/campaigns', { method: 'POST', body: JSON.stringify({ filters }) })).id) }
+    catch (err) { setError((err as Error).message); setCreating(false) }
+  }
+
   function changeTarget(year: number) {
     setTargetYear(year)
     setBaseYears(current => {
@@ -175,6 +188,7 @@ export function CustomerRetention({ onImport }: { onImport: () => void }) {
         <p className="mt-1 max-w-3xl text-sm text-muted-foreground">Quién se alojó con vosotros {!monthFrom ? 'en ' : monthFrom === monthTo ? `en ${monthName(monthFrom)} de ` : `entre ${monthName(monthFrom)} y ${monthName(monthTo)} de `}<strong className="font-semibold text-foreground">{yearsLabel}</strong> y todavía no tiene reserva para <strong className="font-semibold text-foreground">{periodFor(monthFrom, monthTo, targetYear)}</strong>.</p>
       </div>
       <div className="flex items-center gap-2">
+        <Button type="button" onClick={() => void createCampaign()} disabled={creating || updating || !data?.total} title={data?.total ? `Prepara un email para los ${data.total} huéspedes de esta lista; solo lo recibirán quienes acepten campañas` : undefined}><Megaphone size={16} aria-hidden="true" /> {creating ? 'Creando…' : 'Crear campaña'}</Button>
         <Button type="button" variant="outline" onClick={() => void exportCsv()} disabled={exporting || !data?.total}><Download size={16} aria-hidden="true" /> {exporting ? 'Exportando…' : 'Exportar CSV'}</Button>
         <Button type="button" variant="ghost" size="icon" onClick={() => setRetryKey(value => value + 1)} disabled={loading} aria-label="Actualizar clientes a recuperar"><RefreshCw size={16} className={loading ? 'animate-spin motion-reduce:animate-none' : ''} /></Button>
       </div>
