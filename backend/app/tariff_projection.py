@@ -15,10 +15,11 @@ from collections import defaultdict
 from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
-from sqlalchemy import select
+from sqlalchemy import extract, select
 from sqlalchemy.orm import Session
 
 from app.models import (
+    TariffHoliday,
     TariffMarketObservation,
     TariffProjection,
     TariffSeason,
@@ -28,11 +29,12 @@ from app.tariff_lab import (
     TariffLabError,
     _current_properties,
     _effective_reservations,
+    _fold,
     _latest_valid_batch,
     _property_mappings,
 )
 
-ALGORITHM_VERSION = "proyeccion-1.0"
+ALGORITHM_VERSION = "proyeccion-1.1"
 HISTORY_YEARS = 4
 LONG_STAY_NIGHTS = 28
 SPLIT_MIN_DAYS = 60
@@ -480,6 +482,17 @@ def calculate_projection(
         }
 
     calendar = _easter_calendar(seasons, base_year, target_year)
+    calendar_changes = _calendar_changes(db, seasons, base_year, target_year)
+    band_changes = [item for item in calendar_changes["changes"] if item["price_band_changes"]]
+    if band_changes:
+        warnings.append(
+            "Fechas relevantes que cambian de temporada de precio en "
+            f"{target_year}: "
+            + ", ".join(
+                f"{item['name']} ({_short(item['base_date'])} → {_short(item['target_date'])})"
+                for item in band_changes
+            )
+        )
     for group in group_summary:
         group_summary[group].update(_averages(seasons, group))
     return {
@@ -489,8 +502,16 @@ def calculate_projection(
         "groups": group_summary,
         "seasons": seasons,
         "easter": calendar,
+        "calendar_changes": calendar_changes,
         "warnings": warnings,
     }
+
+
+def _short(value: str | None) -> str:
+    if not value:
+        return "sin fecha"
+    day = date.fromisoformat(value)
+    return f"{day.day:02d}/{day.month:02d}/{day.year}"
 
 
 def _averages(seasons: list[dict], group: str) -> dict:
@@ -597,6 +618,134 @@ def _carve(
     if end > window_end:
         pieces.append(piece(window_end + timedelta(days=1), end, rate, label))
     return pieces
+
+
+def _season_at(rows: list[dict], day: date, start_key: str, end_key: str) -> dict | None:
+    return next(
+        (
+            item
+            for item in rows
+            if date.fromisoformat(item[start_key]) <= day <= date.fromisoformat(item[end_key])
+        ),
+        None,
+    )
+
+
+def _calendar_changes(
+    db: Session, seasons: list[dict], base_year: int, target_year: int
+) -> dict:
+    """Compare the official holidays of both years and locate moved dates in the seasons.
+
+    The projection keeps the base-year season dates, so a holiday that changes day
+    (Semana Santa, a local fiesta, a substituted national day) may land in a season
+    with another price. Holidays come from the official calendar (BOE, DOGV and the
+    town hall); Easter is always checked with its own calculation.
+    """
+    rows = db.scalars(
+        select(TariffHoliday).where(
+            extract("year", TariffHoliday.holiday_date).in_([base_year, target_year])
+        )
+    ).all()
+    by_year: dict[int, dict[str, list[TariffHoliday]]] = {base_year: {}, target_year: {}}
+    for row in sorted(rows, key=lambda item: item.holiday_date):
+        by_year[row.holiday_date.year].setdefault(_fold(row.name), []).append(row)
+    published = {
+        year: {
+            "national": any(
+                row.scope in {"national", "regional"} for items in by_year[year].values()
+                for row in items
+            ),
+            "local": any(
+                row.scope == "municipal" for items in by_year[year].values() for row in items
+            ),
+        }
+        for year in (base_year, target_year)
+    }
+    base_easter, target_easter = easter_sunday(base_year), easter_sunday(target_year)
+    groups = sorted({item["tariff_name"] for item in seasons})
+    changes: list[dict] = []
+
+    def locate(day: date, *, base: bool) -> dict:
+        located = {}
+        for group in groups:
+            group_rows = [item for item in seasons if item["tariff_name"] == group]
+            season = (
+                _season_at(group_rows, day, "base_start", "base_end")
+                if base
+                else _season_at(group_rows, day, "start", "end")
+            )
+            if season:
+                located[group] = {
+                    "start": season["base_start" if base else "start"],
+                    "end": season["base_end" if base else "end"],
+                    "base_rate": season["base_rate"],
+                }
+        return located
+
+    def add(name: str, scope: str, before: date | None, after: date | None) -> None:
+        base_seasons_found = locate(before, base=True) if before else {}
+        target_seasons_found = locate(after, base=False) if after else {}
+        # Rates of the base year, compared in both years: a different rate means the
+        # holiday falls into another price band after the dates are carried over.
+        moved_band = sorted(
+            group
+            for group in groups
+            if group in base_seasons_found
+            and group in target_seasons_found
+            and base_seasons_found[group]["base_rate"] != target_seasons_found[group]["base_rate"]
+        )
+        changes.append(
+            {
+                "name": name,
+                "scope": scope,
+                "base_date": before.isoformat() if before else None,
+                "target_date": after.isoformat() if after else None,
+                "base_seasons": base_seasons_found,
+                "target_seasons": target_seasons_found,
+                "price_band_changes": moved_band,
+            }
+        )
+
+    if (base_easter.month, base_easter.day) != (target_easter.month, target_easter.day):
+        add("Domingo de Pascua", "national", base_easter, target_easter)
+    both_published = published[base_year]["national"] and published[target_year]["national"]
+    both_local = published[base_year]["local"] and published[target_year]["local"]
+    for key in sorted(set(by_year[base_year]) | set(by_year[target_year])):
+        before_rows = by_year[base_year].get(key, [])
+        after_rows = by_year[target_year].get(key, [])
+        sample = (before_rows or after_rows)[0]
+        if sample.scope == "municipal" and not both_local:
+            continue
+        if sample.scope != "municipal" and not both_published:
+            continue
+        for index in range(max(len(before_rows), len(after_rows))):
+            before = before_rows[index].holiday_date if index < len(before_rows) else None
+            after = after_rows[index].holiday_date if index < len(after_rows) else None
+            if before and after and (before.month, before.day) == (after.month, after.day):
+                continue
+            add(sample.name, sample.scope, before, after)
+    changes.sort(key=lambda item: item["target_date"] or item["base_date"] or "")
+    notes = []
+    if not published[target_year]["national"]:
+        notes.append(
+            f"El calendario oficial de festivos de {target_year} aún no está publicado "
+            "(el BOE lo publica en otoño del año anterior): solo se ha comprobado Semana Santa."
+        )
+    elif not published[target_year]["local"]:
+        notes.append(
+            f"Los festivos locales de {target_year} aún no están publicados: no se han "
+            "comparado."
+        )
+    if not published[base_year]["national"]:
+        notes.append(f"No hay calendario oficial de festivos de {base_year} para comparar.")
+    return {
+        "base_year": base_year,
+        "target_year": target_year,
+        "official_target_published": published[target_year]["national"],
+        "local_target_published": published[target_year]["local"],
+        "changes": changes,
+        "notes": notes,
+    }
 
 
 # ---------------------------------------------------------------- persistence

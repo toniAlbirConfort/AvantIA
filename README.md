@@ -136,6 +136,10 @@ La **Proyección de año** genera las tarifas SA de un año a partir de las del 
 
 El total se limita entre la subida mínima y la máxima (0 % y 10 % por defecto) y se redondea al euro o a un precio acabado en 9. Si Semana Santa cambia de mes, la proyección propone llevar el precio de la temporada de Semana Santa al viernes anterior al Domingo de Ramos hasta el Lunes de Pascua del año de destino, y su antigua temporada toma el precio de la anterior; el administrador decide si lo aplica. También avisa de temporadas largas cuyos meses tienen ocupaciones muy distintas y muestra las noches ya reservadas para el año base frente a las del año anterior en la misma fecha.
 
+**Fechas relevantes.** Como las temporadas conservan sus fechas, la proyección compara los festivos oficiales de los dos años (los del calendario sincronizado del BOE, el Ayuntamiento y el DOGV) y el Domingo de Pascua, calculado siempre. Lista los que cambian de día, aparecen o dejan de ser festivos, y avisa cuando una fecha cae en una temporada con otro precio. Si el calendario oficial del año de destino aún no está publicado, solo se comprueba Semana Santa y se indica. Las temporadas propuestas se muestran con el mismo formato que Tarifas: fecha de inicio, última noche (ambas incluidas) y precio por noche.
+
+**Mínimo de alojamientos.** Con menos alojamientos en un grupo SA que este mínimo (3 por defecto), una sola reserva mueve mucho la ocupación, así que no se aplica el ajuste de demanda y la proyección lo indica.
+
 Los precios de la competencia se registran a mano en el laboratorio, uno por competidor, fecha de entrada y grupo SA. La migración `0019` incorpora los del estudio de competencia en Albir del 13/11/2026.
 
 Un administrador puede cambiar cualquier precio con su motivo, guardar notas y **aplicar** la proyección: entonces se crean en Tarifas las temporadas SA del año de destino y la proyección queda cerrada. No se aplica si el grupo ya tiene tarifas SA en ese año, ni escribe en Avantio. Cada creación, cambio y aplicación queda en el registro de auditoría.

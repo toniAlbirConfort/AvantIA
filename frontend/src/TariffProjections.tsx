@@ -28,9 +28,18 @@ type GroupSummary = {
   units: number; average_base_rate: string | null; average_rate: string | null
   pickup: { year: number; nights: number; previous_nights: number; change: number | null } | null
 }
+type SeasonRef = { start: string; end: string; base_rate: string }
+type CalendarChange = {
+  name: string; scope: string; base_date: string | null; target_date: string | null
+  base_seasons: Record<string, SeasonRef>; target_seasons: Record<string, SeasonRef>; price_band_changes: string[]
+}
+type CalendarChanges = {
+  base_year: number; target_year: number; official_target_published: boolean; local_target_published: boolean
+  changes: CalendarChange[]; notes: string[]
+}
 type ProjectionResult = {
   as_of: string; parameters: Record<string, number | string>; groups: Record<string, GroupSummary>
-  seasons: ProjectionSeason[]; warnings: string[]
+  seasons: ProjectionSeason[]; warnings: string[]; calendar_changes?: CalendarChanges
   easter: { base_easter: string; target_easter: string; window_start: string; window_end: string; groups: Record<string, { easter_season: { start: string; end: string } }> }
 }
 type Projection = {
@@ -53,6 +62,14 @@ function formatDate(value: string) {
   const [year, month, day] = value.split('-')
   return `${day}/${month}/${year}`
 }
+
+// Same format as the Tarifas view.
+function price(value: string | null | undefined) {
+  if (value == null) return '—'
+  return new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR' }).format(Number(value))
+}
+
+const holidayScopes: Record<string, string> = { national: 'Nacional', regional: 'Autonómico', municipal: 'Local' }
 
 function shortDate(value: string) {
   return new Date(`${value}T00:00:00`).toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })
@@ -249,7 +266,7 @@ export function TariffProjections({ admin, groups, refreshVersion }: { admin: bo
         <label className="grid gap-1.5 text-sm font-medium">IPC para precios de mercado antiguos (%)<Input name="market_inflation_percent" type="number" step={0.1} min={-10} max={25} defaultValue={3.7} /></label>
         <label className="grid gap-1.5 text-sm font-medium">Subida mínima (%)<Input name="min_change_percent" type="number" step={0.5} min={-25} max={25} defaultValue={0} /></label>
         <label className="grid gap-1.5 text-sm font-medium">Subida máxima (%)<Input name="max_change_percent" type="number" step={0.5} min={-25} max={50} defaultValue={10} /></label>
-        <label className="grid gap-1.5 text-sm font-medium">Mínimo de alojamientos para usar la ocupación<Input name="min_units" type="number" min={1} max={100} defaultValue={3} /></label>
+        <label className="grid gap-1.5 text-sm font-medium">Mínimo de alojamientos para ajustar por ocupación<Input name="min_units" type="number" min={1} max={100} defaultValue={3} aria-describedby="min-units-help" /><span id="min-units-help" className="text-xs font-normal leading-5 text-muted-foreground">Si un grupo SA tiene menos alojamientos, su ocupación no es representativa (una sola reserva la mueve mucho) y no se aplica el ajuste de demanda.</span></label>
         <fieldset className="grid gap-2 sm:col-span-2 xl:col-span-3">
           <legend className="mb-1 text-sm font-medium">Grupos SA</legend>
           <div className="flex flex-wrap gap-2">{groups.map(group => <label key={group} className="inline-flex min-h-10 items-center gap-2 rounded-md border border-border px-3 py-2 text-sm"><input type="checkbox" name="projection_group" value={group} defaultChecked />{group}</label>)}</div>
@@ -344,16 +361,28 @@ export function TariffProjections({ admin, groups, refreshVersion }: { admin: bo
             <label className="inline-flex items-center gap-2"><input type="checkbox" checked={selected.move_easter} disabled={!editable || busy} onChange={event => void saveChanges(event.target.checked)} />Mover el precio de Semana Santa a sus fechas de {selected.target_year}</label>
           </div>}
 
+          {selected.result.calendar_changes && <div className="grid gap-2 rounded-md border border-border bg-background p-3 text-sm">
+            <strong>Fechas relevantes de {selected.result.calendar_changes.base_year} a {selected.result.calendar_changes.target_year}</strong>
+            {!selected.result.calendar_changes.changes.length
+              ? <p className="text-muted-foreground">Los festivos oficiales y Semana Santa caen en las mismas fechas en los dos años.</p>
+              : <ul className="grid gap-1.5">{selected.result.calendar_changes.changes.map((item, index) => <li key={`${item.name}-${index}`} className={item.price_band_changes.length ? 'text-warning-ink' : 'text-muted-foreground'}>
+                <span className="font-medium text-foreground">{item.name}</span> ({holidayScopes[item.scope] || item.scope}): {item.base_date ? formatDate(item.base_date) : `no es festivo en ${selected.result!.calendar_changes!.base_year}`} → {item.target_date ? formatDate(item.target_date) : `no es festivo en ${selected.result!.calendar_changes!.target_year}`}
+                {!!item.price_band_changes.length && <span className="block text-xs">Cambia de temporada de precio en: {item.price_band_changes.map(group => `${group} (${price(item.base_seasons[group]?.base_rate)} → ${price(item.target_seasons[group]?.base_rate)})`).join(' · ')}</span>}
+              </li>)}</ul>}
+            {selected.result.calendar_changes.notes.map(note => <p key={note} className="text-xs text-muted-foreground">{note}</p>)}
+          </div>}
+
           <div className="grid gap-2">
             <h3 className="text-base font-semibold">Cálculo por temporada</h3>
             <p className="text-xs text-muted-foreground">Ocupación y precio real: misma temporada del año indicado, con IVA. Mercado: mediana de la competencia y cuánto está por encima (+) o por debajo (−) de nuestra SA.</p>
             {Object.entries(seasonsByGroup).map(([group, rows]) => <div key={group} className="grid gap-1.5">
               <h4 className="text-sm font-semibold">{group}</h4>
               <div className="max-w-full overflow-auto rounded-lg border border-border"><Table>
-                <TableHeader><TableRow><TableHead>Temporada {selected.target_year}</TableHead><TableHead className="text-right">SA {selected.base_year}</TableHead><TableHead className="text-right">Ocupación</TableHead><TableHead className="text-right">Precio real</TableHead><TableHead className="text-right">Mercado</TableHead><TableHead className="text-right">Costes</TableHead><TableHead className="text-right">Demanda</TableHead><TableHead className="text-right">Mercado</TableHead><TableHead className="text-right">Total</TableHead><TableHead className="text-right">Propuesta</TableHead><TableHead>Avisos</TableHead></TableRow></TableHeader>
+                <TableHeader><TableRow><TableHead>Fecha inicio</TableHead><TableHead>Última noche</TableHead><TableHead className="text-right">SA {selected.base_year}</TableHead><TableHead className="text-right">Ocupación</TableHead><TableHead className="text-right">Precio real</TableHead><TableHead className="text-right">Mercado</TableHead><TableHead className="text-right">Costes</TableHead><TableHead className="text-right">Demanda</TableHead><TableHead className="text-right">Mercado</TableHead><TableHead className="text-right">Total</TableHead><TableHead className="text-right">Propuesta</TableHead><TableHead>Avisos</TableHead></TableRow></TableHeader>
                 <TableBody>{rows.map(row => <TableRow key={row.key}>
-                  <TableCell className="whitespace-nowrap">{shortDate(row.start)} – {shortDate(row.end)}</TableCell>
-                  <TableCell className="text-right tabular-nums">{money(row.base_rate)}</TableCell>
+                  <TableCell className="whitespace-nowrap tabular-nums">{formatDate(row.start)}</TableCell>
+                  <TableCell className="whitespace-nowrap tabular-nums">{formatDate(row.end)}</TableCell>
+                  <TableCell className="text-right tabular-nums">{price(row.base_rate)}</TableCell>
                   <TableCell className="whitespace-nowrap text-right tabular-nums">{percent(row.occupancy)}<small className="block text-xs text-muted-foreground">{row.occupancy_year ?? '—'}{row.previous_occupancy != null ? ` · antes ${percent(row.previous_occupancy)}` : ''}</small></TableCell>
                   <TableCell className="text-right tabular-nums">{money(row.adr)}</TableCell>
                   <TableCell className="whitespace-nowrap text-right tabular-nums">{money(row.market_median)}{row.market_refs > 0 && <small className="block text-xs text-muted-foreground">{row.market_refs} ref. · {percent(row.market_gap, true)}</small>}</TableCell>
@@ -361,7 +390,7 @@ export function TariffProjections({ admin, groups, refreshVersion }: { admin: bo
                   <TableCell className="text-right tabular-nums"><Adjustment value={row.demand_adjustment} /></TableCell>
                   <TableCell className="text-right tabular-nums"><Adjustment value={row.market_adjustment} /></TableCell>
                   <TableCell className="text-right font-medium tabular-nums">{percent(row.total_change, true)}</TableCell>
-                  <TableCell className="text-right font-semibold tabular-nums">{money(row.rate)}</TableCell>
+                  <TableCell className="text-right font-semibold tabular-nums">{price(row.rate)}</TableCell>
                   <TableCell className="min-w-48 text-xs text-muted-foreground">{row.flags.map(flag => flagLabels[flag] || flag).join(' · ')}{row.monthly_occupancy && <span className="block">{Object.entries(row.monthly_occupancy).map(([month, value]) => `${month.slice(5)}: ${percent(value)}`).join(' · ')}</span>}</TableCell>
                 </TableRow>)}</TableBody>
               </Table></div>
@@ -370,16 +399,16 @@ export function TariffProjections({ admin, groups, refreshVersion }: { admin: bo
 
           <div className="grid gap-2">
             <h3 className="text-base font-semibold">Temporadas que se guardarán en Tarifas</h3>
-            <p className="text-xs text-muted-foreground">{editable ? 'Puedes cambiar cualquier precio y anotar el motivo. Los cambios se guardan con la proyección.' : 'Precios finales de la proyección.'}</p>
+            <p className="text-xs text-muted-foreground">Mismo formato que Tarifas: ambas fechas están incluidas en la temporada. {editable ? 'Puedes cambiar cualquier precio y anotar el motivo. Los cambios se guardan con la proyección.' : 'Precios finales de la proyección.'}</p>
             {Object.entries(finalByGroup).map(([group, rows]) => <div key={group} className="grid gap-1.5">
               <h4 className="text-sm font-semibold">{group}</h4>
               <div className="max-w-full overflow-auto rounded-lg border border-border"><Table>
-                <TableHeader><TableRow><TableHead>Desde</TableHead><TableHead>Hasta</TableHead><TableHead className="text-right">Propuesta</TableHead><TableHead className="text-right">€/noche</TableHead><TableHead>Motivo del cambio</TableHead></TableRow></TableHeader>
+                <TableHeader><TableRow><TableHead>Fecha inicio</TableHead><TableHead>Última noche</TableHead><TableHead className="text-right">Propuesta</TableHead><TableHead className="text-right">SA · Precio/noche</TableHead><TableHead>Motivo del cambio</TableHead></TableRow></TableHeader>
                 <TableBody>{rows.map(row => <TableRow key={row.key}>
-                  <TableCell className="whitespace-nowrap">{formatDate(row.start)}{row.note && <small className="block text-xs text-muted-foreground">{row.note === 'Semana Santa' ? 'Semana Santa' : 'Sin Semana Santa'}</small>}</TableCell>
-                  <TableCell className="whitespace-nowrap">{formatDate(row.end)}</TableCell>
-                  <TableCell className="text-right tabular-nums text-muted-foreground">{money(row.proposed_rate)}</TableCell>
-                  <TableCell className="w-32 text-right">{editable ? <Input aria-label={`Precio de ${group} desde ${formatDate(row.start)}`} className="text-right tabular-nums" type="number" min={1} max={10000} step={1} value={draft[row.key]?.rate ?? ''} onChange={event => setDraft(current => ({ ...current, [row.key]: { rate: event.target.value, reason: current[row.key]?.reason ?? '' } }))} /> : <strong className="tabular-nums">{money(row.rate)}</strong>}</TableCell>
+                  <TableCell className="whitespace-nowrap tabular-nums">{formatDate(row.start)}{row.note && <small className="block text-xs text-muted-foreground">{row.note === 'Semana Santa' ? 'Semana Santa' : 'Sin Semana Santa'}</small>}</TableCell>
+                  <TableCell className="whitespace-nowrap tabular-nums">{formatDate(row.end)}</TableCell>
+                  <TableCell className="text-right tabular-nums text-muted-foreground">{price(row.proposed_rate)}</TableCell>
+                  <TableCell className="w-32 text-right">{editable ? <Input aria-label={`Precio de ${group} desde ${formatDate(row.start)}`} className="text-right tabular-nums" type="number" min={1} max={10000} step={1} value={draft[row.key]?.rate ?? ''} onChange={event => setDraft(current => ({ ...current, [row.key]: { rate: event.target.value, reason: current[row.key]?.reason ?? '' } }))} /> : <strong className="tabular-nums">{price(row.rate)}</strong>}</TableCell>
                   <TableCell className="min-w-56">{editable ? <Input aria-label={`Motivo del cambio de ${group} desde ${formatDate(row.start)}`} maxLength={300} value={draft[row.key]?.reason ?? ''} onChange={event => setDraft(current => ({ ...current, [row.key]: { rate: current[row.key]?.rate ?? '', reason: event.target.value } }))} /> : <span className="text-xs text-muted-foreground">{row.override_reason || ''}</span>}</TableCell>
                 </TableRow>)}</TableBody>
               </Table></div>
