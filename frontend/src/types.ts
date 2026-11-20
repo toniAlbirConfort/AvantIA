@@ -88,6 +88,7 @@ export type Conversation = {
   auto_replies?: AutoReply[]
   registration?: RegistrationCheck | null
   outside_reply?: { sent_at: string | null; subject: string | null; sender: string | null } | null
+  filed_notice?: { filed_at: string | null; reason: string } | null
   booking_task?: { id: number; status: string; extracted: Record<string, unknown> } | null
   contact?: ContactInfo | null
   reply?: ReplyDefaults | null

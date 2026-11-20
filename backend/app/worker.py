@@ -14,7 +14,7 @@ from app.config import get_settings
 from app.db import SessionLocal
 from app.delivery import send_approved
 from app.holiday_sync import sync_due, sync_official_holidays
-from app.inbox_replies import check_inbox_replies
+from app.inbox_replies import check_inbox_replies, file_platform_notices
 from app.ingest import enqueue
 from app.mail import poll_mail
 from app.models import Conversation, Draft, Job, TariffStudy
@@ -201,6 +201,11 @@ async def main() -> None:
                     check_staff_replies(db)
                 except Exception:
                     logger.exception("Sent folder check for auto-replies failed")
+            with SessionLocal() as db:
+                try:
+                    file_platform_notices(db)
+                except Exception:
+                    logger.exception("Filing automatic notices failed")
             with SessionLocal() as db:
                 try:
                     check_inbox_replies(db)

@@ -73,7 +73,7 @@ from app.gowa import (
 from app.holiday_sync import holiday_sync_view
 from app.html_sanitize import sanitize_html
 from app.import_issues import split_issues, with_repairs
-from app.inbox_replies import outside_reply
+from app.inbox_replies import filed_notice, outside_reply
 from app.ingest import enqueue, ingest
 from app.integrations import ollama_translate_email
 from app.models import (
@@ -409,6 +409,7 @@ def _conversation(conv: Conversation, db: Session, detail: bool = False) -> dict
             select(RegistrationCheck).where(RegistrationCheck.conversation_id == conv.id)
         )
         data["outside_reply"] = outside_reply(db, conv)
+        data["filed_notice"] = filed_notice(db, conv)
         data["registration"] = (
             registration_check_view(check, registration_handled_by(db, check.locator))
             if check
@@ -1088,7 +1089,7 @@ async def translate_email(
 @app.put("/api/conversations/{id}/draft")
 def edit_draft(id: int, body: DraftIn, db: Db, user: Operator) -> dict:
     conv = _get_conv(db, id)
-    if conv.kind == "booking" or conv.status not in {"pending", "error", "answered"}:
+    if conv.kind == "booking" or conv.status not in {"pending", "error", "answered", "filed"}:
         raise HTTPException(409, "La consulta no admite edición")
     try:
         cc = parse_cc(body.cc)
@@ -1122,7 +1123,7 @@ def approve(id: int, db: Db, user: Operator) -> dict:
         raise HTTPException(423, "Modo de solo lectura: no se pueden aprobar ni enviar respuestas")
     conv = _get_conv(db, id)
     # "answered": the team replied from the mailbox, but may still answer again from here.
-    if conv.kind == "booking" or conv.status not in {"pending", "answered"}:
+    if conv.kind == "booking" or conv.status not in {"pending", "answered", "filed"}:
         raise HTTPException(409, "La consulta no admite aprobación")
     if _live_analysis(db, conv)[1]:
         raise HTTPException(409, "La disponibilidad cambió; revisa y guarda el borrador")
@@ -1196,7 +1197,7 @@ def save_signature(body: SignatureIn, db: Db, user: Operator) -> dict:
 @app.post("/api/conversations/{id}/pending")
 def leave_pending(id: int, db: Db, user: Operator) -> dict:
     conv = _get_conv(db, id)
-    if conv.status not in {"pending", "error", "answered"}:
+    if conv.status not in {"pending", "error", "answered", "filed"}:
         raise HTTPException(409, "Estado no modificable")
     conv.status = "pending"
     db.add(

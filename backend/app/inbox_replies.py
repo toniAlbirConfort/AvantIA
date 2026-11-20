@@ -8,6 +8,13 @@ keeps when, from which address and with which subject. A new message from the cu
 back to pending (``app.ingest``), as with any answer.
 
 An operator can put it back to pending; the same reply never marks it again, only a newer one.
+
+Automatic notices from platforms (Hotelbeds price updates, Expedia integration reports,
+newsletters...) are not consultations either. When every customer message of a pending
+conversation comes from a platform or automatic sender and the classifier says "non_demand"
+with high confidence (or a person said so), it is filed (``filed``, "Archivada: aviso
+automático") so it stops counting as unanswered. Same rules: a new message puts it back to
+pending, and an operator can put it back too without the same message filing it again.
 Read-only towards the mailbox: the Sent folder is opened with readonly=True and messages are
 fetched with BODY.PEEK.
 """
@@ -29,6 +36,7 @@ from app.staff_replies import open_sent_folder, sent_to
 logger = logging.getLogger(__name__)
 
 ACTION = "conversation.answered_outside"
+FILED_ACTION = "conversation.filed_notice"
 WINDOW = timedelta(days=30)
 # Sent folder look-ups per run. Each run continues after the last conversation it looked up,
 # so a long backlog is covered over several runs instead of always the same ones.
@@ -158,6 +166,76 @@ def check_inbox_replies(db: Session, current: datetime | None = None) -> int:
             marked += 1
         db.commit()
     return marked
+
+
+def _confident_non_demand(message: Message) -> bool:
+    if message.classification_override:
+        return message.classification_override == "non_demand"
+    return (
+        message.classification_label == "non_demand"
+        and message.classification_confidence == "high"
+    )
+
+
+def automatic_sender(conversation: Conversation) -> bool:
+    """A platform or no-reply sender, never a colleague (relayed leads come from them)."""
+    address = parseaddr(conversation.customer_address or "")[1].strip().lower()
+    return "@" in address and not _internal(address) and _booking_platform(address)
+
+
+def file_platform_notices(db: Session, current: datetime | None = None) -> int:
+    """File pending automatic notices nobody has to answer. Returns how many."""
+    current = current or datetime.now(UTC)
+    filed = 0
+    for conversation in db.scalars(
+        select(Conversation).where(
+            Conversation.status == "pending",
+            Conversation.channel == "email",
+            Conversation.kind != "booking",
+            Conversation.last_inbound_at >= current - WINDOW,
+        )
+    ).all():
+        if not automatic_sender(conversation):
+            continue
+        messages = db.scalars(
+            select(Message)
+            .where(Message.conversation_id == conversation.id, Message.direction == "inbound")
+            .order_by(Message.id)
+        ).all()
+        if not messages or not all(_confident_non_demand(item) for item in messages):
+            continue  # unclassified yet, unsure, or something to act on
+        last_id = messages[-1].id
+        done = db.scalars(
+            select(AuditEvent.detail).where(
+                AuditEvent.conversation_id == conversation.id,
+                AuditEvent.action == FILED_ACTION,
+            )
+        ).all()
+        if any((detail or {}).get("message_id") == last_id for detail in done):
+            continue  # an operator put it back to pending after this same message
+        conversation.status = "filed"
+        db.add(
+            AuditEvent(
+                conversation_id=conversation.id,
+                action=FILED_ACTION,
+                detail={"reason": "aviso_automatico", "message_id": last_id},
+            )
+        )
+        filed += 1
+    db.commit()
+    return filed
+
+
+def filed_notice(db: Session, conversation: Conversation) -> dict | None:
+    """Why the conversation was filed, while it still is."""
+    if conversation.status != "filed":
+        return None
+    created = db.scalar(
+        select(AuditEvent.created_at)
+        .where(AuditEvent.conversation_id == conversation.id, AuditEvent.action == FILED_ACTION)
+        .order_by(AuditEvent.id.desc())
+    )
+    return {"filed_at": created, "reason": "aviso_automatico"}
 
 
 def outside_reply(db: Session, conversation: Conversation) -> dict | None:
