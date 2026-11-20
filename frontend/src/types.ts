@@ -215,7 +215,27 @@ export type RetentionResponse = {
   years_available: { year: number; reservations: number }[]
   months: [number, number] | null
 }
-export type CampaignLanguage = 'es' | 'en' | 'fr' | 'de' | 'nl' | 'nb'
+export type BookedForOthersReservation = {
+  locator: string; status: string; created_on: string | null; start_date: string; end_date: string
+  nights: number; portal: string | null; occupant: string; total: string
+}
+export type BookedForOthersConsultation = {
+  id: number; conversation_id: number; received_at: string; status: string; reason: string | null; locator: string | null
+}
+export type BookedForOthersCustomer = {
+  avantio_id: string; name: string; customer_class: string | null; count: number; total: string
+  last_start: string; reservations: BookedForOthersReservation[]; consultations?: BookedForOthersConsultation[]
+}
+export type BookedForOthersResponse = {
+  has_snapshot: boolean; snapshot_at: string | null; generated_at: string
+  summary: {
+    reservations: number; with_customer: number; for_others: number; for_others_direct: number
+    for_others_intermediaries: number; customers_never_stay: number; single_reservation: number
+    customers_also_stay: number; companies: number; consultations: number
+  }
+  never_stay: BookedForOthersCustomer[]; also_stay: BookedForOthersCustomer[]; companies: BookedForOthersCustomer[]
+}
+export type CampaignLanguage ='es' | 'en' | 'fr' | 'de' | 'nl' | 'nb'
 export type CampaignContentFields = { subject: string; preheader: string; headline: string; body: string; offer: string; cta_label: string }
 export type CampaignContent = Partial<Record<CampaignLanguage, CampaignContentFields>>
 export type CampaignOffer = { code: string; valid_until: string; cta_url: string }
