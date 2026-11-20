@@ -211,6 +211,7 @@ class _History:
         self.sold: dict[tuple[str, date], int] = defaultdict(int)
         self.revenue: dict[tuple[str, date], Decimal] = defaultdict(Decimal)
         self.priced: dict[tuple[str, date], int] = defaultdict(int)
+        self.prices: dict[tuple[str, date], list[Decimal]] = defaultdict(list)
         self.reservations = [
             row for row in _effective_reservations(db) if row.property_id in property_group
         ]
@@ -229,6 +230,7 @@ class _History:
                 if row.nights < LONG_STAY_NIGHTS:
                     self.revenue[(group, day)] += nightly
                     self.priced[(group, day)] += 1
+                    self.prices[(group, day)].append(nightly)
 
     def window(self, group: str, start: date, end: date) -> dict:
         sold = sum(self.sold[(group, day)] for day in _date_range(start, end))
@@ -239,7 +241,17 @@ class _History:
         return {
             "occupancy": round(sold / capacity, 4) if capacity else None,
             "adr": (revenue / priced).quantize(Decimal("0.01")) if priced else None,
+            "priced_nights": priced,
         }
+
+    def median_rate(self, group: str, start: date, end: date) -> Decimal | None:
+        """Median price of the sold nights: one wrong amount does not move it."""
+        values = [
+            value for day in _date_range(start, end) for value in self.prices[(group, day)]
+        ]
+        if not values:
+            return None
+        return Decimal(statistics.median(values)).quantize(Decimal("0.01"))
 
     def pickup(self, group: str, year: int, as_of: date) -> dict:
         """Nights of a year booked by as_of, against the previous year at the same point."""
@@ -938,6 +950,153 @@ def projection_csv(projection: TariffProjection) -> bytes:
     for item in final_seasons(projection):
         writer.writerow([item["tariff_name"], "SA", item["start"], item["end"], item["rate"]])
     return output.getvalue().encode("utf-8")
+
+
+# ---------------------------------------------------------------- price evolution
+
+
+EVOLUTION_SEASON_YEARS = 4
+EVOLUTION_ANNUAL_YEARS = 7
+EVOLUTION_MIN_NIGHTS = 14
+
+
+def _sa_average(rows: list[TariffSeason], group: str, start: date, end: date) -> dict | None:
+    """Day-weighted SA tariff of a group between two dates, if Tarifas covers them."""
+    total = Decimal()
+    covered = 0
+    for row in rows:
+        if row.tariff_name != group:
+            continue
+        first, last = max(row.start_date, start), min(row.end_date, end)
+        if first > last:
+            continue
+        days = _days(first, last)
+        total += Decimal(row.nightly_rate) * days
+        covered += days
+    if not covered:
+        return None
+    return {
+        "rate": f"{total / covered:.2f}",
+        "complete": covered == _days(start, end),
+    }
+
+
+def projection_evolution(
+    db: Session, projection: TariffProjection, today: date | None = None
+) -> dict:
+    """Prices of previous years for the same dates as each projected season.
+
+    Before the base year only real prices exist: the median price of the sold nights
+    (what reservations paid per night, VAT included, stays shorter than four weeks),
+    so one wrong amount does not distort the year. Tarifas keeps SA tariffs only from
+    the moment they were loaded. Every value is computed for the same day and month
+    as the projected season.
+    """
+    today = today or date.today()
+    base, target = projection.base_year, projection.target_year
+    groups = list(projection.tariff_names)
+    first_year = base - EVOLUTION_ANNUAL_YEARS
+    history = _History(db, groups, first_year, today - timedelta(days=1))
+    sa_rows = db.scalars(
+        select(TariffSeason).where(
+            TariffSeason.rate_plan == "SA",
+            TariffSeason.tariff_name.in_(groups),
+            TariffSeason.end_date >= date(first_year, 1, 1),
+            TariffSeason.start_date <= date(base, 12, 31),
+        )
+    ).all()
+    season_years = list(range(base - EVOLUTION_SEASON_YEARS, base + 1))
+
+    def real(group: str, start: date, end: date) -> dict | None:
+        if start >= today:
+            return None
+        last = min(end, today - timedelta(days=1))
+        window = history.window(group, start, last)
+        median = history.median_rate(group, start, last)
+        if median is None:
+            return None
+        return {
+            "rate": f"{median:.2f}",
+            "nights": window["priced_nights"],
+            "partial": end >= today,
+            "few_nights": window["priced_nights"] < EVOLUTION_MIN_NIGHTS,
+        }
+
+    seasons = []
+    for item in final_seasons(projection):
+        group = item["tariff_name"]
+        start, end = date.fromisoformat(item["start"]), date.fromisoformat(item["end"])
+        years = []
+        for year in season_years:
+            year_start = shift_date(start, year)
+            year_end = shift_date(end, year, is_end=True)
+            years.append(
+                {
+                    "year": year,
+                    "real": real(group, year_start, year_end),
+                    "sa": _sa_average(sa_rows, group, year_start, year_end),
+                }
+            )
+        proposed = Decimal(item["rate"])
+        base_sa = years[-1]["sa"]
+        last_real = next(
+            (
+                entry["real"]
+                for entry in reversed(years)
+                if entry["real"] and not entry["real"]["partial"]
+            ),
+            None,
+        )
+        seasons.append(
+            {
+                "key": item["key"],
+                "tariff_name": group,
+                "start": item["start"],
+                "end": item["end"],
+                "note": item.get("note"),
+                "years": years,
+                "rate": item["rate"],
+                "change_vs_base_sa": round(float(proposed / Decimal(base_sa["rate"]) - 1), 4)
+                if base_sa and base_sa["complete"]
+                else None,
+                "change_vs_last_real": round(float(proposed / Decimal(last_real["rate"]) - 1), 4)
+                if last_real
+                else None,
+            }
+        )
+
+    annual: dict[str, list[dict]] = {}
+    for group in groups:
+        points = []
+        for year in range(first_year, base):
+            value = real(group, date(year, 1, 1), date(year, 12, 31))
+            if value:
+                points.append({"year": year, "kind": "real", **value})
+        sa = _sa_average(sa_rows, group, date(base, 1, 1), date(base, 12, 31))
+        if sa:
+            points.append({"year": base, "kind": "sa", **sa})
+        group_rows = [item for item in seasons if item["tariff_name"] == group]
+        weight = sum(
+            _days(date.fromisoformat(item["start"]), date.fromisoformat(item["end"]))
+            for item in group_rows
+        )
+        if weight:
+            total = sum(
+                Decimal(item["rate"])
+                * _days(date.fromisoformat(item["start"]), date.fromisoformat(item["end"]))
+                for item in group_rows
+            )
+            points.append({"year": target, "kind": "projection", "rate": f"{total / weight:.2f}"})
+        annual[group] = points
+    return {
+        "base_year": base,
+        "target_year": target,
+        "season_years": season_years,
+        "min_nights": EVOLUTION_MIN_NIGHTS,
+        "as_of": today.isoformat(),
+        "seasons": seasons,
+        "annual": annual,
+    }
 
 
 # ---------------------------------------------------------------- market observations

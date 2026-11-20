@@ -142,6 +142,7 @@ from app.tariff_projection import (
     list_projections,
     observation_view,
     projection_csv,
+    projection_evolution,
     projection_view,
     update_projection,
 )
@@ -1581,6 +1582,11 @@ def create_tariff_projection(data: TariffProjectionIn, db: Db, admin: Admin) -> 
 @app.get("/api/tariff-lab/projections/{projection_id}")
 def get_tariff_projection(projection_id: int, db: Db, user: Operator) -> dict:
     return projection_view(_projection_or_404(db, projection_id))
+
+
+@app.get("/api/tariff-lab/projections/{projection_id}/evolution")
+def get_tariff_projection_evolution(projection_id: int, db: Db, user: Operator) -> dict:
+    return projection_evolution(db, _projection_or_404(db, projection_id))
 
 
 @app.patch("/api/tariff-lab/projections/{projection_id}")

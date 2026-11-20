@@ -8,6 +8,7 @@ import { Input } from './components/ui/input'
 import { Select } from './components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './components/ui/table'
 import { Textarea } from './components/ui/textarea'
+import { PriceEvolution, type Evolution } from './PriceEvolution'
 
 type Observation = {
   id: number; tariff_name: string; competitor: string; unit_label: string | null; stay_date: string
@@ -94,6 +95,8 @@ export function TariffProjections({ admin, groups, refreshVersion }: { admin: bo
   const [projections, setProjections] = useState<Projection[]>([])
   const [observations, setObservations] = useState<Observation[]>([])
   const [selected, setSelected] = useState<Projection | null>(null)
+  const [evolution, setEvolution] = useState<Evolution | null>(null)
+  const [evolutionError, setEvolutionError] = useState('')
   const [draft, setDraft] = useState<Draft>({})
   const [notes, setNotes] = useState('')
   const [confirmApply, setConfirmApply] = useState(false)
@@ -108,6 +111,10 @@ export function TariffProjections({ admin, groups, refreshVersion }: { admin: bo
     setDraft(Object.fromEntries((projection.final_seasons || []).map(item => [item.key, { rate: String(Math.round(Number(item.rate))), reason: item.override_reason || '' }])))
     setNotes(projection.notes || '')
     setConfirmApply(false)
+    setEvolution(null); setEvolutionError('')
+    api<Evolution>(`/api/tariff-lab/projections/${id}/evolution`)
+      .then(setEvolution)
+      .catch(err => setEvolutionError((err as Error).message))
   }, [])
 
   const load = useCallback(async () => {
@@ -414,6 +421,10 @@ export function TariffProjections({ admin, groups, refreshVersion }: { admin: bo
               </Table></div>
             </div>)}
           </div>
+
+          {evolutionError ? <Alert variant="warning">No se pudo cargar la evolución de precios: {evolutionError}</Alert>
+            : !evolution ? <p className="text-sm text-muted-foreground" role="status">Cargando la evolución de precios…</p>
+            : <PriceEvolution evolution={evolution} />}
 
           {editable ? <label className="grid gap-1.5 text-sm font-medium">Notas de la revisión<Textarea value={notes} maxLength={4000} onChange={event => setNotes(event.target.value)} /></label>
             : selected.notes && <div className="grid gap-1 text-sm"><strong>Notas de la revisión</strong><p className="whitespace-pre-wrap text-muted-foreground">{selected.notes}</p></div>}
