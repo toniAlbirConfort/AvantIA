@@ -9,7 +9,7 @@ import { CustomerRetention } from './CustomerRetention'
 import { Campaigns } from './Campaigns'
 import { Tariffs } from './Tariffs'
 import type { ClassificationLabel, Conversation, InboxResponse, InboxThread, ImportBatch, Message, Property, Summary, User } from './types'
-import { ArrowLeft, ArrowRight, Bell, TriangleAlert, CalendarDays, ChartColumn, CalendarRange, Cable, ChevronDown, ClipboardList, Contact, FileText, FlaskConical, HeartHandshake, House, Megaphone, Inbox, LayoutDashboard, LogOut, Menu, RefreshCw, Reply, Search, Settings, Tag, Upload, Users, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Bell, TriangleAlert, CalendarDays, ChartColumn, CalendarRange, Cable, ChevronDown, ClipboardList, Contact, FileText, FlaskConical, HeartHandshake, House, Megaphone, Inbox, LayoutDashboard, LogOut, Menu, RefreshCw, Reply, Search, Send, Settings, Tag, Upload, Users, X } from 'lucide-react'
 import { EmailPreviewDialog } from './EmailPreviewDialog'
 import { AutoReplyCard, type AutoReplyStatus } from './AutoReplyCard'
 import { EmailMessageContent } from './EmailMessageContent'
@@ -33,8 +33,9 @@ import { TariffLab } from './TariffLab'
 import { Analysis } from './Analysis'
 import { Reports } from './Reports'
 import { Notifications } from './Notifications'
+import { AutomaticMessages } from './AutomaticMessages'
 
-type View = 'reservation-issues' | 'notifications' | 'reservations' | 'customers' | 'customer-retention' | 'campaigns' | 'analysis' | 'summary' | 'inbox' | 'bookings' | 'properties' | 'tariffs' | 'tariff-lab' | 'reports' | 'planning' | 'imports' | 'integrations' | 'users'
+type View = 'reservation-issues' | 'notifications' | 'reservations' | 'customers' | 'customer-retention' | 'campaigns' | 'analysis' | 'summary' | 'inbox' | 'bookings' | 'automatic-messages' | 'properties' | 'tariffs' | 'tariff-lab' | 'reports' | 'planning' | 'imports' | 'integrations' | 'users'
 const navigation: { id: View; label: string; icon: typeof LayoutDashboard }[] = [
   { id: 'reservations', label: 'Reservas', icon: CalendarDays },
   { id: 'customers', label: 'Directorio', icon: Contact },
@@ -49,6 +50,7 @@ const navigation: { id: View; label: string; icon: typeof LayoutDashboard }[] = 
   { id: 'notifications', label: 'Avisos', icon: Bell },
   { id: 'inbox', label: 'Bandeja', icon: Inbox },
   { id: 'bookings', label: 'Prerreservas', icon: ClipboardList },
+  { id: 'automatic-messages', label: 'Envíos automáticos', icon: Send },
   { id: 'properties', label: 'Alojamientos', icon: House },
   { id: 'summary', label: 'Resumen', icon: LayoutDashboard },
   { id: 'imports', label: 'Importaciones', icon: Upload },
@@ -60,7 +62,7 @@ type SectionId = 'reservations' | 'customers' | 'communication' | 'performance' 
 const sections: { id: SectionId; label: string; icon: typeof LayoutDashboard; views: View[] }[] = [
   { id: 'reservations', label: 'Reservas', icon: CalendarDays, views: ['reservations', 'planning', 'reservation-issues', 'properties'] },
   { id: 'customers', label: 'Clientes', icon: Contact, views: ['customers', 'customer-retention', 'campaigns'] },
-  { id: 'communication', label: 'Comunicación', icon: Inbox, views: ['inbox', 'bookings', 'summary'] },
+  { id: 'communication', label: 'Comunicación', icon: Inbox, views: ['inbox', 'bookings', 'automatic-messages', 'summary'] },
   { id: 'performance', label: 'Rendimiento', icon: ChartColumn, views: ['analysis', 'tariffs', 'tariff-lab', 'reports'] },
   { id: 'notifications', label: 'Avisos', icon: Bell, views: ['notifications'] },
   { id: 'settings', label: 'Configuración', icon: Settings, views: ['imports', 'integrations', 'users'] },
@@ -234,6 +236,7 @@ export default function App() {
   const [tariffRefreshVersion, setTariffRefreshVersion] = useState(0)
   const [analysisRefreshVersion, setAnalysisRefreshVersion] = useState(0)
   const [reportsRefreshVersion, setReportsRefreshVersion] = useState(0)
+  const [automaticRefreshVersion, setAutomaticRefreshVersion] = useState(0)
   const [propertySearch, setPropertySearch] = useState('')
   const [propertyStatusFilter, setPropertyStatusFilter] = useState('active')
   const [propertyCategoryFilter, setPropertyCategoryFilter] = useState('')
@@ -592,12 +595,13 @@ export default function App() {
           <Button type="button" variant="ghost" size="icon" className="relative text-white hover:bg-white/10 hover:text-white" onClick={() => navigate('notifications')} aria-label={unreadNotifications ? `Avisos: ${unreadNotifications} sin leer` : 'Avisos'}><Bell size={20} />{!!unreadNotifications && <span className={`absolute right-1 top-1 min-w-4 rounded-full px-1 text-[0.6rem] font-semibold leading-4 ${criticalNotifications ? 'bg-error-bg text-error-ink' : 'bg-white text-brand-charcoal'}`} aria-hidden="true">{unreadNotifications}</span>}</Button>
         </header>
         <main className={`mx-auto w-full ${ownHeader ? 'max-w-none px-4 py-5 sm:px-6 lg:px-8' : 'max-w-screen-2xl px-4 py-6 sm:px-6 lg:px-10 lg:py-9'}`}>
-        {!ownHeader && <div className="mb-6 flex flex-wrap items-end justify-between gap-4"><div><p className="mb-2 text-xs font-semibold uppercase tracking-wide text-primary">TU ESPACIO DE HOSPITALIDAD <span className="px-1 text-muted-foreground">/</span> {activeSection.label.toUpperCase()}{activeSection.label !== section && <><span className="px-1 text-muted-foreground">/</span> {section.toUpperCase()}</>}</p><h1 className="mb-2 text-3xl font-semibold leading-tight sm:text-4xl">{section}</h1><p className="max-w-3xl text-sm leading-6 text-muted-foreground">{view === 'summary' ? 'Cada conversación, en su sitio. La atención empieza aquí.' : view === 'inbox' ? 'Lee el contexto, revisa el borrador y decide cómo responder.' : view === 'bookings' ? 'Prerreservas que necesitan una mirada y seguimiento humano.' : view === 'imports' ? 'Fuentes y disponibilidad, siempre con su origen a la vista.' : view === 'planning' ? 'Una vista clara de las estancias y los huecos disponibles.' : view === 'tariffs' ? 'Consulta los importes por temporada y grupo tarifario.' : view === 'tariff-lab' ? 'Contrasta el histórico, los precios de mercado y los festivos antes de preparar una propuesta.' : view === 'analysis' ? 'Compara los años sobre el listado de reservas importado y detecta qué ha cambiado.' : view === 'reports' ? 'Los informes preparados con Claude y los generados por AvantIA, del más reciente al más antiguo.' : view === 'notifications' ? 'Lo que está pasando en AvantIA y lo que necesita tu atención, ordenado por gravedad.' : view === 'reservation-issues' ? 'Dobles reservas, importes descuadrados y apartamentos inactivos en los datos de Avantio.' : 'La información operativa de AvantIA, reunida con cuidado.'}</p></div><Button variant="outline" onClick={() => view === 'tariffs' || view === 'tariff-lab' ? setTariffRefreshVersion(version => version + 1) : view === 'analysis' ? setAnalysisRefreshVersion(version => version + 1) : view === 'reports' ? setReportsRefreshVersion(version => version + 1) : void refresh()} disabled={busy}><RefreshCw size={15} /> {view === 'tariffs' || view === 'tariff-lab' ? 'Actualizar tarifas' : 'Actualizar'}</Button></div>}
+        {!ownHeader && <div className="mb-6 flex flex-wrap items-end justify-between gap-4"><div><p className="mb-2 text-xs font-semibold uppercase tracking-wide text-primary">TU ESPACIO DE HOSPITALIDAD <span className="px-1 text-muted-foreground">/</span> {activeSection.label.toUpperCase()}{activeSection.label !== section && <><span className="px-1 text-muted-foreground">/</span> {section.toUpperCase()}</>}</p><h1 className="mb-2 text-3xl font-semibold leading-tight sm:text-4xl">{section}</h1><p className="max-w-3xl text-sm leading-6 text-muted-foreground">{view === 'summary' ? 'Cada conversación, en su sitio. La atención empieza aquí.' : view === 'inbox' ? 'Lee el contexto, revisa el borrador y decide cómo responder.' : view === 'bookings' ? 'Prerreservas que necesitan una mirada y seguimiento humano.' : view === 'automatic-messages' ? 'Todo lo que AvantIA envía a los clientes sin que nadie lo apruebe: qué salió, a quién, cuándo y qué falló.' : view === 'imports' ? 'Fuentes y disponibilidad, siempre con su origen a la vista.' : view === 'planning' ? 'Una vista clara de las estancias y los huecos disponibles.' : view === 'tariffs' ? 'Consulta los importes por temporada y grupo tarifario.' : view === 'tariff-lab' ? 'Contrasta el histórico, los precios de mercado y los festivos antes de preparar una propuesta.' : view === 'analysis' ? 'Compara los años sobre el listado de reservas importado y detecta qué ha cambiado.' : view === 'reports' ? 'Los informes preparados con Claude y los generados por AvantIA, del más reciente al más antiguo.' : view === 'notifications' ? 'Lo que está pasando en AvantIA y lo que necesita tu atención, ordenado por gravedad.' : view === 'reservation-issues' ? 'Dobles reservas, importes descuadrados y apartamentos inactivos en los datos de Avantio.' : 'La información operativa de AvantIA, reunida con cuidado.'}</p></div><Button variant="outline" onClick={() => view === 'tariffs' || view === 'tariff-lab' ? setTariffRefreshVersion(version => version + 1) : view === 'analysis' ? setAnalysisRefreshVersion(version => version + 1) : view === 'reports' ? setReportsRefreshVersion(version => version + 1) : view === 'automatic-messages' ? setAutomaticRefreshVersion(version => version + 1) : void refresh()} disabled={busy}><RefreshCw size={15} /> {view === 'tariffs' || view === 'tariff-lab' ? 'Actualizar tarifas' : 'Actualizar'}</Button></div>}
         {readOnlyMode && !ownHeader && view !== 'planning' && <Alert variant="info" role="status" className="mb-5 flex flex-wrap items-center gap-x-4 gap-y-1"><strong className="text-xs">MODO DESARROLLO · SOLO LECTURA</strong><span>IMAP se consulta sin modificar correos. Los envíos de email y WhatsApp están bloqueados.</span></Alert>}
         {error && <Alert variant="destructive" className="mb-5 flex items-center justify-between gap-4"><span>{error}</span><Button variant="ghost" size="icon" onClick={() => setError('')} aria-label="Cerrar aviso"><X size={16} /></Button></Alert>}
         <EmailPreviewDialog message={expandedEmail} fallbackSubject={detail?.subject} onClose={() => setExpandedEmail(null)} />
         {detail && detail.kind !== 'booking' && <ReplyComposerDialog open={composerOpen} conversation={detail} readOnlyMode={readOnlyMode} onClose={() => setComposerOpen(false)} onChanged={refresh} />}
 
+        {view === 'automatic-messages' && <AutomaticMessages refreshVersion={automaticRefreshVersion} onOpenConversation={openNotificationLink} />}
         {view === 'notifications' && <Notifications onOpen={openNotificationLink} onChanged={() => void refresh()} />}
         {view === 'reservations' && <Reservations onImport={() => navigate('imports')} />}
         {view === 'customers' && <Customers onImport={() => navigate('imports')} />}

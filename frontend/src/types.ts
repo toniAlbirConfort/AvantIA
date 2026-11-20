@@ -43,6 +43,17 @@ export type AutoReply = {
   mode: 'shadow' | 'sending' | 'sent' | 'failed'; language: string; subject: string; text: string;
   error: string | null; created_at: string
 }
+export type AutomaticMessageStatus = 'sent' | 'shadow' | 'failed' | 'delivery_unknown'
+export type AutomaticMessageChannel = 'email' | 'whatsapp'
+export type AutomaticMessage = {
+  id: string; kind: string; kind_label: string; channel: AutomaticMessageChannel; status: AutomaticMessageStatus;
+  recipient: string; customer_name: string | null; subject: string | null; text: string; language: string | null;
+  error: string | null; copy_failed: boolean; conversation_id: number; conversation_kind: string; created_at: string
+}
+export type AutomaticMessageList = {
+  items: AutomaticMessage[]; total: number; counts: Record<AutomaticMessageStatus, number>;
+  sources: { kind: string; label: string; channel: AutomaticMessageChannel }[]
+}
 export type RegistrationStatus = 'pending' | 'registered' | 'excluded' | 'alerted'
 export type RegistrationCheck = {
   id: number; conversation_id: number; message_id: number; customer_email: string | null; customer_name: string | null;
