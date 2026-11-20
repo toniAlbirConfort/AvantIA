@@ -5,25 +5,25 @@ from __future__ import annotations
 import asyncio
 import csv
 import io
+import re
 import statistics
 import unicodedata
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP, Decimal
 from typing import Protocol
 from urllib.parse import urlsplit
 
 from sqlalchemy import desc, select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.business_scope import AUTONOMOUS_COMMUNITY, MUNICIPALITY, PROVINCE, scope_view
 from app.models import (
     AvailabilitySlot,
     ImportBatch,
     PropertySnapshot,
     ReservationSnapshot,
-    TariffGroupAssignment,
     TariffHoliday,
     TariffSeason,
     TariffStudy,
@@ -155,8 +155,198 @@ def _effective_reservations(
     return list(effective.values())
 
 
-def _property_mappings(db: Session) -> dict[str, TariffGroupAssignment]:
-    return {row.property_id: row for row in db.scalars(select(TariffGroupAssignment)).all()}
+@dataclass
+class PropertyGroup:
+    """Tariff group of one property, inferred from the catalog and its reservations."""
+
+    property_id: str
+    tariff_name: str
+    municipality: str = MUNICIPALITY
+    province: str | None = PROVINCE
+    autonomous_community: str | None = AUTONOMOUS_COMMUNITY
+
+    @classmethod
+    def from_snapshot(cls, item: dict) -> PropertyGroup:
+        names = {field.name for field in fields(cls)}
+        return cls(**{key: value for key, value in item.items() if key in names})
+
+
+# Groups whose price fit is within this distance of the best one are a near tie.
+GROUP_PRICE_TOLERANCE = 0.05
+MIN_PRICED_STAYS = 3
+_TOKEN_ALIASES = {"avda": "avenida"}
+_GENERIC_TOKENS = frozenset(
+    {
+        "apartamento",
+        "apartamentos",
+        "bloque",
+        "blq",
+        "del",
+        "dorm",
+        "dormitorio",
+        "dormitorios",
+        "las",
+        "los",
+    }
+)
+
+
+def _tokens(*values: str | None) -> set[str]:
+    words = re.split(r"[^a-z0-9]+", " ".join(_fold(value) for value in values))
+    result = set()
+    for word in words:
+        word = _TOKEN_ALIASES.get(word, word)
+        if len(word) >= 3 and not word.isdigit() and word not in _GENERIC_TOKENS:
+            result.add(word)
+    return result
+
+
+def _percent(value: float) -> str:
+    return f"{value * 100:.1f}".replace(".", ",") + " %"
+
+
+def infer_property_groups(db: Session) -> list[dict]:
+    """Link each active property to an SA tariff group without manual input.
+
+    Properties with the same category, building and capacity form one cohort and
+    share a group. The cohort takes the group whose SA nightly rates best match the
+    price of its confirmed and paid stays (median absolute deviation of the nightly
+    total). When several groups are within ``GROUP_PRICE_TOLERANCE`` of the best, a
+    distinctive word shared by the group and the cohort (for example the building
+    name) decides. Without priced stays only an unambiguous name match is used.
+    """
+    properties = _current_properties(db)
+    if not properties:
+        return []
+    seasons = db.scalars(select(TariffSeason).where(TariffSeason.rate_plan == "SA")).all()
+    groups = sorted({row.tariff_name for row in seasons})
+
+    cohorts: dict[tuple[str, str, int], list[PropertySnapshot]] = defaultdict(list)
+    for item in properties:
+        cohorts[(_fold(item.category), _fold(item.building), item.capacity)].append(item)
+    cohort_tokens = {
+        key: _tokens(*(value for item in members for value in (item.building, item.name)))
+        for key, members in cohorts.items()
+    }
+    all_tokens = set().union(*cohort_tokens.values())
+    shared_tokens = set.intersection(*cohort_tokens.values())
+    distinctive = all_tokens - shared_tokens
+    group_tokens = {group: _tokens(group) & distinctive for group in groups}
+
+    cohort_of = {item.property_id: key for key, members in cohorts.items() for item in members}
+    seasons_by_group: dict[str, list[TariffSeason]] = defaultdict(list)
+    for row in seasons:
+        seasons_by_group[row.tariff_name].append(row)
+    errors: dict[tuple[tuple[str, str, int], str], list[float]] = defaultdict(list)
+    for row in _effective_reservations(db):
+        key = cohort_of.get(row.property_id)
+        if (
+            key is None
+            or row.status not in BOOKABLE_STATUSES
+            or row.nights <= 0
+            or Decimal(row.total) <= 0
+        ):
+            continue
+        nightly = float(Decimal(row.total) / Decimal(row.nights))
+        for group in groups:
+            season = next(
+                (
+                    item
+                    for item in seasons_by_group[group]
+                    if item.start_date <= row.start_date <= item.end_date
+                ),
+                None,
+            )
+            if season is not None and season.nightly_rate > 0:
+                rate = float(season.nightly_rate)
+                errors[(key, group)].append(abs(nightly - rate) / rate)
+
+    output: list[dict] = []
+    for key, members in cohorts.items():
+        fits = {
+            group: (statistics.median(values), len(values))
+            for group in groups
+            for values in [errors.get((key, group), [])]
+            if len(values) >= MIN_PRICED_STAYS
+        }
+        tokens = cohort_tokens[key]
+        chosen = None
+        confidence = None
+        method = None
+        runner_up = None
+        if fits:
+            ranked = sorted(fits, key=lambda group: (fits[group][0], group))
+            best = ranked[0]
+            near = [
+                group for group in ranked if fits[group][0] <= fits[best][0] + GROUP_PRICE_TOLERANCE
+            ]
+
+            def affinity(group: str, tokens=tokens, fits=fits) -> tuple[int, int, float]:
+                matched = bool(group_tokens[group] & tokens)
+                mismatched = bool(group_tokens[group]) and not matched
+                return (-int(matched), int(mismatched), fits[group][0])
+
+            chosen = min(near, key=affinity)
+            others = [group for group in ranked if group != chosen]
+            runner_up = others[0] if others else None
+            error, stays = fits[chosen]
+            method = "reservations" if chosen == best else "reservations_and_name"
+            reason = (
+                f"{stays} reservas confirmadas o pagadas: desviación mediana "
+                f"{_percent(error)} frente a la tarifa SA"
+            )
+            if chosen != best:
+                words = ", ".join(sorted(group_tokens[chosen] & tokens))
+                reason += (
+                    f"; empate cercano con {best} ({_percent(fits[best][0])}), "
+                    f"resuelto por el nombre «{words}»"
+                )
+            elif runner_up:
+                reason += f"; siguiente grupo: {runner_up} ({_percent(fits[runner_up][0])})"
+            reason += "."
+            clear_margin = runner_up is None or fits[runner_up][0] - error >= GROUP_PRICE_TOLERANCE
+            confidence = "alta" if chosen == best and stays >= 10 and clear_margin else "media"
+        else:
+            by_name = [group for group in groups if group_tokens[group] & tokens]
+            if len(groups) == 1:
+                chosen = groups[0]
+                confidence = "baja"
+                method = "single_group"
+                reason = "Sin reservas con precio comparable; es el único grupo SA."
+            elif len(by_name) == 1:
+                chosen = by_name[0]
+                confidence = "baja"
+                method = "name"
+                reason = "Sin reservas con precio comparable; se vincula por el nombre."
+            else:
+                reason = "Sin reservas con precio comparable ni un nombre que lo identifique."
+        for item in members:
+            output.append(
+                {
+                    "property_id": item.property_id,
+                    "name": item.name,
+                    "building": item.building,
+                    "capacity": item.capacity,
+                    "tariff_name": chosen,
+                    "confidence": confidence,
+                    "method": method,
+                    "priced_stays": fits[chosen][1] if chosen in fits else 0,
+                    "price_error": round(fits[chosen][0], 4) if chosen in fits else None,
+                    "runner_up": runner_up,
+                    "reason": reason,
+                }
+            )
+    return sorted(output, key=lambda row: (row["tariff_name"] or "~", row["name"]))
+
+
+def _property_mappings(db: Session) -> dict[str, PropertyGroup]:
+    return {
+        row["property_id"]: PropertyGroup(
+            property_id=row["property_id"], tariff_name=row["tariff_name"]
+        )
+        for row in infer_property_groups(db)
+        if row["tariff_name"]
+    }
 
 
 def tariff_readiness(db: Session) -> dict:
@@ -167,18 +357,18 @@ def tariff_readiness(db: Session) -> dict:
         )
     )
     properties = _current_properties(db)
-    assignments = _property_mappings(db)
+    inferred = infer_property_groups(db)
     unmapped = [
-        {"id": item.property_id, "name": item.name, "city": item.city}
-        for item in properties
-        if item.property_id not in assignments
-        or assignments[item.property_id].tariff_name not in groups
+        {"id": item["property_id"], "name": item["name"], "city": None}
+        for item in inferred
+        if not item["tariff_name"]
     ]
-    mapped_groups = {
-        assignments[item.property_id].tariff_name
-        for item in properties
-        if item.property_id in assignments
-    }
+    uncertain = [
+        {"id": item["property_id"], "name": item["name"], "tariff_name": item["tariff_name"]}
+        for item in inferred
+        if item["tariff_name"] and item["confidence"] != "alta"
+    ]
+    mapped_groups = {item["tariff_name"] for item in inferred if item["tariff_name"]}
     unmapped_groups = sorted(set(groups) - mapped_groups)
     reservations = _effective_reservations(db)
     reservation_dates = [row.start_date for row in reservations] + [
@@ -198,7 +388,8 @@ def tariff_readiness(db: Session) -> dict:
         {"key": "properties", "ready": bool(properties), "count": len(properties)},
         {
             "key": "group_mapping",
-            "ready": bool(properties) and not unmapped and not unmapped_groups,
+            "ready": bool(properties) and not unmapped,
+            "count": len(inferred) - len(unmapped),
             "unmapped": unmapped,
             "unmapped_groups": unmapped_groups,
         },
@@ -211,25 +402,19 @@ def tariff_readiness(db: Session) -> dict:
         },
         {"key": "holiday_calendar", "ready": bool(holidays), "count": len(holidays)},
     ]
+    ready = {item["key"]: item["ready"] for item in checks}
     return {
-        "can_generate": all(
-            item["ready"]
-            for item in checks
-            if item["key"]
-            in {
-                "properties",
-                "group_mapping",
-                "reservations",
-                "market_provider",
-            }
-        ),
+        "can_generate": bool(mapped_groups)
+        and all(ready[key] for key in ("properties", "reservations", "market_provider")),
         "groups": groups,
         "active_properties": len(properties),
         "unmapped_properties": unmapped,
+        "uncertain_properties": uncertain,
         "unmapped_groups": unmapped_groups,
         "reservation_coverage": _coverage(reservation_dates),
         "availability_coverage": _coverage(slot_dates),
         "checks": checks,
+        "scope": scope_view(),
         "algorithm_version": ALGORITHM_VERSION,
         "price_change_limit_percent": int(PRICE_CHANGE_LIMIT * 100),
     }
@@ -242,70 +427,7 @@ def _coverage(values: list[date]) -> dict | None:
 
 
 def list_property_mappings(db: Session) -> list[dict]:
-    assignments = _property_mappings(db)
-    return [
-        {
-            "property_id": item.property_id,
-            "name": item.name,
-            "city": item.city,
-            "capacity": item.capacity,
-            "tariff_name": assignments[item.property_id].tariff_name
-            if item.property_id in assignments
-            else "",
-            "municipality": assignments[item.property_id].municipality
-            if item.property_id in assignments
-            else item.city or "",
-            "province": assignments[item.property_id].province
-            if item.property_id in assignments
-            else "",
-            "autonomous_community": assignments[item.property_id].autonomous_community
-            if item.property_id in assignments
-            else "",
-        }
-        for item in _current_properties(db)
-    ]
-
-
-def save_property_mappings(db: Session, mappings: list[dict], actor_user_id: int) -> list[dict]:
-    properties = {item.property_id: item for item in _current_properties(db)}
-    groups = set(
-        db.scalars(select(TariffSeason.tariff_name).where(TariffSeason.rate_plan == "SA")).all()
-    )
-    if not properties:
-        raise TariffLabError("Importa primero el catálogo de alojamientos")
-    seen: set[str] = set()
-    for item in mappings:
-        property_id = str(item.get("property_id", "")).strip()
-        tariff_name = str(item.get("tariff_name", "")).strip()
-        municipality = str(item.get("municipality", "")).strip()
-        if property_id in seen:
-            raise TariffLabError("Hay alojamientos repetidos en la asignación")
-        if property_id not in properties:
-            raise TariffLabError(f"El alojamiento {property_id} no está en el catálogo activo")
-        if tariff_name not in groups:
-            raise TariffLabError(f"El grupo SA {tariff_name} no existe")
-        if not municipality:
-            raise TariffLabError(f"Falta el municipio del alojamiento {property_id}")
-        seen.add(property_id)
-        assignment = db.get(TariffGroupAssignment, property_id)
-        if assignment is None:
-            assignment = TariffGroupAssignment(
-                property_id=property_id, tariff_name=tariff_name, municipality=municipality
-            )
-            db.add(assignment)
-        assignment.tariff_name = tariff_name
-        assignment.municipality = municipality[:150]
-        assignment.province = str(item.get("province") or "").strip()[:150] or None
-        assignment.autonomous_community = (
-            str(item.get("autonomous_community") or "").strip()[:150] or None
-        )
-        assignment.updated_by_id = actor_user_id
-    for property_id in properties.keys() - seen:
-        assignment = db.get(TariffGroupAssignment, property_id)
-        if assignment is not None:
-            db.delete(assignment)
-    db.commit()
-    return list_property_mappings(db)
+    return infer_property_groups(db)
 
 
 def holiday_view(db: Session) -> list[dict]:
@@ -321,74 +443,11 @@ def holiday_view(db: Session) -> list[dict]:
             "region": row.region,
             "municipality": row.municipality,
             "source": row.source,
+            "source_reference": row.source_reference,
+            "source_url": row.source_url,
         }
         for row in rows
     ]
-
-
-def add_holiday(db: Session, data: dict, actor_user_id: int) -> dict:
-    scope = str(data.get("scope", ""))
-    name = str(data.get("name", "")).strip()
-    region = str(data.get("region") or "").strip() or None
-    municipality = str(data.get("municipality") or "").strip() or None
-    if scope not in {"national", "regional", "municipal"}:
-        raise TariffLabError("El ámbito debe ser nacional, regional o municipal")
-    if not name or len(name) > 180:
-        raise TariffLabError("Indica un nombre de festivo de hasta 180 caracteres")
-    if scope == "regional" and not region:
-        raise TariffLabError("Indica la comunidad autónoma del festivo")
-    if scope == "municipal" and not municipality:
-        raise TariffLabError("Indica el municipio del festivo")
-    holiday_date = data.get("holiday_date")
-    if isinstance(holiday_date, str):
-        holiday_date = date.fromisoformat(holiday_date)
-    duplicate = db.scalar(
-        select(TariffHoliday.id).where(
-            TariffHoliday.holiday_date == holiday_date,
-            TariffHoliday.name == name,
-            TariffHoliday.scope == scope,
-            TariffHoliday.region.is_(None) if region is None else TariffHoliday.region == region,
-            TariffHoliday.municipality.is_(None)
-            if municipality is None
-            else TariffHoliday.municipality == municipality,
-        )
-    )
-    if duplicate:
-        raise TariffLabError("Ese festivo ya está registrado")
-    row = TariffHoliday(
-        holiday_date=holiday_date,
-        name=name,
-        scope=scope,
-        region=region,
-        municipality=municipality,
-        source=str(data.get("source") or "manual")[:255],
-        created_by_id=actor_user_id,
-    )
-    db.add(row)
-    try:
-        db.commit()
-    except IntegrityError:
-        db.rollback()
-        raise TariffLabError("Ese festivo ya está registrado") from None
-    db.refresh(row)
-    return {
-        "id": row.id,
-        "date": row.holiday_date.isoformat(),
-        "name": row.name,
-        "scope": row.scope,
-        "region": row.region,
-        "municipality": row.municipality,
-        "source": row.source,
-    }
-
-
-def remove_holiday(db: Session, holiday_id: int) -> bool:
-    row = db.get(TariffHoliday, holiday_id)
-    if row is None:
-        return False
-    db.delete(row)
-    db.commit()
-    return True
 
 
 def validate_study_request(
@@ -439,9 +498,6 @@ def create_study(db: Session, data: dict, actor_user_id: int) -> TariffStudy:
     unknown = sorted(set(groups) - known_groups)
     if unknown:
         raise TariffLabError("Grupos SA no reconocidos: " + ", ".join(unknown))
-    unmapped = tariff_readiness(db)["unmapped_properties"]
-    if unmapped:
-        raise TariffLabError("Completa primero la asignación de alojamientos a grupos SA")
     assignments = _property_mappings(db)
     missing_groups = [
         group
@@ -449,7 +505,9 @@ def create_study(db: Session, data: dict, actor_user_id: int) -> TariffStudy:
         if not any(item.tariff_name == group for item in assignments.values())
     ]
     if missing_groups:
-        raise TariffLabError("Asigna al menos un alojamiento a: " + ", ".join(missing_groups))
+        raise TariffLabError(
+            "Las reservas no permiten vincular ningún alojamiento a: " + ", ".join(missing_groups)
+        )
     property_batch = _latest_valid_batch(db, "properties")
     reservation_batch = _latest_valid_batch(db, "reservations")
     availability_batch = _latest_valid_batch(db, "availability")
@@ -567,7 +625,7 @@ def list_studies(db: Session) -> list[dict]:
 
 def _holiday_matches(
     day: date,
-    assignments: list[TariffGroupAssignment],
+    assignments: list[PropertyGroup],
     holidays: list[TariffHoliday],
 ):
     matches = []
@@ -621,7 +679,7 @@ def _effective_availability(
 
 def _historical_day_metrics(
     db: Session,
-    mappings: dict[str, TariffGroupAssignment],
+    mappings: dict[str, PropertyGroup],
     period_start: date,
     period_end: date | None = None,
     source_batches: dict | None = None,
@@ -791,7 +849,7 @@ def _historical_profile(
     metrics: dict[date, dict],
     day: date,
     holidays: list[TariffHoliday],
-    assignments: list[TariffGroupAssignment],
+    assignments: list[PropertyGroup],
 ) -> dict:
     target_holidays = _holiday_matches(day, assignments, holidays)
     holiday_names = {_fold(item.name) for item in target_holidays}
@@ -931,7 +989,7 @@ async def calculate_study(db: Session, study: TariffStudy) -> dict:
     source_batches = input_snapshot.get("source_batches") or {}
     if input_snapshot:
         mappings = {
-            item["property_id"]: TariffGroupAssignment(**item)
+            item["property_id"]: PropertyGroup.from_snapshot(item)
             for item in input_snapshot.get("assignments", [])
         }
         property_rows = _current_properties(db, source_batches.get("properties"))
@@ -979,6 +1037,13 @@ async def calculate_study(db: Session, study: TariffStudy) -> dict:
     end = study.period_end
     observations: list[tuple[MarketSearchRequest, MarketObservation]] = []
     market_warnings: list[str] = []
+    local_holiday_years = {row.holiday_date.year for row in holidays if row.scope == "municipal"}
+    for year in range(start.year, end.year + 1):
+        if year not in local_holiday_years:
+            market_warnings.append(
+                f"Los festivos locales de {MUNICIPALITY} para {year} aún no constan en una "
+                "fuente oficial; esas fechas se tratan como días ordinarios."
+            )
     requests: list[MarketSearchRequest] = []
     for tariff_name, municipality in groups_by_municipality:
         group_property_capacities = [

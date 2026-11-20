@@ -5,11 +5,13 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 
+from app import tariff_projection
 from app.auth import hasher
 from app.config import get_settings
 from app.db import Base, get_db
@@ -18,12 +20,11 @@ from app.models import (
     ImportBatch,
     PropertySnapshot,
     ReservationSnapshot,
-    TariffGroupAssignment,
     TariffMarketObservation,
     TariffSeason,
     User,
 )
-from app.tariff_lab import TariffLabError
+from app.tariff_lab import PropertyGroup, TariffLabError
 from app.tariff_projection import (
     _round_rate,
     apply_projection,
@@ -77,11 +78,25 @@ def _reservation(db, batch, locator, property_id, start, nights, total, created_
     ))
 
 
+@pytest.fixture(autouse=True)
+def _fixed_groups(monkeypatch):
+    """Pin the inferred tariff groups: inference itself is tested in test_tariff_lab."""
+    mapping = {"A1": GROUP, "A2": GROUP, "A3": GROUP, "S1": SMALL}
+    monkeypatch.setattr(
+        tariff_projection,
+        "_property_mappings",
+        lambda db: {
+            property_id: PropertyGroup(property_id=property_id, tariff_name=group)
+            for property_id, group in mapping.items()
+        },
+    )
+
+
 def _seed(db) -> None:
     """Three units in GROUP, one in SMALL; history for 2025 and 2026."""
     as_of = datetime(2026, 10, 27, 12, tzinfo=UTC)
     properties = _batch(db, "properties", as_of)
-    for index, (property_id, group) in enumerate(
+    for index, (property_id, _group) in enumerate(
         [("A1", GROUP), ("A2", GROUP), ("A3", GROUP), ("S1", SMALL)]
     ):
         db.add(PropertySnapshot(
@@ -89,9 +104,6 @@ def _seed(db) -> None:
             property_id=property_id, name=property_id, status_original="Activado",
             active=True, category="Apartamento", capacity=4, building=None,
             city="L'Alfàs del Pi", address=None,
-        ))
-        db.add(TariffGroupAssignment(
-            property_id=property_id, tariff_name=group, municipality="L'Alfàs del Pi"
         ))
     for group in (GROUP, SMALL):
         for start, end, rate in SEASONS_2027:

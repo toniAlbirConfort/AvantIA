@@ -1,27 +1,37 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api, apiDownload } from './api'
 import { Alert } from './components/ui/alert'
+import { Badge } from './components/ui/badge'
 import { Button } from './components/ui/button'
 import { Card } from './components/ui/card'
 import { Input } from './components/ui/input'
-import { Select } from './components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './components/ui/table'
 import { TariffProjections } from './TariffProjections'
 
 type ReadinessCheck = { key: string; ready: boolean; count?: number; name?: string | null; unmapped?: { id: string; name: string; city: string | null }[] }
+type BusinessScope = { country: string; autonomous_community: string; province: string; municipality: string; locality: string; label: string }
 type Readiness = {
   can_generate: boolean; groups: string[]; active_properties: number
   unmapped_properties: { id: string; name: string; city: string | null }[]
-  unmapped_groups: string[]
+  uncertain_properties: { id: string; name: string; tariff_name: string }[]
+  unmapped_groups: string[]; scope: BusinessScope
   reservation_coverage: { from: string; to: string } | null
   availability_coverage: { from: string; to: string } | null
   checks: ReadinessCheck[]; algorithm_version: string; price_change_limit_percent: number
 }
-type PropertyMapping = {
-  property_id: string; name: string; city: string | null; capacity: number
-  tariff_name: string; municipality: string; province: string; autonomous_community: string
+type PropertyGroup = {
+  property_id: string; name: string; building: string | null; capacity: number
+  tariff_name: string | null; confidence: 'alta' | 'media' | 'baja' | null; method: string | null
+  priced_stays: number; price_error: number | null; runner_up: string | null; reason: string
 }
-type Holiday = { id: number; date: string; name: string; scope: string; region: string | null; municipality: string | null; source: string }
+type Holiday = {
+  id: number; date: string; name: string; scope: string; region: string | null; municipality: string | null
+  source: string; source_reference: string | null; source_url: string | null
+}
+type HolidaySync = {
+  last_run_at: string | null; last_success_at: string | null; error: string | null; warnings: string[]
+  coverage: { year: number; national: number; regional: number; local: number }[]
+}
 type Study = {
   id: number; name: string; period_start: string; period_end: string; guests: number; nights: number
   tariff_names: string[]; parameters: Record<string, unknown>; status: string; error: string | null
@@ -44,9 +54,14 @@ type StudyResult = {
 }
 
 const checkLabels: Record<string, string> = {
-  properties: 'Catálogo activo', group_mapping: 'Asignación a grupos SA', reservations: 'Histórico de reservas',
+  properties: 'Catálogo activo', group_mapping: 'Vinculación con grupos SA', reservations: 'Histórico de reservas',
   availability_history: 'Histórico de disponibilidad', market_provider: 'Proveedor de mercado autorizado',
   holiday_calendar: 'Calendario de festivos',
+}
+const scopeLabels: Record<string, string> = { national: 'Nacional', regional: 'Autonómico', municipal: 'Local' }
+const sourceLabels: Record<string, string> = { boe: 'BOE', dogv: 'DOGV', ayuntamiento: 'Ayuntamiento' }
+const confidenceStyles: Record<string, string> = {
+  alta: 'bg-success-bg text-success-ink', media: 'bg-warning-bg text-warning-ink', baja: 'bg-warning-bg text-warning-ink',
 }
 const statusLabels: Record<string, string> = {
   pending: 'En cola', running: 'Calculando', completed: 'Completo', partial: 'Parcial', failed: 'Error',
@@ -74,13 +89,14 @@ function percentage(value: number | null | undefined) {
 
 export function TariffLab({ role, refreshVersion }: { role: string; refreshVersion: number }) {
   const [readiness, setReadiness] = useState<Readiness | null>(null)
-  const [mappings, setMappings] = useState<PropertyMapping[]>([])
+  const [propertyGroups, setPropertyGroups] = useState<PropertyGroup[]>([])
   const [holidays, setHolidays] = useState<Holiday[]>([])
+  const [holidaySync, setHolidaySync] = useState<HolidaySync | null>(null)
+  const [holidayYear, setHolidayYear] = useState(() => String(new Date().getFullYear()))
   const [studies, setStudies] = useState<Study[]>([])
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [selectedStudy, setSelectedStudy] = useState<Study | null>(null)
   const [loading, setLoading] = useState(true)
-  const [savingMapping, setSavingMapping] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
@@ -89,15 +105,17 @@ export function TariffLab({ role, refreshVersion }: { role: string; refreshVersi
 
   const load = useCallback(async () => {
     try {
-      const [nextReadiness, nextMappings, nextHolidays, nextStudies] = await Promise.all([
+      const [nextReadiness, nextGroups, nextHolidays, nextSync, nextStudies] = await Promise.all([
         api<Readiness>('/api/tariff-lab/readiness'),
-        api<PropertyMapping[]>('/api/tariff-lab/property-groups'),
+        api<PropertyGroup[]>('/api/tariff-lab/property-groups'),
         api<Holiday[]>('/api/tariff-lab/holidays'),
+        api<HolidaySync>('/api/tariff-lab/holidays/sync'),
         api<Study[]>('/api/tariff-lab/studies'),
       ])
       setReadiness(nextReadiness)
-      setMappings(nextMappings)
+      setPropertyGroups(nextGroups)
       setHolidays(nextHolidays)
+      setHolidaySync(nextSync)
       setStudies(nextStudies)
       if (selectedId != null) {
         const selected = await api<Study>(`/api/tariff-lab/studies/${selectedId}`)
@@ -120,47 +138,13 @@ export function TariffLab({ role, refreshVersion }: { role: string; refreshVersi
     return () => window.clearInterval(timer)
   }, [load, refreshVersion])
 
-  const updateMapping = (propertyId: string, field: keyof PropertyMapping, value: string) => {
-    setMappings(current => current.map(item => item.property_id === propertyId ? { ...item, [field]: value } : item))
-  }
-
-  async function saveMappings() {
-    setSavingMapping(true); setMessage(''); setError('')
+  async function syncHolidays() {
+    setBusy(true); setMessage(''); setError('')
     try {
-      const items = mappings.filter(item => item.tariff_name).map(item => ({
-        property_id: item.property_id, tariff_name: item.tariff_name, municipality: item.municipality,
-        province: item.province || null, autonomous_community: item.autonomous_community || null,
-      }))
-      const saved = await api<PropertyMapping[]>('/api/tariff-lab/property-groups', {
-        method: 'PUT', body: JSON.stringify({ items }),
-      })
-      setMappings(saved); setMessage('Asignaciones guardadas.')
+      await api('/api/tariff-lab/holidays/sync', { method: 'POST' })
+      setMessage('Sincronización de festivos en cola. Los datos se actualizarán en unos minutos.')
       await load()
     } catch (err) { setError((err as Error).message) }
-    finally { setSavingMapping(false) }
-  }
-
-  async function createHoliday(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault(); setBusy(true); setMessage(''); setError('')
-    const formElement = event.currentTarget
-    const form = new FormData(formElement)
-    const scope = String(form.get('scope'))
-    try {
-      await api('/api/tariff-lab/holidays', { method: 'POST', body: JSON.stringify({
-        holiday_date: form.get('date'), name: form.get('name'), scope,
-        region: scope === 'regional' ? form.get('region') : null,
-        municipality: scope === 'municipal' ? form.get('municipality') : null,
-        source: form.get('source') || 'manual',
-      }) })
-      formElement.reset(); setMessage('Festivo añadido.'); await load()
-    } catch (err) { setError((err as Error).message) }
-    finally { setBusy(false) }
-  }
-
-  async function deleteHoliday(id: number) {
-    setBusy(true); setError('')
-    try { await api(`/api/tariff-lab/holidays/${id}`, { method: 'DELETE' }); await load() }
-    catch (err) { setError((err as Error).message) }
     finally { setBusy(false) }
   }
 
@@ -197,6 +181,7 @@ export function TariffLab({ role, refreshVersion }: { role: string; refreshVersi
 
   const activeStudy = studies.find(item => item.status === 'pending' || item.status === 'running')
   const incompleteChecks = readiness?.checks.filter(item => !item.ready) || []
+  const yearHolidays = holidays.filter(item => item.date.startsWith(holidayYear))
 
   return <div className="grid items-start gap-4">
     {error && <Alert variant="destructive" role="alert">{error}</Alert>}
@@ -216,57 +201,66 @@ export function TariffLab({ role, refreshVersion }: { role: string; refreshVersi
         </div>)}
       </div>
       <div className="grid gap-3 text-xs text-muted-foreground sm:grid-cols-2">
+        {readiness?.scope && <p className="sm:col-span-2">Ámbito: {readiness.scope.label}</p>}
         <p>Histórico de reservas: {readiness?.reservation_coverage ? `${formatDate(readiness.reservation_coverage.from)} – ${formatDate(readiness.reservation_coverage.to)}` : 'sin datos'}</p>
         <p>Histórico de disponibilidad: {readiness?.availability_coverage ? `${formatDate(readiness.availability_coverage.from)} – ${formatDate(readiness.availability_coverage.to)}` : 'sin datos'}</p>
       </div>
       {incompleteChecks.some(item => item.key === 'market_provider') && <Alert variant="warning">El proveedor/API de mercado todavía no está instalado. Para activar la captura, hace falta integrar un proveedor autorizado con su contrato técnico.</Alert>}
-      {!!readiness?.unmapped_properties.length && <Alert variant="warning">Asigna los {readiness.unmapped_properties.length} alojamientos activos a un grupo SA antes de generar un estudio.</Alert>}
-      {!!readiness?.unmapped_groups.length && <Alert variant="warning">Hay grupos SA sin alojamientos asignados: {readiness.unmapped_groups.join(', ')}.</Alert>}
+      {!!readiness?.unmapped_properties.length && <Alert variant="warning">{readiness.unmapped_properties.length === 1 ? 'Hay 1 alojamiento' : `Hay ${readiness.unmapped_properties.length} alojamientos`} sin grupo SA deducible: quedan fuera de los estudios hasta que tengan reservas comparables.</Alert>}
+      {!!readiness?.uncertain_properties.length && <Alert variant="info">{readiness.uncertain_properties.length === 1 ? '1 vinculación tiene' : `${readiness.uncertain_properties.length} vinculaciones tienen`} confianza media o baja. Revisa el motivo en Vinculación.</Alert>}
+      {!!readiness?.unmapped_groups.length && <Alert variant="warning">Hay grupos SA sin alojamientos vinculados: {readiness.unmapped_groups.join(', ')}.</Alert>}
       {readiness?.checks.some(item => item.key === 'availability_history' && !item.ready) && <Alert variant="warning">Sin calendario histórico de disponibilidad no se calcula una tasa de ocupación fiable.</Alert>}
     </Card>
 
-    {admin && <Card className="grid gap-4 p-4 sm:p-6">
-      <div><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">CATÁLOGO</p>
-        <h2 className="text-xl font-semibold">Grupos SA y ubicación</h2>
-        <p className="mt-2 text-sm leading-6 text-muted-foreground">Vincula cada alojamiento con su grupo de tarifa y completa el municipio y la comunidad autónoma para comparar alojamientos equivalentes y resolver festivos.</p>
+    <Card className="grid gap-4 p-4 sm:p-6">
+      <div><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">VINCULACIÓN</p>
+        <h2 className="text-xl font-semibold">Alojamientos por grupo SA</h2>
+        <p className="mt-2 text-sm leading-6 text-muted-foreground">Se deduce automáticamente: los alojamientos con el mismo edificio y capacidad toman el grupo cuyas tarifas SA, consultables en Tarifas, se ajustan mejor al precio de sus reservas confirmadas y pagadas. Si dos grupos quedan muy cerca, decide el nombre del edificio.</p>
       </div>
-      {!mappings.length ? <p className="text-sm text-muted-foreground">Importa el catálogo de alojamientos para configurar la asignación.</p> : <>
-        <div className="max-w-full overflow-auto rounded-lg border border-border">
-          <Table><TableHeader><TableRow><TableHead>Alojamiento</TableHead><TableHead>Grupo SA</TableHead><TableHead>Municipio</TableHead><TableHead>Provincia</TableHead><TableHead>Comunidad autónoma</TableHead></TableRow></TableHeader>
-            <TableBody>{mappings.map(item => <TableRow key={item.property_id}>
-              <TableCell className="min-w-48"><span className="block font-medium">{item.name}</span><small className="text-xs text-muted-foreground">{item.property_id} · {item.capacity} plazas</small></TableCell>
-              <TableCell className="min-w-64"><Select aria-label={`Grupo de tarifa para ${item.name}`} value={item.tariff_name} onChange={event => updateMapping(item.property_id, 'tariff_name', event.target.value)}><option value="">Selecciona un grupo</option>{(readiness?.groups || []).map(group => <option key={group} value={group}>{group}</option>)}</Select></TableCell>
-              <TableCell className="min-w-36"><Input aria-label={`Municipio de ${item.name}`} value={item.municipality} onChange={event => updateMapping(item.property_id, 'municipality', event.target.value)} /></TableCell>
-              <TableCell className="min-w-36"><Input aria-label={`Provincia de ${item.name}`} value={item.province} onChange={event => updateMapping(item.property_id, 'province', event.target.value)} /></TableCell>
-              <TableCell className="min-w-44"><Input aria-label={`Comunidad autónoma de ${item.name}`} value={item.autonomous_community} onChange={event => updateMapping(item.property_id, 'autonomous_community', event.target.value)} /></TableCell>
+      {!propertyGroups.length ? <p className="text-sm text-muted-foreground">Importa el catálogo de alojamientos y las reservas para deducir la vinculación.</p> :
+        <div className="max-h-[28rem] max-w-full overflow-auto rounded-lg border border-border">
+          <Table><TableHeader><TableRow><TableHead>Alojamiento</TableHead><TableHead>Grupo SA</TableHead><TableHead>Confianza</TableHead><TableHead>Motivo</TableHead></TableRow></TableHeader>
+            <TableBody>{propertyGroups.map(item => <TableRow key={item.property_id}>
+              <TableCell className="min-w-44"><span className="block font-medium">{item.name}</span><small className="text-xs text-muted-foreground">{item.building || 'Sin edificio'} · {item.capacity} plazas</small></TableCell>
+              <TableCell className="min-w-52">{item.tariff_name || <span className="text-warning-ink">Sin grupo deducible</span>}</TableCell>
+              <TableCell>{item.confidence ? <Badge className={confidenceStyles[item.confidence]}>{item.confidence[0].toUpperCase() + item.confidence.slice(1)}</Badge> : '—'}</TableCell>
+              <TableCell className="min-w-72 text-xs leading-5 text-muted-foreground">{item.reason}</TableCell>
             </TableRow>)}</TableBody>
           </Table>
-        </div>
-        <Button type="button" className="w-fit" disabled={savingMapping} onClick={() => void saveMappings()}>{savingMapping ? 'Guardando…' : 'Guardar asignaciones'}</Button>
-      </>}
-    </Card>}
+        </div>}
+    </Card>
 
-    {admin && <Card className="grid gap-4 p-4 sm:p-6">
-      <div><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">CALENDARIO</p>
-        <h2 className="text-xl font-semibold">Festivos por ámbito</h2>
-        <p className="mt-2 text-sm leading-6 text-muted-foreground">Añade fechas nacionales, autonómicas o municipales. Se relacionan con la ubicación guardada en cada alojamiento.</p>
+    <Card className="grid gap-4 p-4 sm:p-6">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">CALENDARIO OFICIAL</p>
+          <h2 className="text-xl font-semibold">Festivos de {readiness?.scope.locality || 'Albir'}, {readiness?.scope.municipality || "l'Alfàs del Pi"}</h2>
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">Se obtienen cada día de fuentes oficiales: festivos nacionales y de la {readiness?.scope.autonomous_community || 'Comunitat Valenciana'} del BOE, y festivos locales del Ayuntamiento y del DOGV. No se editan a mano.</p>
+        </div>
+        {admin && <Button type="button" variant="outline" disabled={busy} onClick={() => void syncHolidays()}>Sincronizar ahora</Button>}
       </div>
-      <form className="grid items-end gap-3 sm:grid-cols-2 xl:grid-cols-6" onSubmit={event => void createHoliday(event)}>
-        <label className="grid gap-1.5 text-sm font-medium">Fecha<Input name="date" type="date" required /></label>
-        <label className="grid gap-1.5 text-sm font-medium">Nombre<Input name="name" maxLength={180} required /></label>
-        <label className="grid gap-1.5 text-sm font-medium">Ámbito<Select name="scope" defaultValue="national"><option value="national">Nacional</option><option value="regional">Autonómico</option><option value="municipal">Municipal</option></Select></label>
-        <label className="grid gap-1.5 text-sm font-medium">Comunidad autónoma<Input name="region" placeholder="Requerida en ámbito autonómico" /></label>
-        <label className="grid gap-1.5 text-sm font-medium">Municipio<Input name="municipality" placeholder="Requerido en ámbito municipal" /></label>
-        <Button type="submit" disabled={busy}>Añadir festivo</Button>
-      </form>
+      {holidaySync && <div className="grid gap-3">
+        <p className="text-xs text-muted-foreground">Última sincronización: {holidaySync.last_run_at ? new Date(holidaySync.last_run_at).toLocaleString('es-ES') : 'pendiente'}</p>
+        {holidaySync.error && <Alert variant="destructive">No se pudo completar la última sincronización: {holidaySync.error}</Alert>}
+        {!!holidaySync.warnings.length && <Alert variant="warning"><ul className="list-inside list-disc">{holidaySync.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul></Alert>}
+        <div className="flex flex-wrap gap-2">{holidaySync.coverage.map(item => <button type="button" key={item.year} onClick={() => setHolidayYear(String(item.year))} aria-pressed={holidayYear === String(item.year)} className={`grid min-w-28 gap-0.5 rounded-md border px-3 py-2 text-left text-xs ${holidayYear === String(item.year) ? 'border-primary bg-accent' : 'border-border bg-background hover:bg-accent'}`}>
+          <strong className="text-sm text-foreground">{item.year}</strong>
+          <span className="text-muted-foreground">{item.national + item.regional} nac. y aut.</span>
+          <span className={item.local ? 'text-muted-foreground' : 'text-warning-ink'}>{item.local ? `${item.local} locales` : item.year < new Date().getFullYear() ? 'Locales sin fuente' : 'Locales pendientes'}</span>
+        </button>)}</div>
+      </div>}
       <div className="max-w-full overflow-auto rounded-lg border border-border">
-        <Table><TableHeader><TableRow><TableHead>Fecha</TableHead><TableHead>Festivo</TableHead><TableHead>Ámbito</TableHead><TableHead>Ubicación</TableHead><TableHead className="text-right">Acción</TableHead></TableRow></TableHeader>
-          <TableBody>{holidays.map(item => <TableRow key={item.id}><TableCell className="whitespace-nowrap">{formatDate(item.date)}</TableCell><TableCell>{item.name}</TableCell><TableCell>{item.scope === 'regional' ? 'Autonómico' : item.scope === 'municipal' ? 'Municipal' : 'Nacional'}</TableCell><TableCell>{item.municipality || item.region || 'España'}</TableCell><TableCell className="text-right"><Button type="button" variant="ghost" size="sm" disabled={busy} onClick={() => void deleteHoliday(item.id)}>Eliminar</Button></TableCell></TableRow>)}
-            {!holidays.length && <TableRow><TableCell colSpan={5} className="py-6 text-center text-sm text-muted-foreground">Todavía no hay festivos cargados.</TableCell></TableRow>}
+        <Table><TableHeader><TableRow><TableHead>Fecha</TableHead><TableHead>Festivo</TableHead><TableHead>Ámbito</TableHead><TableHead>Fuente</TableHead></TableRow></TableHeader>
+          <TableBody>{yearHolidays.map(item => <TableRow key={item.id}>
+            <TableCell className="whitespace-nowrap">{formatDate(item.date)}</TableCell>
+            <TableCell>{item.name}</TableCell>
+            <TableCell>{scopeLabels[item.scope] || item.scope}</TableCell>
+            <TableCell className="text-xs">{item.source_url ? <a className="underline underline-offset-2" href={item.source_url} target="_blank" rel="noreferrer">{sourceLabels[item.source] || item.source}{item.source_reference ? ` · ${item.source_reference}` : ''}</a> : sourceLabels[item.source] || item.source}</TableCell>
+          </TableRow>)}
+            {!yearHolidays.length && <TableRow><TableCell colSpan={4} className="py-6 text-center text-sm text-muted-foreground">No hay festivos oficiales de {holidayYear} todavía.</TableCell></TableRow>}
           </TableBody>
         </Table>
       </div>
-    </Card>}
+    </Card>
 
     <TariffProjections admin={admin} groups={readiness?.groups || []} refreshVersion={refreshVersion} />
 

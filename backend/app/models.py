@@ -356,18 +356,6 @@ class TariffSeason(Base):
     nightly_rate: Mapped[Decimal] = mapped_column(Numeric(10, 2))
 
 
-class TariffGroupAssignment(Base):
-    __tablename__ = "tariff_group_assignments"
-
-    property_id: Mapped[str] = mapped_column(String(100), primary_key=True)
-    tariff_name: Mapped[str] = mapped_column(String(180), index=True)
-    municipality: Mapped[str] = mapped_column(String(150))
-    province: Mapped[str | None] = mapped_column(String(150))
-    autonomous_community: Mapped[str | None] = mapped_column(String(150))
-    updated_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
-
-
 class TariffHoliday(Base):
     __tablename__ = "tariff_holidays"
     __table_args__ = (
@@ -387,6 +375,8 @@ class TariffHoliday(Base):
     region: Mapped[str | None] = mapped_column(String(150))
     municipality: Mapped[str | None] = mapped_column(String(150))
     source: Mapped[str] = mapped_column(String(255), default="manual")
+    source_reference: Mapped[str | None] = mapped_column(String(120))
+    source_url: Mapped[str | None] = mapped_column(String(500))
     created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
