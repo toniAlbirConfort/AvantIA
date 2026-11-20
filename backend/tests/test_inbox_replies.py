@@ -215,3 +215,30 @@ def test_filed_notice_stays_pending_once_an_operator_reopens_it(db, monkeypatch)
     db.commit()
     assert inbox_replies.file_platform_notices(db, WROTE) == 1
     assert conversation.status == "filed"
+
+
+def test_notices_that_may_ask_for_something_are_never_filed_and_reopen(db, monkeypatch):
+    monkeypatch.setattr(get_settings(), "internal_sender_domains", "albirconfort.test")
+    price = notice(db)
+    actionable = {}
+    for subject in ("Tienes un nuevo mensaje", "Reserva: alojamiento AVDA. BLQ.A - 2ºB",
+                    "Detalle de comunicaciones erróneas del lote 2", "Re: cierres 2027",
+                    "Check-in online realizado de la reserva"):
+        item = notice(db, address="Avantio <noreply@avantio.com>")
+        item.subject = subject
+        actionable[subject] = item
+    db.commit()
+    assert inbox_replies.file_platform_notices(db, WROTE) == 1
+    assert price.status == "filed"
+    assert {item.status for item in actionable.values()} == {"pending"}
+
+    # Filed by the earlier rule: the current one puts it back to pending.
+    message_notice = actionable["Tienes un nuevo mensaje"]
+    message_notice.status = "filed"
+    db.commit()
+    assert inbox_replies.reopen_actionable_notices(db) == 1
+    assert message_notice.status == "pending"
+    assert price.status == "filed"
+    assert db.scalar(select(AuditEvent).where(
+        AuditEvent.action == "conversation.notice_reopened",
+        AuditEvent.conversation_id == message_notice.id))
