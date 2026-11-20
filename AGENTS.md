@@ -5,6 +5,12 @@
 - `.agents/skills/avantia-design/SKILL.md`: diseño de la interfaz. Se aplica a cualquier cambio de frontend.
 - `.agents/skills/avantia-avisos/SKILL.md`: sistema de avisos. En cada implementación nueva, evalúa si genera eventos que convenga notificar y, si es así, pregunta antes de añadir el aviso.
 
+## Ámbito del negocio
+
+- Nuestro ámbito es **España, Comunitat Valenciana, provincia de Alicante, municipio de l'Alfàs del Pi, zona de Albir**. Todos los alojamientos están ahí.
+- Cualquier cálculo que dependa de la ubicación (festivos, comparables de mercado) usa este ámbito único, definido en `backend/app/business_scope.py`. No se piden ni se guardan ubicaciones por alojamiento.
+- Los festivos se obtienen automáticamente de fuentes oficiales, nunca a mano: el BOE para los nacionales y los de la Comunitat Valenciana, y el Ayuntamiento de l'Alfàs del Pi y el DOGV para los locales (`backend/app/holiday_sync.py`). Cuando el DOGV publique la resolución anual de fiestas locales, añade su PDF a `DOGV_LOCAL_RESOLUTIONS`.
+
 ## Servidor de producción e integración
 
 - El servidor local de producción es `DESKTOP-4597Q79`, accesible por SSH como `informatica2@192.168.0.158`.

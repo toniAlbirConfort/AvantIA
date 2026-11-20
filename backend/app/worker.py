@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 from sqlalchemy import select
@@ -13,6 +13,8 @@ from app.availability import env_csv_mapping, import_csv
 from app.config import get_settings
 from app.db import SessionLocal
 from app.delivery import send_approved
+from app.holiday_sync import sync_due, sync_official_holidays
+from app.ingest import enqueue
 from app.mail import poll_mail
 from app.models import Conversation, Draft, Job, TariffStudy
 from app.notifications import notify_job_failed, notify_job_recovered, watch_gowa
@@ -56,6 +58,8 @@ async def run_job() -> bool:
                 await run_study(db, int(job.payload["study_id"]))
             elif job.kind == "registration_check":
                 run_registration_check(db)
+            elif job.kind == "holiday_sync":
+                sync_official_holidays(db)
             else:
                 raise ValueError("Unknown job kind")
             job.status = "done"
@@ -106,6 +110,16 @@ def watch_csv() -> None:
                     path.rename(path.with_suffix(".invalid"))
             except Exception:
                 logger.exception("CSV import failed: %s", path.name)
+
+
+def schedule_holiday_sync() -> None:
+    """Queue the daily refresh of official holidays (BOE, DOGV and town hall)."""
+    with SessionLocal() as db:
+        if sync_due(db):
+            enqueue(
+                db, key=f"holiday-sync:{date.today().isoformat()}", kind="holiday_sync", payload={}
+            )
+            db.commit()
 
 
 def recover_stale_jobs() -> None:
@@ -162,6 +176,10 @@ async def main() -> None:
                     logger.exception("Avantio sync watchdog failed")
             recover_stale_jobs()
             watch_csv()
+            try:
+                schedule_holiday_sync()
+            except Exception:
+                logger.exception("Holiday sync scheduling failed")
             with SessionLocal() as db:
                 scan_notifications(db)
             last_housekeeping = tick

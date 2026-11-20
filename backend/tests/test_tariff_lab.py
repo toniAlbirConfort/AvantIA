@@ -12,15 +12,16 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 
 from app.auth import hasher
+from app.business_scope import MUNICIPALITY
 from app.config import get_settings
 from app.db import get_db
 from app.main import app
 from app.models import (
     AvailabilitySlot,
     ImportBatch,
+    Job,
     PropertySnapshot,
     ReservationSnapshot,
-    TariffGroupAssignment,
     TariffHoliday,
     TariffSeason,
     TariffStudy,
@@ -29,6 +30,7 @@ from app.models import (
 from app.tariff_lab import (
     MarketObservation,
     MarketSearchRequest,
+    PropertyGroup,
     TariffLabError,
     _base_rate,
     _historical_day_metrics,
@@ -36,6 +38,7 @@ from app.tariff_lab import (
     _merge_seasons,
     calculate_study,
     create_study,
+    infer_property_groups,
     register_market_provider,
     study_report_pdf,
     tariff_readiness,
@@ -92,6 +95,44 @@ def test_tariff_lab_migration_creates_mapping_holiday_and_study_tables():
         engine.dispose()
 
 
+def test_inferred_groups_migration_drops_manual_data_and_adds_sources():
+    path = MIGRATION_PATH.with_name("0026_tariff_lab_inferred_groups.py")
+    spec = importlib.util.spec_from_file_location("tariff_lab_inferred_groups", path)
+    assert spec and spec.loader
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    engine = create_engine("sqlite+pysqlite://")
+    try:
+        with engine.begin() as connection:
+            with Operations.context(MigrationContext.configure(connection)):
+                TARIFF_LAB_MIGRATION.upgrade()
+                connection.execute(
+                    text(
+                        "INSERT INTO tariff_holidays"
+                        " (holiday_date, name, scope, source, created_at)"
+                        " VALUES ('2027-01-06', 'Manual', 'national', 'manual', '2026-01-01'),"
+                        " ('2027-01-01', 'Oficial', 'national', 'boe', '2026-01-01')"
+                    )
+                )
+                migration.upgrade()
+                # Running it again is harmless: fresh databases already match the models.
+                migration.upgrade()
+            tables = set(
+                connection.execute(
+                    text("SELECT name FROM sqlite_master WHERE type='table'")
+                ).scalars()
+            )
+            columns = {
+                row[1] for row in connection.execute(text("PRAGMA table_info(tariff_holidays)"))
+            }
+            names = set(connection.execute(text("SELECT name FROM tariff_holidays")).scalars())
+        assert "tariff_group_assignments" not in tables
+        assert {"source_reference", "source_url"} <= columns
+        assert names == {"Oficial"}
+    finally:
+        engine.dispose()
+
+
 def test_study_request_validates_dates_groups_and_search_context():
     validate_study_request(
         name="Temporada 2027",
@@ -119,12 +160,7 @@ def test_study_request_validates_dates_groups_and_search_context():
 
 
 def test_holiday_scopes_and_sa_season_boundaries_are_inclusive():
-    assignment = TariffGroupAssignment(
-        property_id="P-1",
-        tariff_name="Grupo SA",
-        municipality="Alfàs del Pi",
-        autonomous_community="Comunitat Valenciana",
-    )
+    assignment = PropertyGroup(property_id="P-1", tariff_name="Grupo SA")
     day = date(2028, 3, 19)
     holidays = [
         TariffHoliday(holiday_date=day, name="Nacional", scope="national"),
@@ -138,7 +174,7 @@ def test_holiday_scopes_and_sa_season_boundaries_are_inclusive():
             holiday_date=day,
             name="Municipal",
             scope="municipal",
-            municipality="Alfas del Pi",
+            municipality="L'Alfas del Pi",
         ),
         TariffHoliday(
             holiday_date=day,
@@ -264,15 +300,6 @@ def _make_study_fixture(db):
             address=None,
         )
     )
-    db.add(
-        TariffGroupAssignment(
-            property_id="P-1",
-            tariff_name="Grupo SA",
-            municipality="Alfaz del Pi",
-            province="Alicante",
-            autonomous_community="Comunitat Valenciana",
-        )
-    )
     for index, year in enumerate((2025, 2026)):
         db.add(
             ReservationSnapshot(
@@ -313,6 +340,15 @@ def _make_study_fixture(db):
             holiday_date=date(2027, 1, 6),
             name="Epifanía",
             scope="national",
+            source="test",
+        )
+    )
+    db.add(
+        TariffHoliday(
+            holiday_date=date(2027, 11, 9),
+            name="Fiestas locales",
+            scope="municipal",
+            municipality=MUNICIPALITY,
             source="test",
         )
     )
@@ -409,13 +445,11 @@ def test_study_freezes_mapping_rates_and_source_batch_cutoffs(db):
         actor_user_id=1,
     )
     snapshot = study.parameters["input_snapshot"]
-    assert snapshot["assignments"][0]["municipality"] == "Alfaz del Pi"
+    assert snapshot["assignments"][0]["municipality"] == MUNICIPALITY
     assert snapshot["tariff_seasons"][0]["nightly_rate"] == "129.00"
     assert snapshot["source_batches"]["availability_through"]
 
-    assignment = db.get(TariffGroupAssignment, "P-1")
     rate = db.query(TariffSeason).filter_by(tariff_name="Grupo SA").one()
-    assignment.municipality = "Municipio nuevo"
     rate.nightly_rate = Decimal("250.00")
     latest_reservations = ImportBatch(
         dataset="reservations",
@@ -460,7 +494,7 @@ def test_study_freezes_mapping_rates_and_source_batch_cutoffs(db):
     finally:
         register_market_provider(None)
 
-    assert provider.requests[0].municipality == "Alfaz del Pi"
+    assert provider.requests[0].municipality == MUNICIPALITY
     assert result["daily"][0]["current_rate"] == "129.00"
     assert result["daily"][0]["historical_adr"] == "155.00"
     assert result["source_batches"] == snapshot["source_batches"]
@@ -501,7 +535,7 @@ def test_historical_metrics_exclude_cancellation_and_owner_use_and_count_each_st
             )
         )
     db.commit()
-    assignments = {"P-1": db.get(TariffGroupAssignment, "P-1")}
+    assignments = {"P-1": PropertyGroup(property_id="P-1", tariff_name="Grupo SA")}
     metrics, _ = _historical_day_metrics(db, assignments, date(2027, 1, 6), date(2027, 1, 6))
 
     assert metrics["Grupo SA"][date(2025, 1, 7)]["sold"] == 0
@@ -511,7 +545,7 @@ def test_historical_metrics_exclude_cancellation_and_owner_use_and_count_each_st
     assert metrics["Grupo SA"][date(2025, 1, 9)]["adr"] == Decimal("150")
 
 
-def test_property_mapping_api_is_admin_only_and_preserves_existing_tariffs(db, monkeypatch):
+def test_tariff_lab_api_is_read_only_for_groups_and_holidays(db, monkeypatch):
     register_market_provider(None)
     settings = get_settings()
     monkeypatch.setattr(settings, "app_secret", "unit-test-secret-with-more-than-32-characters")
@@ -561,44 +595,28 @@ def test_property_mapping_api_is_admin_only_and_preserves_existing_tariffs(db, m
     app.dependency_overrides[get_db] = lambda: db
     try:
         with TestClient(app) as client:
-            admin_token = client.post(
-                "/api/login",
-                json={
-                    "username": "lab-admin",
-                    "password": "very-long-password",
-                },
-            ).json()["token"]
-            operator_token = client.post(
-                "/api/login",
-                json={
-                    "username": "lab-operator",
-                    "password": "very-long-password",
-                },
-            ).json()["token"]
+            tokens = {
+                name: client.post(
+                    "/api/login", json={"username": name, "password": "very-long-password"}
+                ).json()["token"]
+                for name in ("lab-admin", "lab-operator")
+            }
+            admin_headers = {"Authorization": f"Bearer {tokens['lab-admin']}"}
+            operator_headers = {"Authorization": f"Bearer {tokens['lab-operator']}"}
             assert client.get("/api/tariff-lab/readiness").status_code == 401
-            assert (
-                client.put(
-                    "/api/tariff-lab/property-groups",
-                    json={"items": []},
-                    headers={"Authorization": f"Bearer {operator_token}"},
-                ).status_code
-                == 403
+            groups = client.get("/api/tariff-lab/property-groups", headers=operator_headers)
+            manual_mapping = client.put(
+                "/api/tariff-lab/property-groups", json={"items": []}, headers=admin_headers
             )
-            response = client.put(
-                "/api/tariff-lab/property-groups",
-                json={
-                    "items": [
-                        {
-                            "property_id": "P-1",
-                            "tariff_name": "Grupo SA",
-                            "municipality": "Alfaz del Pi",
-                            "province": "Alicante",
-                            "autonomous_community": "Comunitat Valenciana",
-                        }
-                    ]
-                },
-                headers={"Authorization": f"Bearer {admin_token}"},
+            manual_holiday = client.post(
+                "/api/tariff-lab/holidays",
+                json={"holiday_date": "2027-01-06", "name": "Manual", "scope": "national"},
+                headers=admin_headers,
             )
+            sync_status = client.get("/api/tariff-lab/holidays/sync", headers=operator_headers)
+            operator_sync = client.post("/api/tariff-lab/holidays/sync", headers=operator_headers)
+            admin_sync = client.post("/api/tariff-lab/holidays/sync", headers=admin_headers)
+            readiness = client.get("/api/tariff-lab/readiness", headers=operator_headers)
             provider_required = client.post(
                 "/api/tariff-lab/studies",
                 json={
@@ -609,16 +627,126 @@ def test_property_mapping_api_is_admin_only_and_preserves_existing_tariffs(db, m
                     "nights": 7,
                     "tariff_names": ["Grupo SA"],
                 },
-                headers={"Authorization": f"Bearer {admin_token}"},
+                headers=admin_headers,
             )
-            tariffs_before_after = client.get(
-                "/api/tariffs",
-                headers={"Authorization": f"Bearer {operator_token}"},
-            )
-        assert response.status_code == 200
-        assert response.json()[0]["tariff_name"] == "Grupo SA"
+            tariffs_after = client.get("/api/tariffs", headers=operator_headers)
+        assert groups.status_code == 200
+        assert groups.json()[0]["tariff_name"] == "Grupo SA"
+        assert groups.json()[0]["method"] == "single_group"
+        assert manual_mapping.status_code == 405
+        assert manual_holiday.status_code == 405
+        assert sync_status.status_code == 200
+        assert operator_sync.status_code == 403
+        assert admin_sync.status_code == 202
+        assert db.query(Job).filter_by(kind="holiday_sync").count() == 1
+        assert readiness.json()["scope"]["municipality"] == MUNICIPALITY
         assert provider_required.status_code == 503
-        assert tariffs_before_after.status_code == 200
-        assert tariffs_before_after.json()[0]["seasons"][0]["nightly_rate"] == "129.00"
+        assert tariffs_after.status_code == 200
+        assert tariffs_after.json()[0]["seasons"][0]["nightly_rate"] == "129.00"
     finally:
         app.dependency_overrides.clear()
+
+
+def _add_property(db, batch_id, property_id, name, building, capacity):
+    db.add(
+        PropertySnapshot(
+            batch_id=batch_id,
+            source_row=int(property_id[2:]),
+            row_hash=property_id,
+            property_id=property_id,
+            name=name,
+            status_original="Activado",
+            active=True,
+            category="Apartamento",
+            capacity=capacity,
+            building=building,
+            city="Albir",
+            address=None,
+        )
+    )
+
+
+def _add_stay(db, batch_id, locator, property_id, start, nightly_total):
+    db.add(
+        ReservationSnapshot(
+            batch_id=batch_id,
+            source_batch_id=batch_id,
+            source_row=3,
+            row_hash=locator,
+            locator=locator,
+            property_id=property_id,
+            status_original="Pagada",
+            status="paid",
+            created_on=start,
+            start_date=start,
+            end_date=date.fromordinal(start.toordinal() + 2),
+            nights=2,
+            adults=2,
+            children=0,
+            infants=0,
+            display_name="Huésped",
+            portal="Directo",
+            total=Decimal(nightly_total) * 2,
+            net=Decimal(nightly_total) * 2,
+            tax=Decimal("0"),
+            paid=Decimal(nightly_total) * 2,
+            pending=Decimal("0"),
+        )
+    )
+
+
+def test_groups_are_inferred_from_reservation_prices_and_building_names(db):
+    property_batch = ImportBatch(
+        dataset="properties", source="t", filename="p", checksum="p", status="valid", row_count=4
+    )
+    reservation_batch = ImportBatch(
+        dataset="reservations", source="t", filename="r", checksum="r", status="valid", row_count=9
+    )
+    db.add_all([property_batch, reservation_batch])
+    db.flush()
+    _add_property(db, property_batch.id, "P-10", "AVDA. BLQ.A - 1ºA", "Confort - Blq. A", 3)
+    _add_property(db, property_batch.id, "P-11", "AVDA. BLQ.A - 2ºA", "Confort - Blq. A", 3)
+    _add_property(db, property_batch.id, "P-20", "AVDA. BLQ.B - 1ºA", "Confort - Blq. B", 4)
+    _add_property(db, property_batch.id, "P-30", "Estrella 1º", "Confort - Estrella", 5)
+    _add_property(db, property_batch.id, "P-40", "Villa nueva", "Otro edificio", 8)
+    for name, rate in (
+        ("Confort 1 dormitorio", "100"),
+        ("AVENIDA 2 dormitorios", "150"),
+        ("ESTRELLA 2 dormitorios", "140"),
+    ):
+        db.add(
+            TariffSeason(
+                tariff_name=name,
+                rate_plan="SA",
+                start_date=date(2026, 9, 1),
+                end_date=date(2026, 12, 31),
+                nightly_rate=Decimal(rate),
+            )
+        )
+    stays = [
+        # Block A matches the one-bedroom rate clearly.
+        ("P-10", "98"), ("P-11", "102"), ("P-10", "101"),
+        # Block B is between the Estrella and Avenida rates: the name decides.
+        ("P-20", "141"), ("P-20", "143"), ("P-20", "146"),
+        # Estrella is a near tie too and its own name wins.
+        ("P-30", "146"), ("P-30", "144"), ("P-30", "147"),
+    ]
+    for index, (property_id, nightly) in enumerate(stays):
+        _add_stay(
+            db, reservation_batch.id, f"L-{index}", property_id, date(2026, 10, 1 + index), nightly
+        )
+    db.commit()
+
+    result = {row["property_id"]: row for row in infer_property_groups(db)}
+
+    assert result["P-10"]["tariff_name"] == "Confort 1 dormitorio"
+    assert result["P-11"]["tariff_name"] == "Confort 1 dormitorio"
+    assert result["P-10"]["priced_stays"] == 3
+    assert result["P-20"]["tariff_name"] == "AVENIDA 2 dormitorios"
+    assert result["P-20"]["method"] == "reservations_and_name"
+    assert result["P-20"]["confidence"] == "media"
+    assert result["P-30"]["tariff_name"] == "ESTRELLA 2 dormitorios"
+    assert result["P-40"]["tariff_name"] is None
+    readiness = tariff_readiness(db)
+    assert [item["id"] for item in readiness["unmapped_properties"]] == ["P-40"]
+    assert readiness["checks"][1]["ready"] is False

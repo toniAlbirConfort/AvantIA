@@ -69,6 +69,7 @@ from app.gowa import (
 )
 from app.html_sanitize import sanitize_html
 from app.import_issues import split_issues, with_repairs
+from app.holiday_sync import holiday_sync_view
 from app.ingest import enqueue, ingest
 from app.integrations import ollama_translate_email
 from app.models import (
@@ -121,13 +122,10 @@ from app.retention import retention_csv, retention_view
 from app.tariff_lab import (
     MarketProviderUnavailable,
     TariffLabError,
-    add_holiday,
     create_study,
     holiday_view,
     list_property_mappings,
     list_studies,
-    remove_holiday,
-    save_property_mappings,
     study_report_pdf,
     study_view,
     tariff_readiness,
@@ -235,27 +233,6 @@ class MessageAnnotationIn(BaseModel):
 
 class ClassificationResolutionIn(BaseModel):
     outcome: str = Field(pattern="^(handled|not_demand)$")
-
-
-class TariffPropertyMappingIn(BaseModel):
-    property_id: str = Field(min_length=1, max_length=100)
-    tariff_name: str = Field(min_length=1, max_length=180)
-    municipality: str = Field(min_length=1, max_length=150)
-    province: str | None = Field(default=None, max_length=150)
-    autonomous_community: str | None = Field(default=None, max_length=150)
-
-
-class TariffPropertyMappingsIn(BaseModel):
-    items: list[TariffPropertyMappingIn] = Field(max_length=10000)
-
-
-class TariffHolidayIn(BaseModel):
-    holiday_date: date
-    name: str = Field(min_length=1, max_length=180)
-    scope: Literal["national", "regional", "municipal"]
-    region: str | None = Field(default=None, max_length=150)
-    municipality: str | None = Field(default=None, max_length=150)
-    source: str = Field(default="manual", max_length=255)
 
 
 class TariffStudyIn(BaseModel):
@@ -1450,56 +1427,27 @@ def tariff_property_groups(db: Db, user: Operator) -> list[dict]:
     return list_property_mappings(db)
 
 
-@app.put("/api/tariff-lab/property-groups")
-def update_tariff_property_groups(
-    data: TariffPropertyMappingsIn, db: Db, admin: Admin,
-) -> list[dict]:
-    try:
-        result = save_property_mappings(
-            db, [item.model_dump() for item in data.items], admin.id
-        )
-    except TariffLabError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    db.add(AuditEvent(
-        actor_user_id=admin.id,
-        action="tariff_lab.property_groups_updated",
-        detail={"count": len(data.items)},
-    ))
-    db.commit()
-    return result
-
-
 @app.get("/api/tariff-lab/holidays")
 def tariff_holidays(db: Db, user: Operator) -> list[dict]:
     return holiday_view(db)
 
 
-@app.post("/api/tariff-lab/holidays", status_code=201)
-def create_tariff_holiday(data: TariffHolidayIn, db: Db, admin: Admin) -> dict:
-    try:
-        result = add_holiday(db, data.model_dump(), admin.id)
-    except TariffLabError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    db.add(AuditEvent(
-        actor_user_id=admin.id,
-        action="tariff_lab.holiday_added",
-        detail={"holiday_id": result["id"], "scope": result["scope"]},
-    ))
-    db.commit()
-    return result
+@app.get("/api/tariff-lab/holidays/sync")
+def tariff_holiday_sync_status(db: Db, user: Operator) -> dict:
+    return holiday_sync_view(db)
 
 
-@app.delete("/api/tariff-lab/holidays/{holiday_id}")
-def delete_tariff_holiday(holiday_id: int, db: Db, admin: Admin) -> dict:
-    if not remove_holiday(db, holiday_id):
-        raise HTTPException(404, "Festivo no encontrado")
-    db.add(AuditEvent(
-        actor_user_id=admin.id,
-        action="tariff_lab.holiday_removed",
-        detail={"holiday_id": holiday_id},
-    ))
+@app.post("/api/tariff-lab/holidays/sync", status_code=202)
+def request_tariff_holiday_sync(db: Db, admin: Admin) -> dict:
+    enqueue(
+        db,
+        key=f"holiday-sync:manual:{datetime.now(UTC).isoformat()}",
+        kind="holiday_sync",
+        payload={},
+    )
+    db.add(AuditEvent(actor_user_id=admin.id, action="tariff_lab.holiday_sync_requested"))
     db.commit()
-    return {"deleted": True}
+    return {"queued": True}
 
 
 @app.get("/api/tariff-lab/studies")
