@@ -33,6 +33,7 @@ from app.tariff_lab import (
     PropertyGroup,
     TariffLabError,
     _base_rate,
+    _effective_reservations,
     _historical_day_metrics,
     _holiday_matches,
     _merge_seasons,
@@ -750,3 +751,31 @@ def test_groups_are_inferred_from_reservation_prices_and_building_names(db):
     readiness = tariff_readiness(db)
     assert [item["id"] for item in readiness["unmapped_properties"]] == ["P-40"]
     assert readiness["checks"][1]["ready"] is False
+
+
+def test_effective_reservations_keep_only_the_latest_version_of_each_locator(db):
+    batches = []
+    for name, status in (("r1", "valid"), ("r2", "valid"), ("r3", "invalid"), ("r4", "valid")):
+        batch = ImportBatch(
+            dataset="reservations", source="t", filename=name, checksum=name, status=status,
+            row_count=2,
+        )
+        db.add(batch)
+        db.flush()
+        batches.append(batch)
+    first, second, rejected, last = batches
+    _add_stay(db, first.id, "A", "P-1", date(2026, 1, 5), "100")
+    _add_stay(db, first.id, "B", "P-1", date(2026, 2, 5), "100")
+    _add_stay(db, second.id, "A", "P-1", date(2026, 1, 5), "120")
+    _add_stay(db, second.id, "C", "P-2", date(2026, 3, 5), "90")
+    _add_stay(db, rejected.id, "A", "P-1", date(2026, 1, 5), "999")
+    _add_stay(db, last.id, "B", "P-1", date(2026, 2, 5), "130")
+    db.commit()
+
+    latest = {row.locator: row.total for row in _effective_reservations(db)}
+    assert latest == {"A": Decimal("240"), "B": Decimal("260"), "C": Decimal("180")}
+    assert [row.locator for row in _effective_reservations(db)] == ["A", "B", "C"]
+
+    frozen = {row.locator: row.total for row in _effective_reservations(db, second.id)}
+    assert frozen == {"A": Decimal("240"), "B": Decimal("200"), "C": Decimal("180")}
+    assert _effective_reservations(db, 0) == []
