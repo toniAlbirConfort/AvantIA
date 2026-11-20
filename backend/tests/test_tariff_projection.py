@@ -35,6 +35,7 @@ from app.tariff_projection import (
     final_seasons,
     holy_week,
     normalize_parameters,
+    projection_evolution,
     shift_date,
     update_projection,
 )
@@ -302,6 +303,50 @@ def test_relevant_dates_only_check_easter_without_target_calendar(db):
     assert "solo se ha comprobado Semana Santa" in calendar["notes"][0]
 
 
+def test_price_evolution_compares_same_dates_across_years(db):
+    _seed(db)
+    reservations = db.query(ImportBatch).filter_by(dataset="reservations").one()
+    # Short summer stays at 180 EUR a night (the seeded 62-night stays are long and
+    # do not count for price), plus a wrong amount of 4,500 EUR a night that must not
+    # move the real price of summer 2026.
+    for index, unit in enumerate(("A1", "A2", "A3")):
+        _reservation(
+            db, reservations, f"W26-{unit}", unit, date(2026, 7, 5 + index * 7), 7, "1260.00"
+        )
+    _reservation(db, reservations, "OUT", "A2", date(2026, 7, 10), 2, "9000.00")
+    db.commit()
+    projection = create_projection(
+        db,
+        {"name": "SA 2028", "base_year": 2027, "target_year": 2028,
+         "tariff_names": [GROUP], "parameters": {}},
+        actor_user_id=None,
+    )
+    db.commit()
+
+    evolution = projection_evolution(db, projection, today=date(2026, 10, 28))
+
+    assert evolution["season_years"] == [2023, 2024, 2025, 2026, 2027]
+    summer = next(item for item in evolution["seasons"] if item["start"] == "2028-07-01")
+    by_year = {item["year"]: item for item in summer["years"]}
+    assert by_year[2026]["real"]["rate"] == "180.00"
+    assert by_year[2026]["real"]["partial"] is False
+    assert by_year[2026]["sa"] is None
+    assert by_year[2027]["sa"] == {"rate": "200.00", "complete": True}
+    assert by_year[2027]["real"] is None  # the season has not happened yet
+    assert by_year[2023]["real"] is None
+    proposed = Decimal(summer["rate"])
+    assert summer["change_vs_base_sa"] == round(float(proposed / Decimal("200") - 1), 4)
+    assert summer["change_vs_last_real"] == round(float(proposed / Decimal("180") - 1), 4)
+    spring = next(item for item in evolution["seasons"] if item["start"] == "2028-04-18")
+    spring_2026 = next(item for item in spring["years"] if item["year"] == 2026)["real"]
+    # 18 April - 30 June 2026: 3 nights of Q26 and 10 of Q26b, under the minimum of 14.
+    assert spring_2026["nights"] == 13 and spring_2026["few_nights"] is True
+    annual = {item["year"]: item for item in evolution["annual"][GROUP]}
+    assert annual[2026]["kind"] == "real"
+    assert annual[2027]["kind"] == "sa" and annual[2027]["complete"] is True
+    assert annual[2028]["kind"] == "projection"
+
+
 def test_overrides_and_apply_write_target_year_once(db):
     _seed(db)
     projection = create_projection(
@@ -417,6 +462,14 @@ def test_projection_api_is_admin_only_and_audited(db, monkeypatch):
                 f"/api/tariff-lab/projections/{projection_id}/tariffs.csv", headers=operator
             )
             assert "Grupo playa,SA,2028-07-01,2028-08-31,230.00" in csv.text
+            evolution = client.get(
+                f"/api/tariff-lab/projections/{projection_id}/evolution", headers=operator
+            )
+            assert evolution.status_code == 200
+            summer = next(
+                item for item in evolution.json()["seasons"] if item["start"] == "2028-07-01"
+            )
+            assert summer["rate"] == "230.00"  # the manual price is the one compared
 
             applied = client.post(
                 f"/api/tariff-lab/projections/{projection_id}/apply", headers=admin
