@@ -652,7 +652,7 @@ export default function App() {
               </div>}
             </div>}
             {detail.contact && detail.contact.source !== 'internal' && <CustomerContactCard contact={detail.contact} />}
-            {detail.registration && <RegistrationPanel check={detail.registration} busy={busy} userName={userName} onAction={(path, body) => void action(() => api(path, { method: 'POST', body: JSON.stringify(body) }))} />}
+            {detail.registration && <RegistrationPanel key={detail.registration.id} check={detail.registration} busy={busy} userName={userName} onExpand={setExpandedEmail} onAction={(path, body) => void action(() => api(path, { method: 'POST', body: JSON.stringify(body) }))} />}
             <div className={`grid max-h-[70vh] gap-3 overflow-auto bg-background p-4 sm:p-6 ${detail.channel === 'email' ? 'email-feed' : ''}`}>{detail.messages?.map(message => <article key={message.id} className={`w-fit max-w-[90%] overflow-hidden rounded-lg border border-border p-3 text-sm leading-6 ${message.direction === 'outbound' ? 'ml-auto bg-accent' : 'bg-card'} ${detail.channel === 'email' ? 'w-full max-w-4xl p-0' : ''}`}>
               <div className="mb-2 text-[0.65rem] font-semibold uppercase tracking-wide text-muted-foreground">{message.direction === 'inbound' ? 'RECIBIDO' : 'AVANTIA'} · {date(message.created_at)}</div>
               {detail.channel === 'email' ? <EmailMessageContent conversationId={detail.id} message={message} fallbackSender={detail.customer_address} fallbackSubject={detail.subject} onExpand={setExpandedEmail} /> : <p className="m-0 whitespace-pre-wrap break-words">{message.body}</p>}

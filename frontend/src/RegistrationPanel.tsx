@@ -1,11 +1,14 @@
-import { useState } from 'react'
-import { CircleAlert, CircleCheck, Clock } from 'lucide-react'
-import type { RegistrationCheck } from './types'
+import { useEffect, useState } from 'react'
+import { ChevronDown, CircleAlert, CircleCheck, Clock, MailCheck, MailQuestion, MailX, Sparkles } from 'lucide-react'
+import { EmailMessageContent } from './EmailMessageContent'
+import { api } from './api'
+import type { Message, RegistrationCheck, RegistrationStaffEmail, RegistrationStaffReply } from './types'
 import { Alert } from './components/ui/alert'
 import { Badge } from './components/ui/badge'
 import { Button } from './components/ui/button'
 import { Input } from './components/ui/input'
 import { Select } from './components/ui/select'
+import { Skeleton } from './components/ui/skeleton'
 
 export const DISMISS_REASONS: Record<string, string> = {
   no_es_consulta: 'No es una consulta de alojamiento',
@@ -49,20 +52,72 @@ type Props = {
   busy: boolean
   userName: (id: number | null) => string
   onAction: (path: string, body: Record<string, unknown>) => void
+  onExpand: (message: Message) => void
 }
 
-export function RegistrationPanel({ check, busy, userName, onAction }: Props) {
+// The second check: what the team sent the customer, from the mailbox's Sent folder.
+function StaffReplyBlock({ check, onExpand }: { check: RegistrationCheck; onExpand: (message: Message) => void }) {
+  const [email, setEmail] = useState<RegistrationStaffEmail | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [loadError, setLoadError] = useState('')
+  const reply: RegistrationStaffReply | null | undefined = check.staff_reply
+  const line = 'm-0 flex items-start gap-2 rounded-lg border border-border bg-card px-3 py-2 text-xs leading-5'
+
+  if (!reply) return <p className={`${line} text-muted-foreground`}><MailQuestion size={15} className="mt-0.5 shrink-0" aria-hidden="true" />Pendiente de comprobar en Elementos enviados si el equipo le ha respondido.</p>
+  if (!reply.sent_at) return <p className={`${line} text-error-ink`}><MailX size={15} className="mt-0.5 shrink-0" aria-hidden="true" /><span><strong className="font-semibold">Sin respuesta del equipo.</strong> No hay ningún correo a este cliente en Elementos enviados desde que escribió.</span></p>
+
+  async function load() {
+    if (email || loading) return
+    setLoading(true)
+    setLoadError('')
+    try { setEmail(await api<RegistrationStaffEmail>(`/api/registration-checks/${check.id}/staff-reply`)) }
+    catch (err) { setLoadError((err as Error).message) }
+    finally { setLoading(false) }
+  }
+
+  return <details className="group overflow-hidden rounded-lg border border-border bg-card" onToggle={event => { if (event.currentTarget.open) void load() }}>
+    <summary className="flex cursor-pointer list-none items-start gap-2 px-3 py-2 text-xs leading-5 text-success-ink hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+      <MailCheck size={15} className="mt-0.5 shrink-0" aria-hidden="true" />
+      <span className="min-w-0 flex-1"><strong className="font-semibold">Respondida por el equipo</strong> el {dateTime(reply.sent_at)} · {reply.in_thread ? 'en este hilo' : 'en otro hilo'}{reply.sender && <> · <span className="break-words">{reply.sender}</span></>}{reply.subject && <> · <span className="break-words">{reply.subject}</span></>}</span>
+      <ChevronDown size={15} className="mt-0.5 shrink-0 text-muted-foreground transition-transform group-open:rotate-180 motion-reduce:transition-none" aria-hidden="true" />
+    </summary>
+    <div className="border-t border-border bg-background">
+      {loading || (!email && !loadError)
+        ? <div className="grid gap-2 p-4"><Skeleton className="h-4 w-2/3" /><Skeleton className="h-24 w-full" /></div>
+        : loadError ? <div className="p-3"><Alert variant="destructive">{loadError}</Alert></div>
+        : email?.staff ? <EmailMessageContent message={email.staff} conversationId={email.conversation_id} onExpand={onExpand} />
+        : <p className="m-0 p-4 text-sm text-muted-foreground">{email?.staff_error || 'El correo ya no está en la carpeta de enviados.'}</p>}
+    </div>
+  </details>
+}
+
+function SuggestionLine({ reply }: { reply: RegistrationStaffReply }) {
+  if (!reply.suggestion_label) return null
+  const register = !reply.suggested_dismiss
+  return <p className="m-0 flex items-start gap-2 text-xs leading-5 text-muted-foreground">
+    <Sparkles size={15} className="mt-0.5 shrink-0 text-primary" aria-hidden="true" />
+    <span><strong className="font-semibold text-foreground">Sugerencia de la IA:</strong> {reply.suggestion_label}{reply.suggestion_reason ? ` (${reply.suggestion_reason})` : ''}. {register
+      ? reply.suggestion === 'otro' ? 'Revisa la respuesta antes de decidir.' : 'Aun así hay que registrarla en Avantio como petición de información.'
+      : 'Si es correcto, confirma «No procede» con el motivo ya elegido.'}</span>
+  </p>
+}
+
+export function RegistrationPanel({ check, busy, userName, onAction, onExpand }: Props) {
   const [locator, setLocator] = useState('')
-  const [reason, setReason] = useState('')
+  const suggested = check.staff_reply?.suggested_dismiss || ''
+  const [reason, setReason] = useState(suggested)
   const [note, setNote] = useState('')
+  // The suggestion may arrive while the panel is open: preselect it unless a reason was chosen.
+  useEffect(() => { if (suggested) setReason(current => current || suggested) }, [suggested])
   const open = check.status === 'alerted' || check.status === 'pending'
   const shadow = check.mode === 'shadow' || check.mode === null
   const byOperator = check.resolved_by_id !== null
+  const unanswered = Boolean(check.staff_reply && !check.staff_reply.sent_at)
 
   return <div className="grid gap-3 border-b border-border bg-background px-4 py-3 text-sm sm:px-6" aria-label="Registro en Avantio">
     <div className="flex flex-wrap items-center gap-2">
       <span className="text-xs font-semibold uppercase tracking-wide text-primary">Registro en Avantio</span>
-      {check.status === 'alerted' && <Badge className="bg-error-bg text-error-ink">Sin registrar</Badge>}
+      {check.status === 'alerted' && <Badge className="bg-error-bg text-error-ink">{unanswered ? 'Sin responder ni registrar' : 'Sin registrar'}</Badge>}
       {check.status === 'pending' && <Badge className="bg-warning-bg text-warning-ink">Pendiente de comprobar</Badge>}
       {check.status === 'registered' && <Badge className="bg-success-bg text-success-ink">Registrada{check.locator ? ` · ${check.locator}` : ''}</Badge>}
       {check.status === 'excluded' && <Badge className="bg-muted text-muted-foreground">No se comprueba</Badge>}
@@ -76,6 +131,11 @@ export function RegistrationPanel({ check, busy, userName, onAction }: Props) {
     {check.status === 'pending' && <p className="m-0 flex items-center gap-1.5 text-xs text-muted-foreground"><Clock size={14} aria-hidden="true" />Se comprobará tras la próxima sincronización con Avantio. Avisa si sigue sin reserva después del {dateTime(check.due_at)}.</p>}
     {check.status === 'registered' && <p className="m-0 flex items-center gap-1.5 text-xs text-muted-foreground"><CircleCheck size={14} aria-hidden="true" />{reasonText(check.reason)}{check.handled_by ? ` · atendida por ${check.handled_by}` : ''}{byOperator ? ` · ${userName(check.resolved_by_id)} el ${dateTime(check.resolved_at)}` : ''}</p>}
     {check.status === 'excluded' && <p className="m-0 text-xs text-muted-foreground">Motivo: {reasonText(check.reason)}{check.note ? ` (${check.note})` : ''}{byOperator ? ` · ${userName(check.resolved_by_id)} el ${dateTime(check.resolved_at)}` : ''}</p>}
+
+    {open && <div className="grid gap-2">
+      <StaffReplyBlock check={check} onExpand={onExpand} />
+      {check.staff_reply && <SuggestionLine reply={check.staff_reply} />}
+    </div>}
 
     {open && <div className="grid gap-3">
       <form className="grid gap-1" onSubmit={event => { event.preventDefault(); onAction(`/api/registration-checks/${check.id}/link`, { locator }) }}>
