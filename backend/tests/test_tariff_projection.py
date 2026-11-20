@@ -20,6 +20,7 @@ from app.models import (
     ImportBatch,
     PropertySnapshot,
     ReservationSnapshot,
+    TariffHoliday,
     TariffMarketObservation,
     TariffSeason,
     User,
@@ -246,6 +247,59 @@ def test_easter_moves_from_march_to_april(db):
         for item in pieces
     )
     assert days == 366
+
+
+def _holiday(db, day: date, name: str, scope: str = "national") -> None:
+    db.add(TariffHoliday(
+        holiday_date=day, name=name, scope=scope, source="boe",
+        region="Comunitat Valenciana" if scope == "regional" else None,
+        municipality="l'Alfàs del Pi" if scope == "municipal" else None,
+    ))
+
+
+def test_relevant_dates_report_moved_holidays_and_price_bands(db):
+    _seed(db)
+    for year, good_friday, local in (
+        (2027, date(2027, 3, 26), (11, 8)),
+        (2028, date(2028, 4, 14), (11, 13)),
+    ):
+        _holiday(db, date(year, 1, 1), "Año Nuevo")
+        _holiday(db, good_friday, "Viernes Santo")
+        _holiday(db, date(year, *local), "Fiestas locales de l'Alfàs del Pi", "municipal")
+    _holiday(db, date(2027, 6, 24), "San Juan", "regional")
+    db.commit()
+
+    result = calculate_projection(
+        db, base_year=2027, target_year=2028, groups=[GROUP], parameters={}
+    )
+
+    changes = {item["name"]: item for item in result["calendar_changes"]["changes"]}
+    assert "Año Nuevo" not in changes
+    friday = changes["Viernes Santo"]
+    assert (friday["base_date"], friday["target_date"]) == ("2027-03-26", "2028-04-14")
+    # 26 March 2027 is in the 140 € Holy Week season; 14 April 2028 lands in the 120 € one.
+    assert friday["price_band_changes"] == [GROUP]
+    assert friday["base_seasons"][GROUP]["base_rate"] == "140.00"
+    assert friday["target_seasons"][GROUP]["base_rate"] == "120.00"
+    assert changes["Domingo de Pascua"]["price_band_changes"] == [GROUP]
+    local = changes["Fiestas locales de l'Alfàs del Pi"]
+    assert local["target_date"] == "2028-11-13" and local["price_band_changes"] == []
+    assert changes["San Juan"]["target_date"] is None
+    assert result["calendar_changes"]["notes"] == []
+    assert any("cambian de temporada de precio" in item for item in result["warnings"])
+
+
+def test_relevant_dates_only_check_easter_without_target_calendar(db):
+    _seed(db)
+    _holiday(db, date(2027, 1, 1), "Año Nuevo")
+    db.commit()
+    result = calculate_projection(
+        db, base_year=2027, target_year=2028, groups=[GROUP], parameters={}
+    )
+    calendar = result["calendar_changes"]
+    assert [item["name"] for item in calendar["changes"]] == ["Domingo de Pascua"]
+    assert calendar["official_target_published"] is False
+    assert "solo se ha comprobado Semana Santa" in calendar["notes"][0]
 
 
 def test_overrides_and_apply_write_target_year_once(db):
