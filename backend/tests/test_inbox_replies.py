@@ -162,3 +162,56 @@ def test_each_run_continues_where_the_last_one_stopped_and_skips_platforms(db, m
     ids = [item.id for item in customers]
     assert seen == [ids[0:2], ids[2:4], [ids[4], ids[0]]]
     assert platform.id not in sum(seen, [])
+
+
+def notice(db, *, address="Hotelbeds <noreply@hotelbeds.com>", label="non_demand",
+           confidence="high", override=None, provider_id=None):
+    _counter = db.query(Conversation).count() + 1
+    provider_id = provider_id or f"<notice{_counter}@x>"
+    conversation = pending(db, address=address, provider_id=provider_id)
+    message = db.scalar(select(Message).where(Message.conversation_id == conversation.id))
+    message.classification_label = label
+    message.classification_confidence = confidence
+    message.classification_override = override
+    db.commit()
+    return conversation
+
+
+def test_confident_automatic_notices_are_filed_and_the_rest_stays_pending(db, monkeypatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "internal_sender_domains", "albirconfort.test")
+    monkeypatch.setattr(settings, "booking_sender_domains", "booking.com")
+    price_update = notice(db)
+    unsure = notice(db, confidence="medium")
+    guest_message = notice(db, address="Avantio <noreply@avantio.com>", label="guest_service")
+    unclassified = notice(db, label=None, confidence=None)
+    person_said = notice(db, label="uncertain", confidence="low", override="non_demand")
+    customer = notice(db, address=f"Liv <{CUSTOMER}>")  # a person, even if not demand
+    colleague = notice(db, address="Ana <ana@albirconfort.test>")
+
+    assert inbox_replies.file_platform_notices(db, WROTE) == 2
+    assert price_update.status == person_said.status == "filed"
+    for item in (unsure, guest_message, unclassified, customer, colleague):
+        assert item.status == "pending"
+    assert inbox_replies.filed_notice(db, price_update)["reason"] == "aviso_automatico"
+    assert inbox_replies.filed_notice(db, customer) is None
+
+
+def test_filed_notice_stays_pending_once_an_operator_reopens_it(db, monkeypatch):
+    monkeypatch.setattr(get_settings(), "internal_sender_domains", "albirconfort.test")
+    conversation = notice(db, provider_id="<price@x>")
+    inbox_replies.file_platform_notices(db, WROTE)
+    conversation.status = "pending"
+    db.commit()
+    assert inbox_replies.file_platform_notices(db, WROTE) == 0
+    assert conversation.status == "pending"
+    # A new notice in the thread files it again once it is classified.
+    ingest(db, channel="email", external_key="<price@x>", provider_id="<price-2@x>",
+           body="Bulk price change finished", sender="Hotelbeds <noreply@hotelbeds.com>")
+    db.commit()
+    assert inbox_replies.file_platform_notices(db, WROTE) == 0  # not classified yet
+    newest = db.scalar(select(Message).where(Message.provider_id == "<price-2@x>"))
+    newest.classification_label, newest.classification_confidence = "non_demand", "high"
+    db.commit()
+    assert inbox_replies.file_platform_notices(db, WROTE) == 1
+    assert conversation.status == "filed"
