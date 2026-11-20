@@ -31,6 +31,7 @@ from app.auto_reply import set_paused as set_auto_reply_paused
 from app.auto_reply import simulate as simulate_auto_replies
 from app.automatic_messages import CHANNELS as AUTOMATIC_CHANNELS
 from app.automatic_messages import SOURCES as AUTOMATIC_SOURCES
+from app.automatic_messages import STAFF_REPLY_FILTERS as AUTOMATIC_STAFF_REPLY_FILTERS
 from app.automatic_messages import STATUSES as AUTOMATIC_STATUSES
 from app.automatic_messages import list_automatic_messages
 from app.availability import aware, import_csv, latest_batch
@@ -1987,6 +1988,7 @@ def automatic_messages(
     q: str | None = Query(default=None, max_length=200),
     from_at: datetime | None = Query(default=None, alias="from"),
     to_at: datetime | None = Query(default=None, alias="to"),
+    staff_reply: str | None = None,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> dict:
@@ -1997,6 +1999,8 @@ def automatic_messages(
         raise HTTPException(422, "Tipo de envío no válido")
     if status and status not in AUTOMATIC_STATUSES:
         raise HTTPException(422, "Estado no válido")
+    if staff_reply and staff_reply not in AUTOMATIC_STAFF_REPLY_FILTERS:
+        raise HTTPException(422, "Filtro de respuesta no válido")
     return list_automatic_messages(
         db,
         channel=channel,
@@ -2005,6 +2009,7 @@ def automatic_messages(
         q=q,
         start=from_at,
         end=to_at,
+        staff_reply=staff_reply,
         limit=limit,
         offset=offset,
     )

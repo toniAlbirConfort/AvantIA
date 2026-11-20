@@ -45,10 +45,15 @@ export type AutoReply = {
 }
 export type AutomaticMessageStatus = 'sent' | 'shadow' | 'failed' | 'delivery_unknown'
 export type AutomaticMessageChannel = 'email' | 'whatsapp'
+export type StaffReply = {
+  checked_at: string; last_sent_at: string | null; subject: string | null; in_thread: boolean | null;
+  after_auto_reply: boolean; hours_after: number | null
+}
 export type AutomaticMessage = {
   id: string; kind: string; kind_label: string; channel: AutomaticMessageChannel; status: AutomaticMessageStatus;
   recipient: string; customer_name: string | null; subject: string | null; text: string; language: string | null;
   error: string | null; copy_failed: boolean; conversation_id: number; conversation_kind: string; created_at: string
+  staff_reply: StaffReply | null
 }
 export type AutomaticMessageList = {
   items: AutomaticMessage[]; total: number; counts: Record<AutomaticMessageStatus, number>;

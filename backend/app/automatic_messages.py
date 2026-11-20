@@ -20,8 +20,11 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models import AuditEvent, AutoReply, Conversation
+from app.staff_replies import staff_reply_view
 
 STATUSES = ("sent", "shadow", "failed", "delivery_unknown")
+# Whether the team wrote to the recipient (Sent folder) after the automatic message.
+STAFF_REPLY_FILTERS = ("after", "none")
 CHANNELS = ("email", "whatsapp")
 
 
@@ -51,6 +54,7 @@ def _auto_reply_query(
     q: str | None,
     start: datetime | None,
     end: datetime | None,
+    staff_reply: str | None = None,
 ):
     query = select(AutoReply, Conversation).join(
         Conversation, Conversation.id == AutoReply.conversation_id
@@ -61,6 +65,17 @@ def _auto_reply_query(
         query = query.where(AutoReply.created_at >= start)
     if end:
         query = query.where(AutoReply.created_at < end)
+    if staff_reply == "after":
+        query = query.where(AutoReply.staff_last_sent_at > AutoReply.created_at)
+    elif staff_reply == "none":
+        # Checked, and nothing sent to the address after the automatic message.
+        query = query.where(
+            AutoReply.staff_checked_at.is_not(None),
+            or_(
+                AutoReply.staff_last_sent_at.is_(None),
+                AutoReply.staff_last_sent_at <= AutoReply.created_at,
+            ),
+        )
     if q and q.strip():
         needle = f"%{q.strip().lower()}%"
         query = query.where(
@@ -82,6 +97,7 @@ def list_automatic_messages(
     q: str | None = None,
     start: datetime | None = None,
     end: datetime | None = None,
+    staff_reply: str | None = None,
     limit: int = 50,
     offset: int = 0,
 ) -> dict:
@@ -95,12 +111,16 @@ def list_automatic_messages(
     items: list[dict] = []
     total = 0
     if AUTO_REPLY in sources:
-        base = _auto_reply_query(status=None, q=q, start=start, end=end).subquery()
+        base = _auto_reply_query(
+            status=None, q=q, start=start, end=end, staff_reply=staff_reply
+        ).subquery()
         for mode, amount in db.execute(
             select(base.c.mode, func.count()).group_by(base.c.mode)
         ).all():
             counts[_AUTO_REPLY_STATUS.get(mode, "delivery_unknown")] += amount
-        query = _auto_reply_query(status=status, q=q, start=start, end=end)
+        query = _auto_reply_query(
+            status=status, q=q, start=start, end=end, staff_reply=staff_reply
+        )
         total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
         rows = db.execute(
             query.order_by(AutoReply.created_at.desc(), AutoReply.id.desc())
@@ -108,7 +128,10 @@ def list_automatic_messages(
             .offset(offset)
         ).all()
         copy_failed = _copy_failures(db, [reply.message_id for reply, _ in rows])
-        items = [_auto_reply_row(reply, conv, reply.message_id in copy_failed) for reply, conv in rows]
+        items = [
+            _auto_reply_row(reply, conv, reply.message_id in copy_failed)
+            for reply, conv in rows
+        ]
     return {
         "items": items,
         "total": total,
@@ -151,5 +174,6 @@ def _auto_reply_row(reply: AutoReply, conv: Conversation, copy_failed: bool) -> 
         "copy_failed": copy_failed,
         "conversation_id": reply.conversation_id,
         "conversation_kind": conv.kind,
+        "staff_reply": staff_reply_view(reply),
         "created_at": reply.created_at,
     }
