@@ -36,6 +36,7 @@ from app.automatic_messages import STATUSES as AUTOMATIC_STATUSES
 from app.automatic_messages import auto_reply_messages, list_automatic_messages
 from app.availability import aware, import_csv, latest_batch
 from app.avantio import availability_provider
+from app.booking_pace import booking_pace_view
 from app.campaigns_api import router as campaigns_router
 from app.classification import (
     apply_message_classification,
@@ -69,9 +70,9 @@ from app.gowa import (
     reconnect_gowa,
     start_gowa_pairing,
 )
+from app.holiday_sync import holiday_sync_view
 from app.html_sanitize import sanitize_html
 from app.import_issues import split_issues, with_repairs
-from app.holiday_sync import holiday_sync_view
 from app.ingest import enqueue, ingest
 from app.integrations import ollama_translate_email
 from app.models import (
@@ -1582,6 +1583,13 @@ def create_tariff_projection(data: TariffProjectionIn, db: Db, admin: Admin) -> 
 @app.get("/api/tariff-lab/projections/{projection_id}")
 def get_tariff_projection(projection_id: int, db: Db, user: Operator) -> dict:
     return projection_view(_projection_or_404(db, projection_id))
+
+
+@app.get("/api/tariff-lab/booking-pace")
+def tariff_booking_pace(
+    db: Db, user: Operator, threshold: float = Query(0.15, ge=0.05, le=0.5)
+) -> dict:
+    return booking_pace_view(db, threshold=threshold)
 
 
 @app.get("/api/tariff-lab/projections/{projection_id}/evolution")
