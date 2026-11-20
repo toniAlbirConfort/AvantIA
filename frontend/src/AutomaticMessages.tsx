@@ -1,7 +1,9 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from 'react'
-import { CircleAlert, CircleCheck, CircleHelp, EyeOff, Mail, MailCheck, MailQuestion, MailX, MessageCircle, Search, type LucideIcon } from 'lucide-react'
+import { Bot, ChevronDown, CircleAlert, CircleCheck, CircleHelp, EyeOff, Inbox, Mail, MailCheck, MailQuestion, MailX, MessageCircle, Search, type LucideIcon } from 'lucide-react'
+import { EmailMessageContent } from './EmailMessageContent'
+import { EmailPreviewDialog } from './EmailPreviewDialog'
 import { api } from './api'
-import type { AutomaticMessage, AutomaticMessageChannel, AutomaticMessageList, AutomaticMessageStatus, StaffReply } from './types'
+import type { AutomaticMessage, AutomaticMessageChannel, AutomaticMessageEmails, AutomaticMessageList, AutomaticMessageStatus, Message, StaffReply } from './types'
 import { Alert } from './components/ui/alert'
 import { Badge } from './components/ui/badge'
 import { Button } from './components/ui/button'
@@ -49,36 +51,56 @@ function elapsed(hours: number) {
 }
 
 // The last email the team sent to the recipient from Outlook, read from "Elementos enviados".
-function StaffReplyLine({ value }: { value: StaffReply | null }) {
-  let Icon = MailQuestion
-  let tone = 'text-muted-foreground'
-  let text: React.ReactNode = 'Pendiente de comprobar en Elementos enviados.'
-  if (value && value.after_auto_reply && value.last_sent_at) {
-    Icon = MailCheck
-    tone = 'text-success-ink'
-    text = <><strong className="font-semibold">Último email del equipo:</strong> {dateTime(value.last_sent_at)} · {elapsed(value.hours_after || 0)} · {value.in_thread ? 'en este hilo' : 'en otro hilo'}{value.subject && <> · <span className="break-words">{value.subject}</span></>}</>
-  } else if (value && value.last_sent_at) {
-    Icon = MailX
-    tone = 'text-warning-ink'
-    text = <><strong className="font-semibold">Sin email del equipo después de la autorespuesta.</strong> El último es del {dateTime(value.last_sent_at)}{value.subject && <> · <span className="break-words">{value.subject}</span></>}</>
-  } else if (value) {
-    Icon = MailX
-    tone = 'text-warning-ink'
-    text = <strong className="font-semibold">El equipo no le ha escrito nunca desde el buzón.</strong>
+function staffReplySummary(value: StaffReply | null): { icon: LucideIcon; tone: string; text: React.ReactNode } {
+  if (value && value.after_auto_reply && value.last_sent_at) return {
+    icon: MailCheck, tone: 'text-success-ink',
+    text: <><strong className="font-semibold">Último email del equipo:</strong> {dateTime(value.last_sent_at)} · {elapsed(value.hours_after || 0)} · {value.in_thread ? 'en este hilo' : 'en otro hilo'}{value.subject && <> · <span className="break-words">{value.subject}</span></>}</>,
   }
-  return <p className={`flex items-start gap-2 rounded-lg border border-border bg-background px-3 py-2 text-xs leading-5 ${tone}`}>
-    <Icon size={15} className="mt-0.5 shrink-0" aria-hidden="true" />
-    <span className="min-w-0">{text}</span>
-  </p>
+  if (value && value.last_sent_at) return {
+    icon: MailX, tone: 'text-warning-ink',
+    text: <><strong className="font-semibold">Sin email del equipo después de la autorespuesta.</strong> El último es del {dateTime(value.last_sent_at)}{value.subject && <> · <span className="break-words">{value.subject}</span></>}</>,
+  }
+  if (value) return { icon: MailX, tone: 'text-warning-ink', text: <strong className="font-semibold">El equipo no le ha escrito nunca desde el buzón.</strong> }
+  return { icon: MailQuestion, tone: 'text-muted-foreground', text: 'Pendiente de comprobar en Elementos enviados.' }
 }
 
-function MessageRow({ item, onOpenConversation }: { item: AutomaticMessage; onOpenConversation: (link: string) => void }) {
-  const [open, setOpen] = useState(false)
+// One collapsible block of the row; the summary is the line shown while it is closed.
+function Section({ icon: Icon, tone, summary, onOpen, children }: { icon: LucideIcon; tone: string; summary: React.ReactNode; onOpen?: () => void; children?: React.ReactNode }) {
+  const line = <><Icon size={15} className="mt-0.5 shrink-0" aria-hidden="true" /><span className="min-w-0 flex-1">{summary}</span></>
+  if (!children) return <p className={`flex items-start gap-2 rounded-lg border border-border bg-background px-3 py-2 text-xs leading-5 ${tone}`}>{line}</p>
+  return <details className="group overflow-hidden rounded-lg border border-border bg-background" onToggle={event => { if (event.currentTarget.open) onOpen?.() }}>
+    <summary className={`flex cursor-pointer list-none items-start gap-2 px-3 py-2 text-xs leading-5 hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden ${tone}`}>
+      {line}
+      <ChevronDown size={15} className="mt-0.5 shrink-0 text-muted-foreground transition-transform group-open:rotate-180 motion-reduce:transition-none" aria-hidden="true" />
+    </summary>
+    <div className="border-t border-border bg-card">{children}</div>
+  </details>
+}
+
+function MessageRow({ item, onOpenConversation, onExpand }: { item: AutomaticMessage; onOpenConversation: (link: string) => void; onExpand: (message: Message) => void }) {
+  const [emails, setEmails] = useState<AutomaticMessageEmails | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [loadError, setLoadError] = useState('')
   const status = statuses[item.status]
   const channel = channels[item.channel] || channels.email
   const StatusIcon = status.icon
   const ChannelIcon = channel.icon
-  const textId = `automatic-message-${item.id.replace(':', '-')}`
+  const staff = staffReplySummary(item.staff_reply)
+  const hasStaffEmail = Boolean(item.staff_reply?.last_sent_at)
+
+  // The customer's email comes from AvantIA; the team's is read now from the Sent folder.
+  async function loadEmails() {
+    if (emails || loading) return
+    setLoading(true)
+    setLoadError('')
+    try { setEmails(await api<AutomaticMessageEmails>(`/api/automatic-messages/${item.kind}/${item.id.split(':')[1]}/messages`)) }
+    catch (err) { setLoadError((err as Error).message) }
+    finally { setLoading(false) }
+  }
+  const pending = loading || (!emails && !loadError)
+    ? <div className="grid gap-2 p-4"><Skeleton className="h-4 w-2/3" /><Skeleton className="h-24 w-full" /></div>
+    : loadError ? <div className="p-3"><Alert variant="destructive">{loadError}</Alert></div> : null
+
   return <li>
     <Card className="grid gap-3 p-4 sm:p-5">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start">
@@ -95,14 +117,26 @@ function MessageRow({ item, onOpenConversation }: { item: AutomaticMessage; onOp
           <p className="mt-1 text-xs text-muted-foreground">{dateTime(item.created_at)}{item.language ? ` · ${languages[item.language] || item.language.toUpperCase()}` : ''} · {statusHelp[item.status]}</p>
         </div>
         <div className="flex shrink-0 flex-wrap gap-2 sm:flex-col sm:items-stretch">
-          <Button type="button" size="sm" variant="outline" aria-expanded={open} aria-controls={textId} onClick={() => setOpen(value => !value)}>{open ? 'Ocultar mensaje' : 'Ver mensaje'}</Button>
-          <Button type="button" size="sm" variant="ghost" onClick={() => onOpenConversation(`/${item.conversation_kind === 'booking' ? 'bookings' : 'inbox'}/${item.conversation_id}`)}>Abrir conversación</Button>
+          <Button type="button" size="sm" variant="outline" onClick={() => onOpenConversation(`/${item.conversation_kind === 'booking' ? 'bookings' : 'inbox'}/${item.conversation_id}`)}>Abrir conversación</Button>
         </div>
       </div>
-      <StaffReplyLine value={item.staff_reply} />
       {item.error && <Alert variant="destructive"><span className="break-words">{item.error}</span></Alert>}
       {item.copy_failed && <p className="text-xs text-warning-ink">El mensaje salió, pero no se pudo guardar la copia en la carpeta de enviados del buzón.</p>}
-      {open && <p id={textId} className="whitespace-pre-wrap break-words rounded-lg border border-border bg-background p-3 text-sm leading-6 text-muted-foreground">{item.text}</p>}
+      <div className="grid gap-2">
+        <Section icon={Inbox} tone="text-foreground" summary={<strong className="font-semibold">Mensaje del cliente</strong>} onOpen={() => void loadEmails()}>
+          {pending || (emails?.customer
+            ? <EmailMessageContent message={emails.customer} conversationId={emails.conversation_id} onExpand={onExpand} />
+            : <p className="p-4 text-sm text-muted-foreground">No se encontró el mensaje del cliente.</p>)}
+        </Section>
+        <Section icon={Bot} tone="text-foreground" summary={<><strong className="font-semibold">{item.status === 'shadow' ? 'Autorespuesta (no enviada)' : 'Autorespuesta'}</strong> · {dateTime(item.created_at)}</>}>
+          <p className="whitespace-pre-wrap break-words p-4 text-sm leading-6 text-muted-foreground">{item.text}</p>
+        </Section>
+        <Section icon={staff.icon} tone={staff.tone} summary={staff.text} onOpen={() => void loadEmails()}>
+          {hasStaffEmail ? pending || (emails?.staff
+            ? <EmailMessageContent message={emails.staff} conversationId={emails.conversation_id} onExpand={onExpand} />
+            : <p className="p-4 text-sm text-muted-foreground">{emails?.staff_error || 'El email ya no está en la carpeta de enviados.'}</p>) : undefined}
+        </Section>
+      </div>
     </Card>
   </li>
 }
@@ -118,6 +152,7 @@ export function AutomaticMessages({ refreshVersion, onOpenConversation }: { refr
   const [data, setData] = useState<AutomaticMessageList | null>(null)
   const [error, setError] = useState('')
   const [loadingMore, setLoadingMore] = useState(false)
+  const [expanded, setExpanded] = useState<Message | null>(null)
 
   const params = useCallback((offset: number) => {
     const search = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(offset) })
@@ -163,6 +198,7 @@ export function AutomaticMessages({ refreshVersion, onOpenConversation }: { refr
   const filtered = Boolean(channel || kind || status || staff || query || period !== '30d')
 
   return <div className="grid gap-5">
+    <EmailPreviewDialog message={expanded} onClose={() => setExpanded(null)} />
     <section aria-label="Resumen de envíos automáticos" className="grid grid-cols-2 gap-3 lg:grid-cols-4">
       {(Object.keys(statuses) as AutomaticMessageStatus[]).map(key => {
         const meta = statuses[key]
@@ -242,7 +278,7 @@ export function AutomaticMessages({ refreshVersion, onOpenConversation }: { refr
         </Card>
         : <>
           <ul className="grid gap-3" aria-label="Envíos automáticos">
-            {data.items.map(item => <MessageRow key={item.id} item={item} onOpenConversation={onOpenConversation} />)}
+            {data.items.map(item => <MessageRow key={item.id} item={item} onOpenConversation={onOpenConversation} onExpand={setExpanded} />)}
           </ul>
           {data.items.length < data.total && <div className="flex justify-center"><Button type="button" variant="outline" disabled={loadingMore} onClick={() => void loadMore()}>{loadingMore ? 'Cargando…' : `Cargar más (${data.total - data.items.length} restantes)`}</Button></div>}
         </>}
