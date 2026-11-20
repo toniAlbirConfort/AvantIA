@@ -191,6 +191,7 @@ def test_scan_groups_open_bookings_in_one_notification(db):
     notifications.scan(db, NOW)
     [same] = open_bookings(db)
     assert same.id == item.id and same.title == "1 prerreserva pendiente de revisar"
+    assert same.link == f"/bookings/{first.conversation_id}"  # a single one opens directly
 
     first.status = "closed"
     db.commit()
