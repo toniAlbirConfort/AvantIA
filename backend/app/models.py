@@ -133,6 +133,18 @@ class RegistrationCheck(Base):
     resolved_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
     note: Mapped[str | None] = mapped_column(String(300))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    # Second check from the mailbox's Sent folder (app.registration_replies): the team's last
+    # email to the customer after the consultation. The body is never stored.
+    staff_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    staff_reply_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    staff_reply_subject: Mapped[str | None] = mapped_column(String(500))
+    staff_reply_sender: Mapped[str | None] = mapped_column(String(255))
+    staff_reply_in_thread: Mapped[bool | None] = mapped_column(Boolean)
+    # What the model reads in that reply (app.registration_replies.SUGGESTIONS). Only a hint
+    # for the operator: it never resolves the check by itself.
+    suggestion: Mapped[str | None] = mapped_column(String(30))
+    suggestion_reason: Mapped[str | None] = mapped_column(String(300))
+    suggestion_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class AutoReply(Base):

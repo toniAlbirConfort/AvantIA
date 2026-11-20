@@ -68,7 +68,15 @@ export type RegistrationCheck = {
   received_at: string; due_at: string; status: RegistrationStatus; reason: string | null; locator: string | null;
   mode: string | null; checked_at: string | null; alerted_at: string | null; resolved_at: string | null;
   resolved_by_id: number | null; note: string | null; handled_by?: string | null
+  staff_reply?: RegistrationStaffReply | null
 }
+export type RegistrationSuggestion = 'sin_disponibilidad' | 'oferta' | 'huesped_existente' | 'proveedor' | 'no_es_consulta' | 'otro'
+export type RegistrationStaffReply = {
+  checked_at: string; sent_at: string | null; subject: string | null; sender: string | null; in_thread: boolean | null;
+  suggestion: RegistrationSuggestion | null; suggestion_label: string | null; suggestion_reason: string | null;
+  suggested_dismiss: string | null
+}
+export type RegistrationStaffEmail = { conversation_id: number; staff: Message | null; staff_error: string | null }
 export type Audit = { action: string; actor_user_id: number | null; detail: Record<string, unknown>; created_at: string }
 export type Conversation = {
   id: number; channel: string; kind: string; customer_name: string | null; customer_address: string | null;

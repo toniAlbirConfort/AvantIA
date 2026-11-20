@@ -74,6 +74,7 @@ KINDS: dict[str, KindSpec] = {
     "inbox.overdue": KindSpec("action", "all", "Consultas sin responder"),
     "booking.created": KindSpec("action", "all", "Prerreservas"),
     "registration.unregistered": KindSpec("action", "all", "Consulta sin registrar"),
+    "registration.unanswered": KindSpec("action", "all", "Consulta sin responder ni registrar"),
     "import.invalid": KindSpec("action", "admin", "Importación inválida"),
     "whatsapp.unavailable": KindSpec("critical", "admin", "WhatsApp (GOWA)"),
     "llm.failing": KindSpec("action", "admin", "Análisis con IA"),
@@ -452,25 +453,46 @@ def _watch_bookings(db: Session, at: datetime) -> None:
 
 
 def _watch_registration(db: Session, at: datetime) -> None:
-    rows = db.execute(
-        select(RegistrationCheck.id, RegistrationCheck.conversation_id).where(
-            RegistrationCheck.status == "alerted"
-        )
-    ).all()
-    _sync_set(
-        db,
-        "registration.unregistered",
-        {
-            f"registration.unregistered:{id}": (
-                f"Consulta #{conversation_id} sin registrar en Avantio",
-                "Pasó el plazo y no hay ninguna reserva que coincida. Regístrala como "
-                "petición de información o indica por qué no procede.",
-                f"/inbox/{conversation_id}",
+    """Alerted consultations, split by the second check in the Sent folder.
+
+    Nobody answered (looked up, no reply): ``registration.unanswered``. Answered, or not looked
+    up yet: ``registration.unregistered``. A check moves from one kind to the other when the
+    team's reply shows up, and both clear once it is registered or dismissed.
+    """
+    zone = ZoneInfo(get_settings().auto_reply_timezone)
+    unanswered: dict[str, tuple] = {}
+    unregistered: dict[str, tuple] = {}
+    for check in db.scalars(
+        select(RegistrationCheck).where(RegistrationCheck.status == "alerted")
+    ).all():
+        link = f"/inbox/{check.conversation_id}"
+        if check.staff_checked_at is not None and check.staff_reply_at is None:
+            unanswered[f"registration.unanswered:{check.id}"] = (
+                f"Consulta #{check.conversation_id} sin responder ni registrar",
+                "No hay ninguna respuesta del equipo en Enviados ni ninguna reserva que "
+                "coincida en Avantio. Contesta al cliente y regístrala como petición de "
+                "información, o indica por qué no procede.",
+                link,
             )
-            for id, conversation_id in rows
-        },
-        at,
-    )
+            continue
+        if check.staff_reply_at is not None:
+            sent = _aware(check.staff_reply_at).astimezone(zone).strftime("%d/%m %H:%M")
+            body = (
+                f"El equipo respondió el {sent}, pero no hay ninguna reserva que coincida en "
+                "Avantio. Regístrala como petición de información o indica por qué no procede."
+            )
+        else:
+            body = (
+                "Pasó el plazo y no hay ninguna reserva que coincida. Regístrala como "
+                "petición de información o indica por qué no procede."
+            )
+        unregistered[f"registration.unregistered:{check.id}"] = (
+            f"Consulta #{check.conversation_id} sin registrar en Avantio",
+            body,
+            link,
+        )
+    _sync_set(db, "registration.unanswered", unanswered, at)
+    _sync_set(db, "registration.unregistered", unregistered, at)
 
 
 DATASET_LABELS = {

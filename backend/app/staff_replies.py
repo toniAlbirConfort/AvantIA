@@ -39,7 +39,7 @@ RECHECK_WINDOW = timedelta(days=30)
 MAX_PER_RUN = 200
 # Headers of the last few messages to the address are enough to find the newest one.
 LAST_UIDS = 10
-FIELDS = "(MESSAGE-ID DATE SUBJECT IN-REPLY-TO REFERENCES)"
+FIELDS = "(MESSAGE-ID DATE FROM SUBJECT IN-REPLY-TO REFERENCES)"
 AUTO_ID = "avantia-auto-"
 _SAFE_ADDRESS = re.compile(r"^[^\s\"\\@]+@[^\s\"\\@]+$")
 
@@ -111,6 +111,8 @@ def latest_sent(conn: imaplib.IMAP4, address: str, *, skip_ids: set[str]) -> dic
                 "uid": uid,
                 "sent_at": sent_at.astimezone(UTC),
                 "subject": _header_text(headers.get("Subject")),
+                "sender": _header_text(headers.get("From")),
+                "message_id": message_id,
                 "references": " ".join(
                     headers.get(name) or "" for name in ("In-Reply-To", "References")
                 ),

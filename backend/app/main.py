@@ -109,11 +109,12 @@ from app.registration import DISMISS_REASONS as REGISTRATION_DISMISS_REASONS
 from app.registration import RegistrationActionError
 from app.registration import alert_mode as registration_alert_mode
 from app.registration import check_view as registration_check_view
-from app.registration import handled_by as registration_handled_by
 from app.registration import dismiss_check as dismiss_registration_check
+from app.registration import handled_by as registration_handled_by
 from app.registration import link_check as link_registration_check
 from app.registration import simulate as simulate_registration
 from app.registration import status_summary as registration_status_summary
+from app.registration_replies import reply_payload as registration_reply_payload
 from app.reports import (
     MAX_REPORT_BYTES,
     ReportError,
@@ -1963,6 +1964,12 @@ def dismiss_registration(id: int, body: RegistrationDismissIn, db: Db, user: Ope
     except RegistrationActionError as exc:
         raise HTTPException(422, str(exc)) from exc
     return registration_check_view(check, registration_handled_by(db, check.locator))
+
+
+@app.get("/api/registration-checks/{id}/staff-reply")
+def registration_staff_reply(id: int, db: Db, user: Operator) -> dict:
+    """The team's reply to the consultation, read now from the Sent folder (never stored)."""
+    return registration_reply_payload(db, _registration_check_or_404(db, id))
 
 
 @app.get("/api/registration-checks/simulation")

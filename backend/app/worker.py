@@ -21,6 +21,7 @@ from app.notifications import notify_job_failed, notify_job_recovered, watch_gow
 from app.notifications import scan as scan_notifications
 from app.processing import alert_conversation, analyze_message, schedule_overdue
 from app.registration import run_registration_check, watch_sync
+from app.registration_replies import check_registration_replies, suggest_registration_reasons
 from app.staff_replies import CHECK_SECONDS as STAFF_REPLY_CHECK_SECONDS
 from app.staff_replies import check_staff_replies
 from app.tariff_lab import run_study
@@ -199,6 +200,16 @@ async def main() -> None:
                     check_staff_replies(db)
                 except Exception:
                     logger.exception("Sent folder check for auto-replies failed")
+            with SessionLocal() as db:
+                try:
+                    check_registration_replies(db)
+                except Exception:
+                    logger.exception("Sent folder check for registration alerts failed")
+            with SessionLocal() as db:
+                try:
+                    await suggest_registration_reasons(db)
+                except Exception:
+                    logger.exception("Registration reply suggestions failed")
             last_staff_replies = tick
         if not await run_job():
             await asyncio.sleep(settings.worker_poll_seconds)
