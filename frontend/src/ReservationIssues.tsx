@@ -15,7 +15,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '.
 type Scope = 'current' | 'all'
 const tabs: { id: ReservationIssueKind; label: string; hint: string }[] = [
   { id: 'overlap', label: 'Posibles dobles reservas', hint: 'Dos reservas que bloquean el mismo apartamento comparten noches.' },
-  { id: 'amounts', label: 'Saldos descuadrados', hint: 'En estancias vendidas, el total no coincide con pagado + pendiente (o con neto + impuestos).' },
+  { id: 'amounts', label: 'Importes descuadrados', hint: 'En estancias vendidas, el total no coincide con neto + impuestos.' },
   { id: 'inactive', label: 'Apartamentos inactivos', hint: 'Reservas o consultas futuras en apartamentos marcados como inactivos en Avantio.' },
   { id: 'unknown', label: 'Apartamentos sin catálogo', hint: 'Reservas en apartamentos que no están en la última importación de alojamientos.' },
 ]
@@ -200,79 +200,37 @@ function OverlapTab({ items, onOpenPlanning, ring, ...review }: ReviewProps & { 
   })}</ul>
 }
 
+// Pending is total - paid on import, so only net + tax can disagree with the total.
 function AmountsTab({ items, ring, ...review }: ReviewProps & { items: IssuesData['amounts'] }) {
   if (!items.length) return <EmptyTab text="No hay importes descuadrados en este periodo." />
-  const unexplained = items.filter(item => !item.explanation)
-  const explained = items.filter(item => item.explanation)
-  return <div className="grid gap-4">
-    {unexplained.length ? <AmountsTable items={unexplained} ring={ring} {...review} /> : <EmptyTab text="Todos los descuadres de este periodo tienen explicación en la exportación de Avantio." />}
-    {explained.length > 0 && <details className="grid gap-3">
-      <summary className="cursor-pointer text-sm font-semibold">Explicados por la exportación ({explained.length})<span className="ml-2 font-normal text-muted-foreground">comisión del canal o descuento registrados en Avantio o anotados en sus comentarios</span></summary>
-      <div className="mt-3"><AmountsTable items={explained} ring={ring} {...review} /></div>
-    </details>}
-  </div>
-}
-
-function AmountsTable({ items, ring, ...review }: ReviewProps & { items: IssuesData['amounts'] }) {
-  const balance = items.filter(item => item.balance_difference !== null)
-  const over = balance.filter(item => (item.balance_difference || 0) > 0)
-  const under = balance.filter(item => (item.balance_difference || 0) < 0)
-  const sum = (list: typeof items) => list.reduce((total, item) => total + (item.balance_difference || 0), 0)
-  const reservations = (count: number) => `${count} reserva${count === 1 ? '' : 's'}`
-  const isExplained = items.every(item => item.explanation)
-  const stats: [string, string, string][] = [
-    [isExplained ? 'Reservas explicadas' : 'Sin explicar', String(items.length), isExplained ? 'la diferencia cuadra con lo registrado' : 'ni la comisión ni los comentarios lo explican'],
-    ['Cobrado de más', money.format(sum(over)), `${reservations(over.length)}: pagado + pendiente supera el total`],
-    ['Falta por cobrar', money.format(Math.abs(sum(under))), `${reservations(under.length)}: pagado + pendiente no llega al total`],
-  ]
-  return <div className="grid gap-4">
-    {!isExplained && <div className="grid gap-3 sm:grid-cols-3">{stats.map(([label, value, hint]) => <Card key={label} className="p-4"><p className="text-xs text-muted-foreground">{label}</p><p className="text-xl font-semibold">{value}</p><p className="text-xs text-muted-foreground">{hint}</p></Card>)}</div>}
-    <p className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground" aria-hidden="true">Comparación:
-      <span className="inline-flex items-center gap-1.5"><span className="size-3 rounded-sm bg-success-ink/60" />pagado</span>
-      <span className="inline-flex items-center gap-1.5"><span className="size-3 rounded-sm bg-warning-ink/50" />pendiente</span>
-      <span className="inline-flex items-center gap-1.5"><span className="h-3 w-0.5 bg-foreground" />total de la reserva</span>
-    </p>
-    <Card className="overflow-x-auto">
-      <Table className="min-w-[60rem]">
-        <TableHeader><TableRow><TableHead>Reserva</TableHead><TableHead>Apartamento</TableHead><TableHead>Fechas</TableHead><TableHead className="text-right">Total</TableHead><TableHead className="text-right">Pagado</TableHead><TableHead className="text-right">Pendiente</TableHead><TableHead className="text-right">Diferencia</TableHead><TableHead className="w-40">Comparación</TableHead><TableHead>Revisión</TableHead></TableRow></TableHeader>
-        <TableBody>{items.map(item => {
-          const r = item.reservation
-          const diff = item.balance_difference
-          const scale = Math.max(r.total, r.paid + r.pending, 1)
-          const context = item.explanation || r.comments || r.handled_by || r.portal
-          return <Fragment key={item.key}><TableRow id={`issue-${item.key}`} className={`${ring(item.key)} ${context ? 'border-b-0' : ''}`}>
-            <TableCell><strong className="block text-sm whitespace-nowrap">{r.locator}</strong><span className="text-xs text-muted-foreground">{r.display_name} · {stateLabel[r.status] || r.status_original}</span> <HistoryBadge current={item.current} /></TableCell>
-            <TableCell className="text-sm">{item.property.name || r.property_id}</TableCell>
-            <TableCell className="text-sm whitespace-nowrap">{fmt(r.start_date)} → {fmt(r.end_date)}</TableCell>
-            <TableCell className="text-right tabular-nums">{money.format(r.total)}</TableCell>
-            <TableCell className="text-right tabular-nums">{money.format(r.paid)}</TableCell>
-            <TableCell className="text-right tabular-nums">{money.format(r.pending)}</TableCell>
-            <TableCell className="text-right tabular-nums">
-              {diff !== null && <span className={`font-semibold ${diff < 0 ? 'text-error-ink' : 'text-warning-ink'}`}>{diff > 0 ? '+' : ''}{money.format(diff)}<span className="block text-[0.7rem] font-normal">{diff < 0 ? 'falta cobrar' : 'cobrado de más'}</span></span>}
-              {item.tax_difference !== null && <span className="block text-[0.7rem] text-warning-ink">IVA: {money.format(item.tax_difference)}</span>}
-            </TableCell>
-            <TableCell>
-              <div className="relative h-4 overflow-hidden rounded bg-muted" role="img" aria-label={`Pagado ${money.format(r.paid)}, pendiente ${money.format(r.pending)}, total ${money.format(r.total)}`}>
-                <div className="absolute inset-y-0 left-0 bg-success-ink/60" style={{ width: `${(r.paid / scale) * 100}%` }} />
-                <div className="absolute inset-y-0 bg-warning-ink/50" style={{ left: `${(r.paid / scale) * 100}%`, width: `${(r.pending / scale) * 100}%` }} />
-                <div className="absolute inset-y-0 w-0.5 bg-foreground" style={{ left: `calc(${(r.total / scale) * 100}% - 1px)` }} />
-              </div>
-            </TableCell>
-            <TableCell><ReviewControl issueKey={item.key} review={item.review} {...review} /></TableCell>
-          </TableRow>
-          {context && <TableRow className={ring(item.key)}><TableCell colSpan={9} className="pt-0">
-            <div className="flex flex-wrap items-start gap-x-4 gap-y-2 text-xs text-muted-foreground">
-              {item.explanation && <Badge className="whitespace-normal bg-info-bg text-info-ink">{item.explanation.text}</Badge>}
-              {r.portal && <span>Canal: {r.portal}</span>}
-              {r.handled_by && <span>Atendido por {r.handled_by}</span>}
-              {r.comments && <div className="min-w-64 flex-1"><AvantioComments text={r.comments} compact /></div>}
-            </div>
-          </TableCell></TableRow>}
-          </Fragment>
-        })}</TableBody>
-      </Table>
-    </Card>
-  </div>
+  return <Card className="overflow-x-auto">
+    <Table className="min-w-[52rem]">
+      <TableHeader><TableRow><TableHead>Reserva</TableHead><TableHead>Apartamento</TableHead><TableHead>Fechas</TableHead><TableHead className="text-right">Total</TableHead><TableHead className="text-right">Neto</TableHead><TableHead className="text-right">Impuestos</TableHead><TableHead className="text-right">Diferencia</TableHead><TableHead>Revisión</TableHead></TableRow></TableHeader>
+      <TableBody>{items.map(item => {
+        const r = item.reservation
+        const diff = item.tax_difference
+        const context = r.comments || r.handled_by || r.portal
+        return <Fragment key={item.key}><TableRow id={`issue-${item.key}`} className={`${ring(item.key)} ${context ? 'border-b-0' : ''}`}>
+          <TableCell><strong className="block text-sm whitespace-nowrap">{r.locator}</strong><span className="text-xs text-muted-foreground">{r.display_name} · {stateLabel[r.status] || r.status_original}</span> <HistoryBadge current={item.current} /></TableCell>
+          <TableCell className="text-sm">{item.property.name || r.property_id}</TableCell>
+          <TableCell className="text-sm whitespace-nowrap">{fmt(r.start_date)} → {fmt(r.end_date)}</TableCell>
+          <TableCell className="text-right tabular-nums">{money.format(r.total)}</TableCell>
+          <TableCell className="text-right tabular-nums">{money.format(r.net)}</TableCell>
+          <TableCell className="text-right tabular-nums">{money.format(r.tax)}</TableCell>
+          <TableCell className="text-right tabular-nums"><span className="font-semibold text-warning-ink">{diff > 0 ? '+' : ''}{money.format(diff)}</span><span className="block text-[0.7rem] text-muted-foreground">neto + impuestos − total</span></TableCell>
+          <TableCell><ReviewControl issueKey={item.key} review={item.review} {...review} /></TableCell>
+        </TableRow>
+        {context && <TableRow className={ring(item.key)}><TableCell colSpan={8} className="pt-0">
+          <div className="flex flex-wrap items-start gap-x-4 gap-y-2 text-xs text-muted-foreground">
+            {r.portal && <span>Canal: {r.portal}</span>}
+            {r.handled_by && <span>Atendido por {r.handled_by}</span>}
+            {r.comments && <div className="min-w-64 flex-1"><AvantioComments text={r.comments} compact /></div>}
+          </div>
+        </TableCell></TableRow>}
+        </Fragment>
+      })}</TableBody>
+    </Table>
+  </Card>
 }
 
 // No planning link here: the planning only lists active apartments of the catalogue.

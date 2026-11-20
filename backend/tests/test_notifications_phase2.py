@@ -234,7 +234,7 @@ def test_import_warnings_follow_the_latest_valid_batch(db):
 
 def test_automatic_repairs_and_reservation_warnings_do_not_notify(db):
     add_batch(db, "customers", [{"code": "extra_separators"}] * 37, 30)
-    add_batch(db, "reservations", [{"code": "balance_mismatch", "locator": "X"}], 30)
+    add_batch(db, "reservations", [{"code": "tax_mismatch", "locator": "X"}], 30)
     notifications.scan(db, NOW)
     assert active_of(db, "import.warnings") == []
 

@@ -259,7 +259,7 @@ def test_warnings_and_nonblocking_inquiries(db):
     )
     batch = commit(db, "reservations", raw)
     codes = {issue["code"] for issue in batch.warnings}
-    assert {"overlap", "inactive_property", "balance_mismatch"} <= codes
+    assert {"overlap", "inactive_property"} <= codes and "balance_mismatch" not in codes
     view = planning_view(db, start, start + timedelta(days=6))
     assert {bar["locator"] for bar in view["bars"]} == {"C1", "P1"}
     assert {item["locator"] for item in view["inquiries"]} == {"I1"}
@@ -442,7 +442,7 @@ def test_warnings_skip_history_and_placeholder_amounts(db):
         reservation("PAY", "A", "Pagada", future, future + timedelta(days=2), paid=0, pending=50),
     ]))
     found = {(issue["code"], issue.get("locator")) for issue in batch.warnings}
-    assert found == {("inactive_property", "INQ"), ("balance_mismatch", "PAY")}
+    assert found == {("inactive_property", "INQ")}
 
 
 def test_consolidation_keeps_the_newest_version_of_each_locator(db):
