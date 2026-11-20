@@ -15,7 +15,7 @@ from decimal import ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP, Decimal
 from typing import Protocol
 from urllib.parse import urlsplit
 
-from sqlalchemy import desc, select
+from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 
 from app.business_scope import AUTONOMOUS_COMMUNITY, MUNICIPALITY, PROVINCE, scope_view
@@ -139,20 +139,38 @@ def _effective_reservations(
     latest = db.scalar(batch_query.order_by(desc(ImportBatch.id)))
     if not latest:
         return []
-    effective: dict[str, ReservationSnapshot] = {}
-    rows = db.scalars(
-        select(ReservationSnapshot)
+    # Each import stores a full snapshot, so the history repeats every reservation
+    # once per batch. The database keeps only the latest version of each locator;
+    # loading every version into Python exhausted the API memory.
+    by_locator = ReservationSnapshot.locator
+    ranked = (
+        select(
+            ReservationSnapshot.id.label("id"),
+            func.row_number()
+            .over(
+                partition_by=by_locator,
+                order_by=(desc(ReservationSnapshot.batch_id), desc(ReservationSnapshot.id)),
+            )
+            .label("version"),
+            func.min(ReservationSnapshot.batch_id).over(partition_by=by_locator).label("first_batch"),
+            func.min(ReservationSnapshot.id).over(partition_by=by_locator).label("first_row"),
+        )
         .join(ImportBatch, ReservationSnapshot.batch_id == ImportBatch.id)
         .where(
             ImportBatch.dataset == "reservations",
             ImportBatch.status == "valid",
             ImportBatch.id <= latest.id,
         )
-        .order_by(ImportBatch.id, ReservationSnapshot.id)
+        .subquery()
     )
-    for row in rows:
-        effective[row.locator] = row
-    return list(effective.values())
+    return list(
+        db.scalars(
+            select(ReservationSnapshot)
+            .join(ranked, ReservationSnapshot.id == ranked.c.id)
+            .where(ranked.c.version == 1)
+            .order_by(ranked.c.first_batch, ranked.c.first_row)
+        )
+    )
 
 
 @dataclass
@@ -205,7 +223,9 @@ def _percent(value: float) -> str:
     return f"{value * 100:.1f}".replace(".", ",") + " %"
 
 
-def infer_property_groups(db: Session) -> list[dict]:
+def infer_property_groups(
+    db: Session, reservations: list[ReservationSnapshot] | None = None
+) -> list[dict]:
     """Link each active property to an SA tariff group without manual input.
 
     Properties with the same category, building and capacity form one cohort and
@@ -238,7 +258,9 @@ def infer_property_groups(db: Session) -> list[dict]:
     for row in seasons:
         seasons_by_group[row.tariff_name].append(row)
     errors: dict[tuple[tuple[str, str, int], str], list[float]] = defaultdict(list)
-    for row in _effective_reservations(db):
+    if reservations is None:
+        reservations = _effective_reservations(db)
+    for row in reservations:
         key = cohort_of.get(row.property_id)
         if (
             key is None
@@ -357,7 +379,8 @@ def tariff_readiness(db: Session) -> dict:
         )
     )
     properties = _current_properties(db)
-    inferred = infer_property_groups(db)
+    reservations = _effective_reservations(db)
+    inferred = infer_property_groups(db, reservations)
     unmapped = [
         {"id": item["property_id"], "name": item["name"], "city": None}
         for item in inferred
@@ -370,7 +393,6 @@ def tariff_readiness(db: Session) -> dict:
     ]
     mapped_groups = {item["tariff_name"] for item in inferred if item["tariff_name"]}
     unmapped_groups = sorted(set(groups) - mapped_groups)
-    reservations = _effective_reservations(db)
     reservation_dates = [row.start_date for row in reservations] + [
         row.end_date - timedelta(days=1) for row in reservations
     ]
