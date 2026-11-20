@@ -41,6 +41,7 @@ from app.models import (
     ReservationSyncState,
     now,
 )
+from app.registration_replies import staff_reply_view
 
 MODES = {"off", "shadow"}
 FOLLOW_UP_DAYS = 45
@@ -757,6 +758,7 @@ def check_view(check: RegistrationCheck, handled: str | None = None) -> dict:
         "resolved_at": check.resolved_at,
         "resolved_by_id": check.resolved_by_id,
         "note": check.note,
+        "staff_reply": staff_reply_view(check),
     }
 
 
