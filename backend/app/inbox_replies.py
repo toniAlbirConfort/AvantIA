@@ -22,6 +22,7 @@ fetched with BODY.PEEK.
 from __future__ import annotations
 
 import logging
+import re
 from datetime import UTC, datetime, timedelta
 from email.utils import parseaddr
 
@@ -37,6 +38,16 @@ logger = logging.getLogger(__name__)
 
 ACTION = "conversation.answered_outside"
 FILED_ACTION = "conversation.filed_notice"
+REOPENED_ACTION = "conversation.notice_reopened"
+# Notices that may ask for something even when they are not demand: a guest writing through a
+# platform, a reservation or a change to one, a failed communication, a check-in, or a person
+# answering (RE:/RV:). They are never filed, whatever the classifier says.
+ACTIONABLE = re.compile(
+    r"^\s*(re|rv|sv|aw|antw|vs|fw|fwd|wg|tr)\s*:|mensaje|message|melding|nachricht|reserva|"
+    r"booking|bestilling|buchung|reservation|cancel|modific|check.?in|llegada|arrival|"
+    r"err[oó]ne|error|fallid|failed|rechaz|incidenc|queja|complaint|reclama",
+    re.IGNORECASE,
+)
 WINDOW = timedelta(days=30)
 # Sent folder look-ups per run. Each run continues after the last conversation it looked up,
 # so a long backlog is covered over several runs instead of always the same ones.
@@ -183,9 +194,39 @@ def automatic_sender(conversation: Conversation) -> bool:
     return "@" in address and not _internal(address) and _booking_platform(address)
 
 
+def actionable(conversation: Conversation, messages: list[Message]) -> bool:
+    subjects = [conversation.subject, *(item.subject for item in messages)]
+    return any(ACTIONABLE.search(subject or "") for subject in subjects)
+
+
+def reopen_actionable_notices(db: Session) -> int:
+    """Put back to pending the filed notices the current rules would not file."""
+    reopened = 0
+    for conversation in db.scalars(select(Conversation).where(Conversation.status == "filed")):
+        messages = db.scalars(
+            select(Message).where(
+                Message.conversation_id == conversation.id, Message.direction == "inbound"
+            )
+        ).all()
+        if not actionable(conversation, messages):
+            continue
+        conversation.status = "pending"
+        db.add(
+            AuditEvent(
+                conversation_id=conversation.id,
+                action=REOPENED_ACTION,
+                detail={"reason": "puede_pedir_accion"},
+            )
+        )
+        reopened += 1
+    db.commit()
+    return reopened
+
+
 def file_platform_notices(db: Session, current: datetime | None = None) -> int:
     """File pending automatic notices nobody has to answer. Returns how many."""
     current = current or datetime.now(UTC)
+    reopen_actionable_notices(db)
     filed = 0
     for conversation in db.scalars(
         select(Conversation).where(
@@ -204,6 +245,8 @@ def file_platform_notices(db: Session, current: datetime | None = None) -> int:
         ).all()
         if not messages or not all(_confident_non_demand(item) for item in messages):
             continue  # unclassified yet, unsure, or something to act on
+        if actionable(conversation, messages):
+            continue
         last_id = messages[-1].id
         done = db.scalars(
             select(AuditEvent.detail).where(
