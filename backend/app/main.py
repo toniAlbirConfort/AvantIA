@@ -29,6 +29,10 @@ from app.auto_reply import mode as auto_reply_mode
 from app.auto_reply import pause_state as auto_reply_pause_state
 from app.auto_reply import set_paused as set_auto_reply_paused
 from app.auto_reply import simulate as simulate_auto_replies
+from app.automatic_messages import CHANNELS as AUTOMATIC_CHANNELS
+from app.automatic_messages import SOURCES as AUTOMATIC_SOURCES
+from app.automatic_messages import STATUSES as AUTOMATIC_STATUSES
+from app.automatic_messages import list_automatic_messages
 from app.availability import aware, import_csv, latest_batch
 from app.avantio import availability_provider
 from app.campaigns_api import router as campaigns_router
@@ -2023,6 +2027,39 @@ def auto_replies(
     if mode:
         query = query.where(AutoReply.mode == mode)
     return [_auto_reply(item) for item in db.scalars(query).all()]
+
+
+@app.get("/api/automatic-messages")
+def automatic_messages(
+    db: Db,
+    user: Operator,
+    channel: str | None = None,
+    kind: str | None = None,
+    status: str | None = None,
+    q: str | None = Query(default=None, max_length=200),
+    from_at: datetime | None = Query(default=None, alias="from"),
+    to_at: datetime | None = Query(default=None, alias="to"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+) -> dict:
+    """Audit log of every message sent to customers without human approval, newest first."""
+    if channel and channel not in AUTOMATIC_CHANNELS:
+        raise HTTPException(422, "Canal no válido")
+    if kind and kind not in {source.kind for source in AUTOMATIC_SOURCES}:
+        raise HTTPException(422, "Tipo de envío no válido")
+    if status and status not in AUTOMATIC_STATUSES:
+        raise HTTPException(422, "Estado no válido")
+    return list_automatic_messages(
+        db,
+        channel=channel,
+        kind=kind,
+        status=status,
+        q=q,
+        start=from_at,
+        end=to_at,
+        limit=limit,
+        offset=offset,
+    )
 
 
 def _auto_reply_status(db: Session) -> dict:
