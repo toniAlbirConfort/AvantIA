@@ -199,3 +199,40 @@ export type RetentionResponse = {
   years_available: { year: number; reservations: number }[]
   months: [number, number] | null
 }
+export type CampaignLanguage = 'es' | 'en' | 'fr' | 'de' | 'nl' | 'nb'
+export type CampaignContentFields = { subject: string; preheader: string; headline: string; body: string; offer: string; cta_label: string }
+export type CampaignContent = Partial<Record<CampaignLanguage, CampaignContentFields>>
+export type CampaignOffer = { code: string; valid_until: string; cta_url: string }
+export type CampaignFilters = {
+  target_year: number; base_years: number[]; min_stays: number; channel: string | null
+  contact: 'any' | 'email' | 'phone' | 'opt_in'; q: string; month_from: number | null; month_to: number | null
+}
+export type CampaignAudience = {
+  candidates: number; included: number; excluded: number; fallback: number
+  reasons: { reason: string; label: string; count: number }[]
+  languages: { language: string; label: string; count: number; sent_as: string }[]
+}
+export type CampaignSummary = {
+  id: number; name: string; status: string; filters: CampaignFilters; languages: string[]
+  offer: CampaignOffer; included: number; candidates: number; created_by: string | null
+  created_at: string; updated_at: string
+}
+export type CampaignDetail = {
+  id: number; name: string; status: string; filters: CampaignFilters; content: CampaignContent
+  offer: CampaignOffer; created_by: string | null; created_at: string; updated_at: string
+  audience_built_at: string | null; audience: CampaignAudience; sender: string
+  languages: { code: CampaignLanguage; label: string }[]; fallback_language: CampaignLanguage
+  variables: { name: string; label: string }[]; defaults: Record<CampaignLanguage, CampaignContentFields>
+}
+export type CampaignRecipient = {
+  id: number; display_name: string; first_name: string | null; email: string | null
+  language: string; language_raw: string | null; status: 'included' | 'excluded'
+  exclusion_reason: string | null; exclusion_label: string | null; avantio_id: string | null
+  years: number[]; stays: number; nights: number; total: string; last_stay_start: string
+  last_stay_end: string; property_name: string | null; channel: string | null; country: string | null
+  language_known: boolean
+}
+export type CampaignPreview = {
+  language: CampaignLanguage; requested_language: string; sample: boolean; from: string; to: string | null
+  subject: string; preheader: string; html: string; text: string; unsubscribe_url: string; warnings: string[]
+}

@@ -31,6 +31,7 @@ from app.auto_reply import set_paused as set_auto_reply_paused
 from app.auto_reply import simulate as simulate_auto_replies
 from app.availability import aware, import_csv, latest_batch
 from app.avantio import availability_provider
+from app.campaigns_api import router as campaigns_router
 from app.classification import (
     apply_message_classification,
     classification_review_clause,
@@ -150,6 +151,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.include_router(campaigns_router)
 
 Db = Annotated[Session, Depends(get_db)]
 Operator = Annotated[User, Depends(current_user)]

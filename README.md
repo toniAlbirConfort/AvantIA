@@ -161,6 +161,22 @@ La migración `0013` crea la tabla `reports` e incorpora el estudio de precios d
 
 API: `GET|POST /api/reports`, `GET /api/reports/{id}/content` y `DELETE /api/reports/{id}`.
 
+## Campañas de recuperación
+
+En **Clientes › A recuperar**, el botón «Crear campaña» prepara un email de ofertas para los huéspedes que muestran los filtros elegidos por el operador (años, meses, estancias mínimas, canal…). La vista **Clientes › Campañas** (`/campaigns/<id>`) muestra la audiencia congelada, los textos por idioma y la vista previa del email maquetado:
+
+- **Audiencia.** Solo se incluye a quien tiene una única ficha de cliente, un email propio (no la dirección intermediaria de Booking, Airbnb o Expedia) y acepta recibir campañas (`email_opt_in`). Las bajas (`mailing_suppressions`) se respetan siempre, aunque Avantio diga lo contrario. Cada exclusión indica su motivo. El operador puede excluir a cualquiera a mano, y esa decisión se conserva al recalcular la audiencia.
+- **Mensaje.** Hay textos propuestos en español, inglés, francés, alemán, neerlandés y noruego, con las variables `{nombre}`, `{alojamiento}`, `{ultima_estancia}`, `{estancias}`, `{codigo}` y `{valida_hasta}`. El saludo con el nombre se añade solo. Quien no tiene idioma reconocido, o lo tiene sin texto, recibe la versión en inglés, que es obligatoria.
+- **Vista previa.** Se muestra el email de un cliente de ejemplo o el de cualquier destinatario, en escritorio, móvil o texto plano, con remitente, asunto y texto de vista previa. Sigue los cambios sin guardar.
+- **Baja.** Cada email lleva un enlace propio a `GET|POST /api/public/campaigns/unsubscribe/{token}` (`PUBLIC_BASE_URL`), que añade la dirección a la lista de supresión. Admite la baja en un clic (RFC 8058).
+- **Envío.** Está desactivado: falta conectar el proveedor de correo y su dominio. Ningún endpoint envía campañas.
+
+Sin aviso: mientras no haya envío real, la campaña no genera eventos que notificar.
+
+La migración `0025` crea `mailing_campaigns`, `mailing_recipients` y `mailing_suppressions`. Las acciones quedan en la auditoría (`campaign.*`).
+
+API: `GET|POST /api/campaigns`, `GET|PATCH|DELETE /api/campaigns/{id}`, `POST /api/campaigns/{id}/audience`, `GET /api/campaigns/{id}/recipients`, `PATCH /api/campaigns/{id}/recipients/{recipient_id}` y `GET|POST /api/campaigns/{id}/preview`.
+
 ## Avisos
 
 La vista **Avisos** (`/notifications`) reúne lo que está pasando en AvantIA y lo que necesita atención. El contador de la barra lateral y la campana del móvil muestran los avisos sin leer de cada usuario, y se resaltan si hay alguno crítico. Cada aviso tiene una gravedad (crítico, requiere acción o informativo), un enlace a la vista donde se resuelve y las acciones «Marcar leído» y «Descartar». Los avisos de sistema solo los ven los administradores, y los personales («Para ti») solo la persona a la que van dirigidos. En «Preferencias», cada usuario puede silenciar tipos de aviso: siguen en la lista con la etiqueta «Silenciado», pero no suman al contador. Los críticos no se pueden silenciar.
