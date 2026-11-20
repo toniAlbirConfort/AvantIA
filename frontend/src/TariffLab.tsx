@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { ChevronDown } from 'lucide-react'
 import { api, apiDownload } from './api'
 import { Alert } from './components/ui/alert'
@@ -84,6 +84,9 @@ function money(value: string | null | undefined) {
   return new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(Number(value))
 }
 
+const POLL_INTERVAL_MS = 12000
+const SYNC_WAIT_LIMIT_MS = 15 * 60 * 1000
+
 function percentage(value: number | null | undefined) {
   return value == null ? '—' : new Intl.NumberFormat('es-ES', { style: 'percent', maximumFractionDigits: 0 }).format(value)
 }
@@ -96,6 +99,8 @@ export function TariffLab({ role, refreshVersion }: { role: string; refreshVersi
   const [holidayYear, setHolidayYear] = useState(() => String(new Date().getFullYear()))
   const [studies, setStudies] = useState<Study[]>([])
   const [selectedId, setSelectedId] = useState<number | null>(null)
+  const selectedIdRef = useRef<number | null>(null)
+  selectedIdRef.current = selectedId
   const [selectedStudy, setSelectedStudy] = useState<Study | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
@@ -104,47 +109,77 @@ export function TariffLab({ role, refreshVersion }: { role: string; refreshVersi
   const [downloadError, setDownloadError] = useState('')
   const admin = role === 'admin'
 
+  // Readiness and property groups are computed from the whole reservation history,
+  // so they load on demand only: on opening the view, with the refresh buttons and
+  // when a requested holiday sync finishes. Only pending work is polled.
+  const [syncWait, setSyncWait] = useState<{ lastRunAt: string | null; since: number } | null>(null)
+
+  const loadStatus = useCallback(async () => {
+    const [nextReadiness, nextGroups, nextHolidays, nextSync] = await Promise.all([
+      api<Readiness>('/api/tariff-lab/readiness'),
+      api<PropertyGroup[]>('/api/tariff-lab/property-groups'),
+      api<Holiday[]>('/api/tariff-lab/holidays'),
+      api<HolidaySync>('/api/tariff-lab/holidays/sync'),
+    ])
+    setReadiness(nextReadiness)
+    setPropertyGroups(nextGroups)
+    setHolidays(nextHolidays)
+    setHolidaySync(nextSync)
+  }, [])
+
+  const loadStudies = useCallback(async () => {
+    const nextStudies = await api<Study[]>('/api/tariff-lab/studies')
+    setStudies(nextStudies)
+    const currentId = selectedIdRef.current ?? nextStudies[0]?.id ?? null
+    if (currentId == null) return
+    if (selectedIdRef.current == null) setSelectedId(currentId)
+    setSelectedStudy(await api<Study>(`/api/tariff-lab/studies/${currentId}`))
+  }, [])
+
   const load = useCallback(async () => {
     try {
-      const [nextReadiness, nextGroups, nextHolidays, nextSync, nextStudies] = await Promise.all([
-        api<Readiness>('/api/tariff-lab/readiness'),
-        api<PropertyGroup[]>('/api/tariff-lab/property-groups'),
-        api<Holiday[]>('/api/tariff-lab/holidays'),
-        api<HolidaySync>('/api/tariff-lab/holidays/sync'),
-        api<Study[]>('/api/tariff-lab/studies'),
-      ])
-      setReadiness(nextReadiness)
-      setPropertyGroups(nextGroups)
-      setHolidays(nextHolidays)
-      setHolidaySync(nextSync)
-      setStudies(nextStudies)
-      if (selectedId != null) {
-        const selected = await api<Study>(`/api/tariff-lab/studies/${selectedId}`)
-        setSelectedStudy(selected)
-      } else if (nextStudies.length) {
-        setSelectedId(nextStudies[0].id)
-        setSelectedStudy(await api<Study>(`/api/tariff-lab/studies/${nextStudies[0].id}`))
-      }
+      await Promise.all([loadStatus(), loadStudies()])
       setError('')
     } catch (err) {
       setError((err as Error).message)
     } finally {
       setLoading(false)
     }
-  }, [selectedId])
+  }, [loadStatus, loadStudies])
 
+  useEffect(() => { void load() }, [load, refreshVersion])
+
+  const studyInProgress = studies.some(item => item.status === 'pending' || item.status === 'running')
   useEffect(() => {
-    void load()
-    const timer = window.setInterval(() => void load(), 12000)
+    if (!studyInProgress && !syncWait) return
+    const timer = window.setInterval(() => {
+      if (document.hidden) return
+      void (async () => {
+        try {
+          if (studyInProgress) await loadStudies()
+          if (syncWait) {
+            const nextSync = await api<HolidaySync>('/api/tariff-lab/holidays/sync')
+            setHolidaySync(nextSync)
+            if (nextSync.last_run_at !== syncWait.lastRunAt) {
+              setSyncWait(null)
+              await loadStatus()
+            } else if (Date.now() - syncWait.since > SYNC_WAIT_LIMIT_MS) {
+              setSyncWait(null)
+            }
+          }
+          setError('')
+        } catch (err) { setError((err as Error).message) }
+      })()
+    }, POLL_INTERVAL_MS)
     return () => window.clearInterval(timer)
-  }, [load, refreshVersion])
+  }, [studyInProgress, syncWait, loadStudies, loadStatus])
 
   async function syncHolidays() {
     setBusy(true); setMessage(''); setError('')
     try {
       await api('/api/tariff-lab/holidays/sync', { method: 'POST' })
+      setSyncWait({ lastRunAt: holidaySync?.last_run_at ?? null, since: Date.now() })
       setMessage('Sincronización de festivos en cola. Los datos se actualizarán en unos minutos.')
-      await load()
     } catch (err) { setError((err as Error).message) }
     finally { setBusy(false) }
   }
@@ -164,7 +199,7 @@ export function TariffLab({ role, refreshVersion }: { role: string; refreshVersi
         }),
       })
       setSelectedId(created.id); setSelectedStudy(created); setMessage('Estudio añadido a la cola de cálculo.')
-      await load()
+      setStudies(await api<Study[]>('/api/tariff-lab/studies'))
     } catch (err) { setError((err as Error).message) }
     finally { setBusy(false) }
   }
