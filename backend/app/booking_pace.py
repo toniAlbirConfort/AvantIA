@@ -30,15 +30,19 @@ from app.tariff_lab import (
     _effective_reservations,
     _property_mappings,
 )
-from app.tariff_projection import LONG_STAY_NIGHTS, final_seasons, shift_date
+from app.tariff_projection import (
+    LONG_STAY_NIGHTS,
+    PACE_BEHIND,
+    PACE_SLIGHTLY_BEHIND,
+    final_seasons,
+    shift_date,
+)
 
 COMPARISON_YEARS = 3
 ANNUAL_YEARS = 8
 MIN_SEASON_NIGHTS = 14
 MIN_ANNUAL_NIGHTS = 30
 PACE_MIN_NIGHTS = 30
-PACE_BEHIND = -0.30
-PACE_SLIGHTLY_BEHIND = -0.10
 DEFAULT_DROP_THRESHOLD = 0.15
 # Starting-point offers by drop in occupancy points; reviewed by a person, never applied.
 OFFER_RULES = (

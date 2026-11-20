@@ -1,8 +1,11 @@
 """Yearly SA projection: next year's seasons derived from this year's, explained per season.
 
-Each season of the base year keeps its dates in the target year and its rate moves by
-three explicit adjustments: costs (inflation), own demand (historical occupancy) and
-market position (hand-captured competitor prices). Nothing here writes to Avantio; a
+Each season of the base year keeps its dates in the target year. Its rate rises by the
+increase learned from previous years (how many euros the same dates went up in the SA
+tariffs of each recent year), or by a cost percentage when there is no history, and
+then by two explicit corrections: own demand (historical occupancy) and market position
+(hand-captured competitor prices). Each season also reports how its bookings are going
+against the previous year at the same point. Nothing here writes to Avantio; a
 projection only reaches Tarifas when an administrator applies it.
 """
 
@@ -34,14 +37,23 @@ from app.tariff_lab import (
     _property_mappings,
 )
 
-ALGORITHM_VERSION = "proyeccion-1.1"
+ALGORITHM_VERSION = "proyeccion-2.0"
 HISTORY_YEARS = 4
 LONG_STAY_NIGHTS = 28
 SPLIT_MIN_DAYS = 60
 SPLIT_OCCUPANCY_SPREAD = 0.20
 EASTER_SEASON_MAX_DAYS = 21
+# Learned increase: euros added to the same dates in each of the last years, the most
+# recent weighing most.
+PATTERN_WEIGHTS = (3, 2, 1)
+# Booking pace of a season against the previous year at the same point.
+PACE_MIN_NIGHTS = 14
+PACE_BEHIND = -0.30
+PACE_SLIGHTLY_BEHIND = -0.10
+INCREASE_MODES = ("pattern", "percent")
 
 DEFAULT_PARAMETERS: dict[str, float | int | str] = {
+    "increase_mode": "pattern",
     "cost_percent": 3.5,
     "demand_high_occupancy": 80,
     "demand_high_percent": 2.0,
@@ -56,8 +68,8 @@ DEFAULT_PARAMETERS: dict[str, float | int | str] = {
     "market_above_percent": -2.0,
     "market_inflation_percent": 3.7,
     "min_change_percent": 0.0,
-    "max_change_percent": 10.0,
-    "rounding": "euro",
+    "max_change_percent": 20.0,
+    "rounding": "nine",
 }
 PARAMETER_LIMITS: dict[str, tuple[float, float]] = {
     "cost_percent": (-10, 25),
@@ -138,6 +150,11 @@ def normalize_parameters(raw: dict | None) -> dict:
         if key == "rounding":
             if value not in ROUNDING_MODES:
                 raise TariffLabError("Redondeo no válido: usa «euro» o «nine»")
+            params[key] = value
+            continue
+        if key == "increase_mode":
+            if value not in INCREASE_MODES:
+                raise TariffLabError("Subida no válida: usa «pattern» o «percent»")
             params[key] = value
             continue
         if key not in PARAMETER_LIMITS:
@@ -278,6 +295,52 @@ class _History:
             "change": round(current / previous - 1, 4) if previous else None,
         }
 
+    def season_pace(self, group: str, start: date, end: date, as_of: date) -> dict | None:
+        """Nights of a season booked by as_of, against the same dates one year earlier.
+
+        Only nights inside the season count, so a stay that crosses its limits counts in
+        part. A season that has already ended has no pace to follow.
+        """
+        if end < as_of:
+            return None
+        previous_start = shift_date(start, start.year - 1)
+        previous_end = shift_date(end, end.year - 1, is_end=True)
+        previous_cutoff = shift_date(as_of, as_of.year - 1)
+        current = previous = 0
+        for row in self.reservations:
+            if (
+                self.property_group[row.property_id] != group
+                or row.status not in BOOKABLE_STATUSES
+                or not row.created_on
+            ):
+                continue
+            last_night = row.end_date - timedelta(days=1)
+            if row.created_on <= as_of:
+                overlap = (min(last_night, end) - max(row.start_date, start)).days + 1
+                current += max(overlap, 0)
+            if row.created_on <= previous_cutoff:
+                overlap = (
+                    min(last_night, previous_end) - max(row.start_date, previous_start)
+                ).days + 1
+                previous += max(overlap, 0)
+        change = round(current / previous - 1, 4) if previous else None
+        if previous < PACE_MIN_NIGHTS:
+            status = "few_data"
+        elif change is not None and change <= PACE_BEHIND:
+            status = "behind"
+        elif change is not None and change <= PACE_SLIGHTLY_BEHIND:
+            status = "slightly_behind"
+        else:
+            status = "on_track"
+        return {
+            "as_of": as_of.isoformat(),
+            "previous_as_of": previous_cutoff.isoformat(),
+            "nights": current,
+            "previous_nights": previous,
+            "change": change,
+            "status": status,
+        }
+
 
 # ---------------------------------------------------------------- market
 
@@ -310,6 +373,44 @@ def _market(
         "refs": len(competitors),
         "observations": len(prices),
     }
+
+
+# ---------------------------------------------------------------- learned increase
+
+
+def _pattern(
+    rows: list[TariffSeason], group: str, start: date, end: date, base_year: int
+) -> dict | None:
+    """Euros added each recent year to the SA tariff of the same dates.
+
+    Compares the day-weighted SA tariff of the season dates in each of the last years
+    with the year before, so a season whose limits moved is still compared day by day.
+    Only years where Tarifas covers the whole season in both years count.
+    """
+    steps = []
+    for year in range(base_year, base_year - len(PATTERN_WEIGHTS), -1):
+        current = _sa_average(
+            rows, group, shift_date(start, year), shift_date(end, year, is_end=True)
+        )
+        previous = _sa_average(
+            rows, group, shift_date(start, year - 1), shift_date(end, year - 1, is_end=True)
+        )
+        if not (current and previous and current["complete"] and previous["complete"]):
+            continue
+        steps.append({
+            "year": year,
+            "from": previous["rate"],
+            "to": current["rate"],
+            "amount": f"{Decimal(current['rate']) - Decimal(previous['rate']):.2f}",
+        })
+    if not steps:
+        return None
+    weights = PATTERN_WEIGHTS[: len(steps)]
+    amount = sum(
+        (Decimal(step["amount"]) * weight for step, weight in zip(steps, weights, strict=True)),
+        Decimal(),
+    ) / sum(weights)
+    return {"amount": f"{amount:.2f}", "steps": steps}
 
 
 # ---------------------------------------------------------------- projection
@@ -365,6 +466,16 @@ def calculate_projection(
         observations_by_group[item.tariff_name].append(item)
 
     cost = params["cost_percent"] / 100
+    use_pattern = params["increase_mode"] == "pattern"
+    years_ahead = target_year - base_year
+    sa_rows = db.scalars(
+        select(TariffSeason).where(
+            TariffSeason.rate_plan == "SA",
+            TariffSeason.tariff_name.in_(groups),
+            TariffSeason.end_date >= date(base_year - len(PATTERN_WEIGHTS) - 1, 1, 1),
+            TariffSeason.start_date <= date(base_year, 12, 31),
+        )
+    ).all()
     seasons: list[dict] = []
     group_summary: dict[str, dict] = {}
     warnings: list[str] = []
@@ -373,6 +484,21 @@ def calculate_projection(
         if not base:
             warnings.append(f"{group}: no hay temporadas SA en {base_year}")
             continue
+        patterns = (
+            [_pattern(sa_rows, group, item["start"], item["end"], base_year) for item in base]
+            if use_pattern
+            else [None] * len(base)
+        )
+        learned = [Decimal(item["amount"]) for item in patterns if item]
+        # A season without history takes the typical increase of its group.
+        group_amount = (
+            Decimal(statistics.median(learned)).quantize(Decimal("0.01")) if learned else None
+        )
+        if use_pattern and not learned:
+            warnings.append(
+                f"{group}: Tarifas no tiene tarifas SA de años anteriores para aprender la "
+                f"subida; se aplica el {params['cost_percent']:g} % de IPC y costes"
+            )
         covered = sum(_days(item["start"], item["end"]) for item in base)
         if covered < _days(date(base_year, 1, 1), date(base_year, 12, 31)):
             warnings.append(f"{group}: las temporadas SA de {base_year} no cubren todo el año")
@@ -387,8 +513,19 @@ def calculate_projection(
                 f"{group}: solo {units} alojamientos; la ocupación no es representativa y "
                 "se omite el ajuste de demanda"
             )
-        for item in base:
+        for item, pattern in zip(base, patterns, strict=True):
             flags: list[str] = []
+            if pattern:
+                increase_source = "pattern"
+                amount = Decimal(pattern["amount"]) * years_ahead
+            elif group_amount is not None:
+                increase_source = "group_pattern"
+                amount = group_amount * years_ahead
+                flags.append("sin_patron")
+            else:
+                increase_source = "cost"
+                amount = item["rate"] * Decimal(str(cost))
+            increase = float(amount / item["rate"]) if item["rate"] else 0.0
             years = _reference_years(item["start"], item["end"], base_year, as_of)
             ref_year = years[0] if years else None
             prev_year = years[1] if len(years) > 1 else None
@@ -413,7 +550,10 @@ def calculate_projection(
             demand = 0.0
             occupancy = ref["occupancy"]
             if units and reliable_units and occupancy is not None:
-                if occupancy * 100 >= params["demand_high_occupancy"]:
+                # The learned increase already carries the raises of busy seasons.
+                if increase_source == "cost" and (
+                    occupancy * 100 >= params["demand_high_occupancy"]
+                ):
                     demand = params["demand_high_percent"] / 100
                 elif (
                     occupancy * 100 < params["demand_low_occupancy"]
@@ -444,7 +584,7 @@ def calculate_projection(
                 elif gap * 100 <= -params["market_threshold_percent"]:
                     market_adj = params["market_above_percent"] / 100
 
-            raw_total = cost + demand + market_adj
+            raw_total = increase + demand + market_adj
             total = max(
                 params["min_change_percent"] / 100,
                 min(params["max_change_percent"] / 100, raw_total),
@@ -480,12 +620,19 @@ def calculate_projection(
                 "market_median": f"{market['median']:.2f}" if market else None,
                 "market_refs": market["refs"] if market else 0,
                 "market_gap": round(gap, 4) if gap is not None else None,
-                "cost_adjustment": round(cost, 4),
+                "increase_source": increase_source,
+                "increase_amount": f"{amount:.2f}",
+                "pattern": pattern,
+                "cost_adjustment": round(increase, 4) if increase_source == "cost" else 0.0,
+                "pattern_adjustment": round(increase, 4) if increase_source != "cost" else 0.0,
                 "demand_adjustment": round(demand, 4),
                 "market_adjustment": round(market_adj, 4),
                 "total_change": round(total, 4),
                 "rate": f"{rate:.2f}",
                 "monthly_occupancy": spread,
+                "pace": history.season_pace(group, item["start"], item["end"], as_of)
+                if units
+                else None,
                 "flags": flags,
             })
         group_summary[group] = {
@@ -507,6 +654,14 @@ def calculate_projection(
         )
     for group in group_summary:
         group_summary[group].update(_averages(seasons, group))
+        amounts = [
+            Decimal(item["increase_amount"])
+            for item in seasons
+            if item["tariff_name"] == group and item["increase_source"] == "pattern"
+        ]
+        group_summary[group]["pattern_amount"] = (
+            f"{statistics.median(amounts):.2f}" if amounts else None
+        )
     return {
         "as_of": as_of.isoformat(),
         "reservation_batch_id": reservation_batch.id if reservation_batch else None,
