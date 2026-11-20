@@ -147,3 +147,57 @@ def test_sent_folder_uses_the_special_use_flag(monkeypatch):
     imap = FakeImap({}, boxes=[b'(\\HasNoChildren) "/" "INBOX"',
                                b'(\\HasNoChildren \\Sent) "/" "Elementos enviados"'])
     assert sent_folder(imap) == "Elementos enviados"
+
+
+def test_fetch_message_reads_the_full_email_with_peek_and_sanitizes_html():
+    from app.staff_replies import fetch_message
+
+    raw = (
+        b"From: Reservas <reservas@albirconfort.test>\r\nTo: charles@example.test\r\n"
+        b"Subject: RE: Booking confirmation\r\nDate: Tue, 17 Nov 2026 14:15:10 +0100\r\n"
+        b"MIME-Version: 1.0\r\nContent-Type: multipart/alternative; boundary=b\r\n\r\n"
+        b"--b\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nHello Charles, see you soon.\r\n"
+        b"--b\r\nContent-Type: text/html; charset=utf-8\r\n\r\n"
+        b"<p>Hello Charles</p><script>alert(1)</script>\r\n--b--\r\n"
+    )
+
+    class Conn:
+        commands = []
+
+        def uid(self, command, *args):
+            self.commands.append((command, *args))
+            return "OK", [(b"9 (BODY[] {1}", raw), b")"]
+
+    conn = Conn()
+    found = fetch_message(conn, b"9")
+    assert conn.commands == [("FETCH", b"9", "(BODY.PEEK[])")]
+    assert found["subject"] == "RE: Booking confirmation"
+    assert found["body"] == "Hello Charles, see you soon."
+    assert "Hello Charles" in found["html_body"] and "script" not in found["html_body"]
+    assert found["sent_at"] == datetime(2026, 11, 17, 13, 15, 10, tzinfo=UTC)
+
+
+def test_messages_return_the_customer_email_even_if_the_mailbox_fails(db, monkeypatch):
+    from app import automatic_messages
+
+    reply, message = add_reply(db)
+    message.subject = "Stay in Albir"
+    db.commit()
+
+    def broken(_reply):
+        raise OSError("no route")
+
+    monkeypatch.setattr(automatic_messages, "staff_message", broken)
+    result = automatic_messages.auto_reply_messages(db, reply.id)
+    assert result["customer"]["subject"] == "Stay in Albir"
+    assert result["customer"]["direction"] == "inbound"
+    assert result["staff"] is None and result["staff_error"]
+
+    monkeypatch.setattr(automatic_messages, "staff_message", lambda _reply: {
+        "sender": "reservas@x", "recipient": "charles@example.test", "cc": None,
+        "subject": "RE: Booking", "sent_at": BASE, "body": "Hi", "html_body": None,
+    })
+    result = automatic_messages.auto_reply_messages(db, reply.id)
+    assert result["staff"]["body"] == "Hi" and result["staff"]["direction"] == "outbound"
+    assert result["staff_error"] is None
+    assert automatic_messages.auto_reply_messages(db, 999) is None

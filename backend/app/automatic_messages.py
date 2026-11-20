@@ -13,14 +13,17 @@ delivery_unknown (the send started but never finished: it is never retried autom
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from app.models import AuditEvent, AutoReply, Conversation
-from app.staff_replies import staff_reply_view
+from app.models import AuditEvent, AutoReply, Conversation, Message
+from app.staff_replies import staff_message, staff_reply_view
+
+logger = logging.getLogger(__name__)
 
 STATUSES = ("sent", "shadow", "failed", "delivery_unknown")
 # Whether the team wrote to the recipient (Sent folder) after the automatic message.
@@ -176,4 +179,61 @@ def _auto_reply_row(reply: AutoReply, conv: Conversation, copy_failed: bool) -> 
         "conversation_kind": conv.kind,
         "staff_reply": staff_reply_view(reply),
         "created_at": reply.created_at,
+    }
+
+
+def auto_reply_messages(db: Session, reply_id: int) -> dict | None:
+    """The customer's email that triggered the auto-reply and the team's last email to them.
+
+    The customer's email is in the database; the team's is read now, read-only, from the
+    Sent folder and never stored. If the mailbox cannot be read, ``staff_error`` says so and
+    the customer's email is still returned.
+    """
+    reply = db.get(AutoReply, reply_id)
+    if not reply:
+        return None
+    message = db.get(Message, reply.message_id)
+    customer = (
+        {
+            "id": message.id,
+            "direction": "inbound",
+            "sender": message.sender,
+            "recipient": message.recipient,
+            "subject": message.subject,
+            "body": message.body,
+            "html_body": message.html_body,
+            "provider_id": message.provider_id,
+            "source_url": message.source_url,
+            "created_at": message.email_date or message.created_at,
+        }
+        if message
+        else None
+    )
+    staff = None
+    staff_error = None
+    try:
+        found = staff_message(reply)
+    except Exception as exc:
+        logger.warning("Could not read the team's email from the Sent folder: %s", exc)
+        found = None
+        staff_error = "No se pudo leer la carpeta de enviados del buzón."
+    if found:
+        staff = {
+            "id": 0,
+            "direction": "outbound",
+            "sender": found["sender"],
+            "recipient": ", ".join(item for item in (found["recipient"], found["cc"]) if item)
+            or None,
+            "subject": found["subject"],
+            "body": found["body"],
+            "html_body": found["html_body"],
+            "provider_id": "",
+            "source_url": None,
+            "created_at": found["sent_at"],
+        }
+    return {
+        "conversation_id": reply.conversation_id,
+        "customer": customer,
+        "staff": staff,
+        "staff_error": staff_error,
     }

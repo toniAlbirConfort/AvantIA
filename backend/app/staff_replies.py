@@ -5,18 +5,21 @@ whether an out-of-hours acknowledgement was followed by a human answer, the work
 up each recipient in the Sent folder and stores, on the AutoReply row, the latest email
 sent to that address: its date, subject and whether it answers the same thread.
 
-Read-only: the folder is opened with readonly=True and only headers are fetched with
+Read-only: the folder is opened with readonly=True and messages are fetched with
 BODY.PEEK, so nothing in the mailbox changes. Only addresses that received an auto-reply
-are looked up; nothing else in the Sent folder is stored.
+are looked up; nothing else in the Sent folder is stored. The body of the team's email is
+never stored either: ``staff_message`` fetches it on demand for the audit view.
 """
 
 from __future__ import annotations
 
 import email
 import email.header
+import email.policy
 import imaplib
 import logging
 import re
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
 
@@ -25,6 +28,7 @@ from sqlalchemy.orm import Session
 
 from app.availability import aware
 from app.config import get_settings
+from app.html_sanitize import sanitize_html
 from app.models import AutoReply, Message
 
 logger = logging.getLogger(__name__)
@@ -104,6 +108,7 @@ def latest_sent(conn: imaplib.IMAP4, address: str, *, skip_ids: set[str]) -> dic
             continue
         if newest is None or sent_at > newest["sent_at"]:
             newest = {
+                "uid": uid,
                 "sent_at": sent_at.astimezone(UTC),
                 "subject": _header_text(headers.get("Subject")),
                 "references": " ".join(
@@ -137,6 +142,30 @@ def apply(reply: AutoReply, customer_message_id: str | None, found: dict | None,
     reply.staff_last_in_thread = any(item in found["references"] for item in ids)
 
 
+@contextmanager
+def open_sent_folder():
+    """IMAP connection with the Sent folder selected read-only; yields None without one."""
+    settings = get_settings()
+    if not settings.imap_host or not settings.imap_user:
+        raise RuntimeError("IMAP no configurado")
+    conn = imaplib.IMAP4_SSL(settings.imap_host, settings.imap_port, timeout=30)
+    try:
+        conn.login(settings.imap_user, settings.imap_password)
+        folder = sent_folder(conn)
+        if not folder:
+            yield None
+            return
+        result, _ = conn.select(_quote(folder), readonly=True)
+        if result != "OK":
+            raise RuntimeError("No se pudo abrir la carpeta de enviados")
+        yield conn
+    finally:
+        try:
+            conn.logout()
+        except Exception:
+            pass
+
+
 def check_staff_replies(db: Session) -> int:
     """Refresh the last staff email for the auto-replies due. Returns how many were checked."""
     settings = get_settings()
@@ -145,16 +174,10 @@ def check_staff_replies(db: Session) -> int:
     replies = due(db)
     if not replies:
         return 0
-    conn = imaplib.IMAP4_SSL(settings.imap_host, settings.imap_port, timeout=30)
-    try:
-        conn.login(settings.imap_user, settings.imap_password)
-        folder = sent_folder(conn)
-        if not folder:
+    with open_sent_folder() as conn:
+        if conn is None:
             logger.warning("No Sent folder found; staff replies are not checked")
             return 0
-        result, _ = conn.select(_quote(folder), readonly=True)
-        if result != "OK":
-            raise RuntimeError("No se pudo abrir la carpeta de enviados")
         own_ids = {reply.provider_id for reply in replies if reply.provider_id}
         checked_at = datetime.now(UTC)
         for reply in replies:
@@ -163,11 +186,40 @@ def check_staff_replies(db: Session) -> int:
             apply(reply, message.provider_id if message else None, found, checked_at)
         db.commit()
         return len(replies)
-    finally:
-        try:
-            conn.logout()
-        except Exception:
-            pass
+
+
+def fetch_message(conn: imaplib.IMAP4, uid: bytes | str) -> dict | None:
+    """Full email by UID (BODY.PEEK: it stays unread), with its HTML sanitized."""
+    from app.mail import _email_content
+
+    result, fetched = conn.uid("FETCH", uid, "(BODY.PEEK[])")
+    if result != "OK" or not fetched or not isinstance(fetched[0], tuple):
+        return None
+    parsed = email.message_from_bytes(fetched[0][1], policy=email.policy.default)
+    body, html_body = _email_content(parsed)
+    try:
+        sent_at = parsedate_to_datetime(parsed.get("Date"))
+    except (TypeError, ValueError):
+        sent_at = None
+    return {
+        "sender": _header_text(parsed.get("From")),
+        "recipient": _header_text(parsed.get("To")),
+        "cc": _header_text(parsed.get("Cc")),
+        "subject": _header_text(parsed.get("Subject")),
+        "sent_at": sent_at,
+        "body": body,
+        "html_body": sanitize_html(html_body) if html_body else None,
+    }
+
+
+def staff_message(reply: AutoReply) -> dict | None:
+    """The team's last email to the recipient, read now from the Sent folder."""
+    with open_sent_folder() as conn:
+        if conn is None:
+            return None
+        skip = {reply.provider_id} if reply.provider_id else set()
+        found = latest_sent(conn, reply.recipient.strip().lower(), skip_ids=skip)
+        return fetch_message(conn, found["uid"]) if found else None
 
 
 def staff_reply_view(reply: AutoReply) -> dict | None:

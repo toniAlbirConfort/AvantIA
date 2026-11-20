@@ -33,7 +33,7 @@ from app.automatic_messages import CHANNELS as AUTOMATIC_CHANNELS
 from app.automatic_messages import SOURCES as AUTOMATIC_SOURCES
 from app.automatic_messages import STAFF_REPLY_FILTERS as AUTOMATIC_STAFF_REPLY_FILTERS
 from app.automatic_messages import STATUSES as AUTOMATIC_STATUSES
-from app.automatic_messages import list_automatic_messages
+from app.automatic_messages import auto_reply_messages, list_automatic_messages
 from app.availability import aware, import_csv, latest_batch
 from app.avantio import availability_provider
 from app.campaigns_api import router as campaigns_router
@@ -2019,6 +2019,15 @@ def automatic_messages(
         limit=limit,
         offset=offset,
     )
+
+
+@app.get("/api/automatic-messages/auto_reply/{reply_id}/messages")
+def automatic_message_emails(reply_id: int, db: Db, user: Operator) -> dict:
+    """Customer email and the team's last email (read now from the Sent folder)."""
+    result = auto_reply_messages(db, reply_id)
+    if result is None:
+        raise HTTPException(404, "Envío no encontrado")
+    return result
 
 
 def _auto_reply_status(db: Session) -> dict:

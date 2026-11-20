@@ -55,6 +55,9 @@ export type AutomaticMessage = {
   error: string | null; copy_failed: boolean; conversation_id: number; conversation_kind: string; created_at: string
   staff_reply: StaffReply | null
 }
+export type AutomaticMessageEmails = {
+  conversation_id: number; customer: Message | null; staff: Message | null; staff_error: string | null
+}
 export type AutomaticMessageList = {
   items: AutomaticMessage[]; total: number; counts: Record<AutomaticMessageStatus, number>;
   sources: { kind: string; label: string; channel: AutomaticMessageChannel }[]
