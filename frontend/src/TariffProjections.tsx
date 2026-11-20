@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { TriangleAlert } from 'lucide-react'
+import { ChevronDown, TriangleAlert } from 'lucide-react'
 import { api, apiDownload } from './api'
 import { Alert } from './components/ui/alert'
 import { Badge } from './components/ui/badge'
@@ -362,18 +362,21 @@ export function TariffProjections({ admin, groups, refreshVersion }: { admin: bo
       </div>
     </Card>
 
-    <div className="grid items-start gap-4 xl:grid-cols-[minmax(16rem,0.5fr)_minmax(0,1.5fr)]">
-      <Card className="overflow-hidden">
-        <div className="border-b border-border p-4"><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">PROYECCIONES</p><h2 className="text-lg font-semibold">Guardadas</h2></div>
-        {!projections.length ? <p className="p-5 text-sm text-muted-foreground">Todavía no hay proyecciones.</p> : <div className="divide-y divide-border">
-          {projections.map(item => <button type="button" key={item.id} onClick={() => void select(item.id).catch(err => setError((err as Error).message))} className={`grid w-full gap-1 px-4 py-3 text-left hover:bg-accent ${item.id === selected?.id ? 'bg-accent' : ''}`}>
+    <div className="grid min-w-0 gap-4">
+      <details open className="group rounded-lg border border-border bg-card">
+        <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 rounded-lg px-4 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+          <span><span className="text-xs font-semibold uppercase tracking-wide text-primary">Proyecciones guardadas</span> <span className="text-muted-foreground">· {projections.length}{selected ? ` · abierta: ${selected.name}` : ''}</span></span>
+          <ChevronDown size={16} aria-hidden="true" className="text-muted-foreground transition-transform group-open:rotate-180 motion-reduce:transition-none" />
+        </summary>
+        {!projections.length ? <p className="border-t border-border px-4 py-3 text-sm text-muted-foreground">Todavía no hay proyecciones.</p> : <div className="flex flex-wrap gap-2 border-t border-border p-3">
+          {projections.map(item => <button type="button" key={item.id} aria-pressed={item.id === selected?.id} onClick={() => void select(item.id).catch(err => setError((err as Error).message))} className={`grid min-w-56 gap-1 rounded-md border px-3 py-2 text-left hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${item.id === selected?.id ? 'border-primary bg-accent' : 'border-border'}`}>
             <span className="flex flex-wrap items-center justify-between gap-2"><strong className="text-sm">{item.name}</strong><Badge className={item.status === 'applied' ? 'bg-success-bg text-success-ink' : 'bg-secondary text-secondary-foreground'}>{item.status === 'applied' ? 'Aplicada' : 'Borrador'}</Badge></span>
             <small className="text-xs text-muted-foreground">{item.base_year} → {item.target_year} · {item.tariff_names.length} grupos{item.override_count ? ` · ${item.override_count} cambios manuales` : ''}</small>
           </button>)}
         </div>}
-      </Card>
+      </details>
 
-      <Card className="grid min-w-0 gap-5 p-4 sm:p-6">
+      <Card className="grid min-w-0 gap-5 p-3 sm:p-4">
         {!selected?.result ? <p className="text-sm text-muted-foreground">Selecciona o calcula una proyección para revisarla.</p> : <>
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-primary">PROYECCIÓN #{selected.id} · {selected.status === 'applied' ? 'APLICADA' : 'BORRADOR'}</p>
@@ -424,7 +427,7 @@ export function TariffProjections({ admin, groups, refreshVersion }: { admin: bo
             <p className="text-xs text-muted-foreground">Subida: euros del patrón de años anteriores (o IPC) y su peso sobre la SA. Ocupación y precio real: misma temporada del año indicado, con IVA. Mercado: mediana de la competencia y cuánto está por encima (+) o por debajo (−) de nuestra SA. Reservas: noches reservadas hoy en estas fechas del año base frente a las que había hace un año.</p>
             {Object.entries(seasonsByGroup).map(([group, rows]) => <div key={group} className="grid gap-1.5">
               <h4 className="text-sm font-semibold">{group}</h4>
-              <div className="max-w-full overflow-auto rounded-lg border border-border"><Table>
+              <div className="max-w-full overflow-auto rounded-lg border border-border"><Table className="[&_td]:px-2 [&_td]:py-2.5 [&_th]:px-2">
                 <TableHeader><TableRow><TableHead>Fecha inicio</TableHead><TableHead>Última noche</TableHead><TableHead className="text-right">SA {selected.base_year}</TableHead><TableHead className="text-right">Ocupación</TableHead><TableHead className="text-right">Precio real</TableHead><TableHead className="text-right">Mercado</TableHead><TableHead className="text-right">Subida</TableHead><TableHead className="text-right">Demanda</TableHead><TableHead className="text-right">Mercado</TableHead><TableHead className="text-right">Total</TableHead><TableHead className="text-right">Propuesta</TableHead><TableHead className="text-right">Reservas</TableHead><TableHead>Avisos</TableHead></TableRow></TableHeader>
                 <TableBody>{rows.map(row => <TableRow key={row.key}>
                   <TableCell className="whitespace-nowrap tabular-nums">{formatDate(row.start)}</TableCell>
@@ -452,7 +455,7 @@ export function TariffProjections({ admin, groups, refreshVersion }: { admin: bo
             <p className="text-xs text-muted-foreground">Mismo formato que Tarifas: ambas fechas están incluidas en la temporada. {editable ? 'Puedes cambiar cualquier precio y anotar el motivo. Los cambios se guardan con la proyección.' : 'Precios finales de la proyección.'}</p>
             {Object.entries(finalByGroup).map(([group, rows]) => <div key={group} className="grid gap-1.5">
               <h4 className="text-sm font-semibold">{group}</h4>
-              <div className="max-w-full overflow-auto rounded-lg border border-border"><Table>
+              <div className="max-w-full overflow-auto rounded-lg border border-border"><Table className="[&_td]:px-2 [&_td]:py-2.5 [&_th]:px-2">
                 <TableHeader><TableRow><TableHead>Fecha inicio</TableHead><TableHead>Última noche</TableHead><TableHead className="text-right">Propuesta</TableHead><TableHead className="text-right">SA · Precio/noche</TableHead><TableHead>Motivo del cambio</TableHead></TableRow></TableHeader>
                 <TableBody>{rows.map(row => <TableRow key={row.key}>
                   <TableCell className="whitespace-nowrap tabular-nums">{formatDate(row.start)}{row.note && <small className="block text-xs text-muted-foreground">{row.note === 'Semana Santa' ? 'Semana Santa' : 'Sin Semana Santa'}</small>}</TableCell>
