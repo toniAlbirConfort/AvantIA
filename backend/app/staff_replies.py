@@ -83,15 +83,15 @@ def sent_folder(conn: imaplib.IMAP4) -> str | None:
     return None
 
 
-def latest_sent(conn: imaplib.IMAP4, address: str, *, skip_ids: set[str]) -> dict | None:
-    """Newest email in the selected folder addressed to ``address`` (To), or None."""
+def sent_to(conn: imaplib.IMAP4, address: str, *, skip_ids: set[str]) -> list[dict]:
+    """The last few emails in the selected folder addressed to ``address`` (To), newest first."""
     if not _SAFE_ADDRESS.match(address):
-        return None
+        return []
     result, data = conn.uid("SEARCH", None, "TO", f'"{address}"')
     if result != "OK" or not data or not data[0]:
-        return None
+        return []
     uids = sorted(data[0].split(), key=int)[-LAST_UIDS:]
-    newest: dict | None = None
+    found: list[dict] = []
     for uid in uids:
         result, fetched = conn.uid("FETCH", uid, f"(BODY.PEEK[HEADER.FIELDS {FIELDS}])")
         if result != "OK" or not fetched or not isinstance(fetched[0], tuple):
@@ -106,8 +106,8 @@ def latest_sent(conn: imaplib.IMAP4, address: str, *, skip_ids: set[str]) -> dic
             continue
         if sent_at is None or sent_at.tzinfo is None:
             continue
-        if newest is None or sent_at > newest["sent_at"]:
-            newest = {
+        found.append(
+            {
                 "uid": uid,
                 "sent_at": sent_at.astimezone(UTC),
                 "subject": _header_text(headers.get("Subject")),
@@ -117,7 +117,14 @@ def latest_sent(conn: imaplib.IMAP4, address: str, *, skip_ids: set[str]) -> dic
                     headers.get(name) or "" for name in ("In-Reply-To", "References")
                 ),
             }
-    return newest
+        )
+    return sorted(found, key=lambda item: item["sent_at"], reverse=True)
+
+
+def latest_sent(conn: imaplib.IMAP4, address: str, *, skip_ids: set[str]) -> dict | None:
+    """Newest email in the selected folder addressed to ``address`` (To), or None."""
+    found = sent_to(conn, address, skip_ids=skip_ids)
+    return found[0] if found else None
 
 
 def _header_text(value: str | None) -> str | None:

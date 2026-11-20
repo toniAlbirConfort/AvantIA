@@ -87,6 +87,7 @@ export type Conversation = {
   draft: Draft | null; messages?: Message[]; drafts?: Draft[]; audit?: Audit[];
   auto_replies?: AutoReply[]
   registration?: RegistrationCheck | null
+  outside_reply?: { sent_at: string | null; subject: string | null; sender: string | null } | null
   booking_task?: { id: number; status: string; extracted: Record<string, unknown> } | null
   contact?: ContactInfo | null
   reply?: ReplyDefaults | null
